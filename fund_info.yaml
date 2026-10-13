@@ -1,0 +1,69 @@
+# Stamdata, som ikke findes i PE-databasen: fondsbeskrivelse, geografi, segment og
+# (hvor GP-rapporterne ikke er indlæst på fondsniveau) fondsstørrelse.
+#
+# status: udkast   -> teksten er skrevet af Claude ud fra almen viden om forvalteren og er
+#                     IKKE gennemgået. Sliden får en fodnote, indtil status ændres til "ok".
+# fondsstoerrelse  -> samlet tilsagn til fonden i fondens valuta (hele kroner). Bruges kun,
+#                     når databasen ikke har TOTAL_COMMITMENTS for fonden. null = "n/a".
+# estimerede_cashflows -> indbetalinger/udlodninger, der mangler i databasen. LP-fortegn
+#                     (betalt < 0). Bruges kun i IRR-beregningen og i historikgrafen.
+
+CATACAP3:
+  status: udkast
+  beskrivelse: >-
+    CataCap er en dansk kapitalfond med base i København. CataCap III investerer i
+    små og mellemstore danske virksomheder, typisk som majoritetsejer, og arbejder med
+    vækst, internationalisering og opkøb i partnerskab med ledelse og medejere.
+  geografi: Danmark
+  segment: Small/mid-cap buyout
+  fondsstoerrelse: null
+
+SEED4:
+  status: udkast
+  beskrivelse: >-
+    Seed Capital er en dansk venturefond, der investerer i teknologivirksomheder i de
+    tidligste faser (pre-seed og seed) og følger op i senere runder. Fond IV har
+    primært fokus på danske og nordiske software- og techselskaber.
+  geografi: Danmark / Norden
+  segment: Venture (seed)
+  fondsstoerrelse: null
+  estimerede_cashflows:
+    # Draw down 14 og 16 er ikke modtaget (docs/pdf-inventory.md). Beløbene følger af
+    # GP'ens "contributed to date"; datoerne er skøn inden for det vindue, de ligger i.
+    - dato: 2024-06-30
+      beloeb: -943382
+      note: Draw down 14 (mellem 10.04.2024 og 19.09.2024)
+    - dato: 2024-11-15
+      beloeb: -2172990
+      note: Draw down 16 (mellem 19.09.2024 og 31.12.2024)
+
+KAPE20:
+  status: udkast
+  beskrivelse: >-
+    K Alternativ Private Equity 2020 er en fund of funds forvaltet af Alternative
+    Equity Partners. Fonden har givet tilsagn til syv underliggende kapitalfonde,
+    primært buyout-fonde i Europa og Nordamerika samt en secondaries-fond.
+  geografi: Europa og Nordamerika
+  segment: Fund of funds
+  fondsstoerrelse: null
+
+KAPE21:
+  status: udkast
+  beskrivelse: >-
+    K Alternativ Private Equity 2021 er en fund of funds forvaltet af Alternative
+    Equity Partners. Fonden har givet tilsagn til syv underliggende kapitalfonde,
+    primært buyout-fonde i Europa og Nordamerika.
+  geografi: Europa og Nordamerika
+  segment: Fund of funds
+  fondsstoerrelse: null
+
+KAPE22:
+  status: udkast
+  beskrivelse: >-
+    K Alternativ Private Equity 2022 er en fund of funds forvaltet af Alternative
+    Equity Partners med AlpInvest som porteføljeforvalter. Fonden har givet tilsagn
+    til 11 underliggende kapitalfonde hos otte forvaltere, primært buyout-fonde i
+    Europa og Nordamerika.
+  geografi: Europa og Nordamerika
+  segment: Fund of funds
+  fondsstoerrelse: null
