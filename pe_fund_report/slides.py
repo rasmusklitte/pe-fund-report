@@ -14,8 +14,8 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
-import style
-from deck import BROED_FONT, L_TEKST, _fjern_tomme_ph, _ny_slide, _saet_ph
+from . import style
+from .deck import BROED_FONT, L_TEKST, _fjern_tomme_ph, _ny_slide, _saet_ph
 
 IKKE_OPLYST = "n/a"
 INGEN_TABELSTIL = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"   # "No Style, No Grid"

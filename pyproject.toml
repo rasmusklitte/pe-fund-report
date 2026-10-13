@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pe-fund-report"
+version = "0.1.0"
+description = "Investor report for private equity funds as PowerPoint on the PPIM slide master"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "pyodbc",
+    "python-pptx",
+    "PyYAML",
+    "SQLAlchemy>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+pe-fund-report = "pe_fund_report.cli:main"
+
+[tool.setuptools]
+packages = ["pe_fund_report"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+# style.py and deck.py are shared house-style modules, kept identical to the other PE repos
+extend-exclude = ["pe_fund_report/style.py", "pe_fund_report/deck.py"]

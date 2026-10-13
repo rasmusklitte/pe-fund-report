@@ -1,4 +1,4 @@
-"""Læseadgang til PE-databasen (se analysis-data-guide.md, afsnit 1).
+"""Læseadgang til PE-databasen (se docs/analysis-data-guide.md, afsnit 1).
 
 Standard er sql1\\ppim / PE med Windows-godkendelse. Kan overstyres med miljøvariablerne
 PE_DB_SERVER, PE_DB_DATABASE og PE_DB_DRIVER. Repoet skriver aldrig til databasen -

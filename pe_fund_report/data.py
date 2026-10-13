@@ -6,14 +6,13 @@ og basistabeller filtreres på APPROVED + is_active = 1. Investor- og fondsnivea
 ikke: beholdningerne er hele fondens tal og skaleres med investors ejerandel.
 """
 from datetime import date
-from pathlib import Path
 
 import pandas as pd
 import yaml
 
-from db import read_sql
+from .db import read_sql
+from .paths import FUND_INFO
 
-FUND_INFO = Path(__file__).resolve().parent / "fund_info.yaml"
 GP_TOLERANCE = 0.005      # afvigelse mellem cash flows og GP'ens indbetalte kapital, før GP-tallet bruges
 
 
@@ -209,7 +208,7 @@ def fond(inv, as_of, info):
     irr_flows = irr_flows + est + [(nav_dato, nav_nu)]
     irr = xirr(irr_flows)
 
-    # ejerandel: tilsagn / fondens samlede tilsagn (databasen, ellers fund_info.yaml)
+    # ejerandel: tilsagn / fondens samlede tilsagn (databasen, ellers config/fund_info.yaml)
     tc = read_sql("""SELECT TOP 1 value FROM rpt.v_fund_metric
                      WHERE fund_code = :f AND metric_code = 'TOTAL_COMMITMENTS' AND report_date <= :d
                      ORDER BY report_date DESC""", f=kode, d=nav_dato)

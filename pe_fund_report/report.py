@@ -1,23 +1,21 @@
-"""Bygger investorrapporten som pptx på PPIM-masteren.
-
-    python build_report.py MOTORTRAMP                 # seneste NAV-dato
-    python build_report.py MOTORTRAMP --as-of 2025-12-31
-
-Resultat: exports/<INVESTOR>_<dato>.pptx med forside, porteføljeoversigt, én side pr. fond og slut-slide.
-"""
-import argparse
+"""Samler investorrapporten: forside, porteføljeoversigt, én side pr. fond og slut-slide."""
 from pathlib import Path
 
 from pptx import Presentation
 
-import data
-import slides
-from deck import L_FORSIDE, L_SKILLE, L_SLUT, _find_master, _ny_slide, _ryd_slides, _saet_ph
+from . import data, slides
+from .deck import L_FORSIDE, L_SKILLE, L_SLUT, _find_master, _ny_slide, _ryd_slides, _saet_ph
+from .paths import EXPORTS, MASTER
 
 
 def byg(investor_code, as_of=None, outfile=None, master=None):
+    """Byg rapporten for én investor og returnér stien til pptx-filen.
+
+    as_of: rapportdato (ÅÅÅÅ-MM-DD); standard er investors seneste NAV-dato.
+    outfile: standard er exports/<INVESTOR>_<dato>.pptx.
+    """
     r = data.investor_rapport(investor_code, as_of)
-    prs = Presentation(str(_find_master(master)))
+    prs = Presentation(str(_find_master(master or MASTER)))
     _ryd_slides(prs)
 
     s = _ny_slide(prs, L_FORSIDE)
@@ -37,17 +35,8 @@ def byg(investor_code, as_of=None, outfile=None, master=None):
 
     _ny_slide(prs, L_SLUT)
 
-    outfile = Path(outfile or f"exports/{r['investor']}_{r['as_of']:%Y-%m-%d}.pptx")
+    outfile = Path(outfile or EXPORTS / f"{r['investor']}_{r['as_of']:%Y-%m-%d}.pptx")
     outfile.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(outfile))
     print(f"gemt: {outfile}  ({len(r['fonde'])} fonde, {len(prs.slides._sldIdLst)} slides)")
     return outfile
-
-
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("investor", help="investor_code i fund.investor, fx MOTORTRAMP")
-    ap.add_argument("--as-of", help="rapportdato (ÅÅÅÅ-MM-DD); standard er seneste NAV-dato")
-    ap.add_argument("--out", help="sti til pptx-filen")
-    a = ap.parse_args()
-    byg(a.investor, a.as_of, a.out)
