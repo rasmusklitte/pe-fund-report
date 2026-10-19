@@ -25,7 +25,8 @@ python -m pe_fund_report MOTORTRAMP --out exports/test.pptx
 ```
 
 The argument is the `investor_code` in `fund.investor`. The result is written to
-`exports/<INVESTOR>_<date>.pptx`. Close the file in PowerPoint before rebuilding, or pass `--out`.
+`exports/<INVESTOR>_<date>.pptx`. If that file is open in PowerPoint, the build writes
+`..._v2.pptx` (then `_v3`, …) instead of failing, and says so.
 
 ## Setup
 
