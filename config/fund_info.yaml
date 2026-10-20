@@ -93,7 +93,7 @@ KAPE22:
 PPPE2:
   status: udkast
   beskrivelse: >-
-    Petersen & Partners Private Equity II A/S investerer i Newbury Equity Partners VI,
+    Petersen & Partners Private Equity II investerer i Newbury Equity Partners VI,
     en sekundærfond. Newbury køber eksisterende tilsagn af investorer, der ønsker at
     sælge, så de underliggende fonde er langt i deres investeringsperiode, og kapitalen
     ventes betalt tilbage hurtigere end i en primærfond. Ultimo juni 2026 havde fonden
@@ -102,9 +102,47 @@ PPPE2:
 PPPC2:
   status: udkast
   beskrivelse: >-
-    Petersen & Partners Private Credit II A/S investerer i Park Square Capital Partners V,
+    Petersen & Partners Private Credit II investerer i Park Square Capital Partners V,
     der yder lån til mellemstore virksomheder i Europa og Nordamerika, typisk i
     forbindelse med kapitalfondes opkøb. Porteføljen er koncentreret om sundhed og life
     science, industri samt software og IT, og de største lande er Storbritannien, USA,
     DACH og Frankrig.
+
+# PD3LGT er en fund of funds fra Alternative Equity Partners, der investerer i LGT's to
+# europæiske private debt-fonde. Beskrivelsen bygger på fondsinformationen i Q2 2026-rapporten
+# (master_data_source i rpt.v_fund_master).
+
+PD3LGT:
+  status: udkast
+  beskrivelse: >-
+    Private Debt III LGT er en fund of funds forvaltet af Alternative Equity Partners.
+    Fonden investerer i LGT Capital Partners' LGT European Private Debt III og III B, der
+    primært yder unitranche-lån til mellemstore europæiske virksomheder med en EBITDA på
+    5-25 mio. EUR, typisk i forbindelse med kapitalfondes opkøb.
  
+
+# HOME er en dansk ejendomsfond med løbende tilsagn. Beskrivelsen bygger på Home.Earths
+# investorrapport for Q2 2026.
+
+HOME:
+  evergreen: true
+  status: udkast
+  beskrivelse: >-
+    Home.Earth er en dansk evergreen-ejendomsfond (K/S), der køber, udvikler og driver bæredygtige
+    boliger i hovedstadsområdet. Porteføljen tæller udlejningsejendommene C.F. Møllers Have,
+    Nærheden og Filmlageret, byggeriet HTC samt projekterne NEFA, Smedeland og
+    Københavnsvej; ejendomsværdien (GAV) er 218 mio. EUR, delvist finansieret med
+    realkredit- og byggelån. En del af afkastet går til lejere og lokalsamfund.
+
+# CRED er en open-ended dansk ejendomsfond. Beskrivelsen bygger på Rubik Managements
+# investeringsrapport for K2 2026.
+
+CRED:
+  evergreen: true
+  status: udkast
+  beskrivelse: >-
+    Commercial Real Estate Denmark er en dansk evergreen-ejendomsfond (P/S) forvaltet af
+    Rubik Management. Fonden ejer 27 erhvervsejendomme, primært kontorer i
+    Københavnsområdet samt logistik i Trekantområdet og Billund. Ejendommene er bogført
+    til 6,1 mia. kr. og belånt med 41 % på fondsniveau. Forvalteren arbejder med at
+    nedbringe tomgangen på 16,9 % og sælge ikke-strategiske ejendomme.

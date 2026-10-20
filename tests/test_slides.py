@@ -1,15 +1,17 @@
 """Formater og tabeller i slides.py, bygget på den rigtige slidemaster."""
 import io
+import re
 from datetime import date
 from itertools import pairwise
 
 import pytest
 from pptx import Presentation
-from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches
 
 from pe_fund_report import data, slides
-from pe_fund_report.deck import L_TEKST, _ny_slide, _ryd_slides
+from pe_fund_report.deck import L_FORSIDE, L_SKILLE, L_SLUT, L_TEKST, _ny_slide, _ryd_slides
 from pe_fund_report.paths import MASTER
 
 
@@ -143,6 +145,14 @@ def test_tilsagnsbro_netter_genkaldelige_udlodninger_ind_i_kaldt():
     assert slides.kaldt_netto(n) == pytest.approx(19486.0)
     assert trin[1][1] == pytest.approx(19486.0)
     assert trin[-1][3] == pytest.approx(18014.0)      # broen ender i resttilsagnet
+    _bro_gaar_op(trin)
+
+
+def test_tilsagnsbro_bruger_kaldt_inkl_rabat():
+    # PPPC2: 10.000 tilsagn - 3.200 kaldt (3.125 betalt + 75 rabat) = 6.800 resttilsagn
+    n = dict(_n(10000.0, 3125.0, 6800.0, 1.11, 0.047), kaldt=3200.0)
+    trin = slides._tilsagnsbro(n)
+    assert trin[1][1] == pytest.approx(3200.0) and trin[-1][3] == pytest.approx(6800.0)
     _bro_gaar_op(trin)
 
 
@@ -475,12 +485,567 @@ def test_sammendrag_viser_noegletal_hoejdepunkter_og_fordeling():
     s = slides.sammendrag(_prs(), r)
     t = _tekster(s)
     assert "Executive summary" in t
-    for label in ("fonde i porteføljen", "tilsagn, tDKK", "NAV, tDKK", "TVPI"):
+    for label in ("fonde i porteføljen", "tilsagn, tDKK", "resttilsagn, tDKK", "NAV, tDKK",
+                  "TVPI"):
         assert label in t, label
+    assert any(x.startswith("eksponering, tDKK") and x.endswith("resttilsagn + NAV") for x in t)
     assert slides.tusind(r["total_dkk"]["tilsagn_dkk"]) in t
+    td = r["total_dkk"]
+    assert slides.tusind(td["resttilsagn_dkk"] + td["nav_dkk"]) in t
     assert any("3 fonde hos 2 forvaltere med vintage 2020–2023" in x for x in t)
     assert any(x.startswith("Største geografi er Europa") for x in t)
-    assert "Geografi" in t and "Segment" in t
+    # uden gennemlyste regioner falder geografien tilbage på fondenes fokus efter tilsagn
+    assert "Geografi – andel af tilsagn" in t and "Investeringsstrategi – andel af tilsagn" in t
+    assert not any("egment" in x for x in t)
     for sh in s.shapes:
         if sh.has_text_frame and sh.text_frame.text not in ("", "Executive summary"):
             assert Emu(sh.top).inches <= slides.Y_NOTER + 0.01, sh.text_frame.text
+
+
+# ---------- udvikling i kvartalet og året ----------
+
+def test_aendring_skriver_fortegn():
+    assert slides.aendring(1_234_567) == "+1.235"
+    assert slides.aendring(-1_234_567) == "-1.235"
+    assert slides.aendring(200) == "0"
+    assert slides.aendring(-0.001, slides.gange) == "0,00x"
+    assert slides.aendring(None) == "n/a"
+
+
+def _udv(primo, kald, udl, vaerdi, valuta=0.0):
+    return dict(fra=date(2026, 3, 31), til=date(2026, 6, 30), primo=primo, kald=kald,
+                udlodning=udl, vaerdi=vaerdi, valuta=valuta,
+                ultimo=primo + kald - udl + vaerdi + valuta, afkast=0.02)
+
+
+def _udv_rapport(foraeldede=()):
+    fonde = []
+    for navn, valuta, kald, vaerdi in (("Alfa Fund I K/S", "DKK", 1e6, 2e6),
+                                       ("Beta Fund II A/S", "USD", 0.0, -5e5)):
+        u = dict(_udv(1e7, kald, 0.0, vaerdi), primo_dato=date(2026, 3, 31), flows=[],
+                 tvpi_aendring=0.03, kald_dkk=kald, udlodning_dkk=0.0, vaerdi_dkk=vaerdi,
+                 valuta_dkk=1e5)
+        fonde.append(dict(fund_name=navn, valuta=valuta, noter=[], udvikling={"kvartal": u,
+                          "aar": u}, n=dict(nav_dkk=1e7, tvpi=1.4)))
+    r = _rapport(fonde, foraeldede=foraeldede)
+    r["perioder"] = data.perioder(date(2026, 6, 30))
+    r["udvikling"] = {p: dict(_udv(2e7, 1e6, 0.0, 1.5e6, 2e5),
+                              bidrag=[("Alfa Fund I K/S", 2.1e6), ("Beta Fund II A/S", -4e5)])
+                      for p in ("kvartal", "aar")}
+    r["sammendrag"] = dict(tvpi=1.4)
+    return r
+
+
+def _indenfor_fladen(s, titel):
+    for sh in s.shapes:
+        if sh.has_text_frame and sh.text_frame.text not in ("", titel):
+            assert Emu(sh.top).inches <= slides.Y_NOTER + 0.01, sh.text_frame.text
+            assert Emu(sh.left + sh.width).inches <= slides.X1 + 0.3, sh.text_frame.text
+
+
+def test_udvikling_viser_to_broer_og_bidrag_pr_fond():
+    s = slides.udvikling(_prs(), _udv_rapport())
+    t = _tekster(s)
+    assert "Udvikling i kvartalet og året" in t
+    assert "Kvartalet (Q2 26)" in t and "År til dato (2026)" in t
+    assert t.count("NAV primo") == 2 and t.count("Valutakurs") == 2
+    assert "Alfa Fund I" in t and "+2.100" in t and "-400" in t
+    assert "+1.700" in t                    # i alt: værdiændring + valuta
+    _indenfor_fladen(s, "Udvikling i kvartalet og året")
+
+
+def test_udvikling_i_foerste_kvartal_viser_en_bro():
+    r = _udv_rapport()
+    r["perioder"] = data.perioder(date(2026, 3, 31))
+    t = _tekster(slides.udvikling(_prs(), r))
+    assert t.count("NAV primo") == 1 and "Kvartalet og år til dato (Q1 26)" in t
+
+
+def test_udvikling_springes_over_uden_dkk_tal():
+    r = _udv_rapport()
+    r["udvikling"] = {"kvartal": None, "aar": None}
+    assert slides.udvikling(_prs(), r) is None
+    assert slides.aendringer_pr_fond(_prs(), r) is None
+
+
+def test_aendringer_pr_fond_har_en_raekke_pr_fond_og_i_alt():
+    r = _udv_rapport(foraeldede=[dict(fond="Beta Fund II A/S", dato=date(2026, 3, 31),
+                                      kvartaler=1)])
+    s = slides.aendringer_pr_fond(_prs(), r)
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    raekker = [[c.text for c in rk.cells] for rk in tabel.rows]
+    assert [x[0] for x in raekker[1:]] == ["Alfa Fund I", f"Beta Fund II {slides.DAGGER}", "I alt"]
+    assert raekker[1][4] == "+2.100"          # værdiændring + valuta i DKK
+    assert raekker[-1][4] == "+1.700"
+    assert len(raekker[0]) == 2 + 4 * 2 + 3
+
+
+def test_vaerdibevaegelser_viser_stigninger_og_fald():
+    r = _udv_rapport()
+    r["vaerdibevaegelser"] = dict(
+        linjer=[dict(navn="Selskab A", fond="Alfa Fund I K/S", kvartal=3e5, aar=4e5),
+                dict(navn="Selskab B", fond="Alfa Fund I K/S", kvartal=-1e5, aar=None),
+                dict(navn="Selskab C", fond="Alfa Fund I K/S", aar=1e5)],
+        uaendrede={"kvartal": ["Beta Fund II A/S"]},
+        usammenlignelige={"aar": [("Alfa Fund I K/S", "Gammel")]},
+        uskalerede=[], uden_beholdninger=[], dato=date(2026, 6, 30))
+    s = slides.vaerdibevaegelser(_prs(), r)
+    t = _tekster(s)
+    assert "Største stigninger i Q2 26" in t and "Største fald i Q2 26" in t
+    assert "Selskab A" in t and "+300" in t and "Selskab B" in t and "-100" in t
+    assert "Selskab C" not in t           # ingen bevægelse i kvartalet
+    noter = t[-1]
+    assert "Beta Fund II A/S" in noter and "Gammel" in noter
+    _indenfor_fladen(s, "Største værdibevægelser i porteføljen")
+
+
+# ---------- gennemlysning af feedere ----------
+
+def _feeder():
+    raekker = [dict(navn=f"Selskab {i}", type="UNREALISED", instrument="PIK", vintage=None,
+                    closing=date(2025, 1, 1), kostpris=10.0 * i, dagsvaerdi=11.0 * i,
+                    udloddet=0.0, total=11.0 * i, kostpris_fond=1.0, dagsvaerdi_fond=1.0,
+                    udloddet_fond=0.0, sektor=None, tvpi=None, irr=None, document_id=1)
+               for i in range(14, 0, -1)]
+    beh = dict(dato=date(2026, 6, 30), raekker=raekker, skaleret=True, andel=0.01,
+               type="selskaber", kode="PSCP5", via="Park Square Capital Partners V, SCSp",
+               fordeling=[("Branche", [dict(navn="Industri", andel=0.6),
+                                       dict(navn="Øvrige", andel=0.4)])],
+               fakta={"CREDIT_LINE_DRAWN": 5e6})
+    f = _lt_fond("Petersen & Partners Private Credit II A/S", 10_000.0, valuta="EUR")
+    f.update(beholdninger=beh, manager="PP", geografi="Europa", fund_code="PPPC2",
+             nav_dato=date(2026, 6, 30), beskrivelse="Feeder.", noter=[], historik=[],
+             bro=[], virksomheder={})
+    f["n"].update(andel=0.29, fondsstoerrelse=34_600.0, picc=0.3, udloddet=0.0, nav=3465.0,
+                  dpi=0.0, gp_irr=None, gp_tvpi=None)
+    return f
+
+
+def test_feederside_viser_gennemlysning_i_stedet_for_historik():
+    s = slides.fondsside(_prs(), _feeder(), "Investor A/S")
+    t = _tekster(s)
+    assert any(x.startswith("Gennemlysning af Park Square Capital Partners V") for x in t)
+    assert not any(x.startswith("Udvikling i NAV") for x in t)
+    assert not any(sh.has_chart for sh in s.shapes)
+    tabel = next(sh.table for sh in s.shapes
+                 if sh.has_table and sh.table.cell(0, 0).text == "Selskab")
+    navne = [rk.cells[0].text for rk in tabel.rows]
+    assert navne[1] == "Selskab 14" and navne[-2] == "Øvrige (4)" and navne[-1] == "I alt"
+    assert "Industri" in t and any("kreditfacilitet" in x for x in t)
+
+
+def test_sidefod_kun_paa_indholdsslides_med_investor_og_slidenummer():
+    prs = _prs()
+    for layout in (L_FORSIDE, L_TEKST, L_SKILLE[0], L_TEKST, L_SLUT):
+        _ny_slide(prs, layout)
+    slides.sidefod(prs, "A/S Test")
+
+    def fod(s):
+        return [ph for ph in s.placeholders if ph.placeholder_format.type == PP_PLACEHOLDER.SLIDE_NUMBER]
+
+    alle = list(prs.slides)
+    assert [len(fod(s)) for s in alle] == [0, 1, 0, 1, 0]
+    assert fod(alle[1])[0].text_frame.text == "A/S Test | Side 2"
+    assert fod(alle[3])[0].text_frame.text == "A/S Test | Side 4"
+    p = fod(alle[1])[0].text_frame.paragraphs[0]
+    assert p.runs[0].font.bold and not p.runs[1].font.bold
+    assert p._p.find(qn("a:fld")).get("type") == "slidenum"
+
+
+def _branche_rapport(sektorer, foreloebig_andel=0.0, art="brancher"):
+    total = sum(s["dkk"] for s in sektorer)
+    for s in sektorer:
+        s.setdefault("kode", "INDUSTRIALS")
+        s.setdefault("under", s.pop("grupper", []))
+        s.setdefault("stoerste_fond", "K Alternativ Private Equity 2021")
+        s.setdefault("fonde", [s["stoerste_fond"]])
+        s["andel"] = s["dkk"] / total
+        for g in s["under"]:
+            g["andel"] = g["dkk"] / total
+            g.setdefault("stoerste_fond", s["stoerste_fond"])
+    r = _rapport([])
+    r[art] = dict(total_dkk=total, grupper=sektorer, foreloebig_dkk=0.0,
+                  foreloebig_andel=foreloebig_andel, foreloebige_fonde=[],
+                  andre_datoer=[], efter_strategi=[], uden_fordeling=[])
+    r["kurser"] = {}
+    return r
+
+
+def _cirkel_vaerdier(s):
+    diagram = next(sh.chart for sh in s.shapes if sh.has_chart)
+    return list(diagram.plots[0].categories), list(diagram.plots[0].series[0].values)
+
+
+def test_brancher_cirkel_summerer_til_tabellens_i_alt_og_samler_smaa_sektorer():
+    r = _branche_rapport([dict(navn="Industri", dkk=600_000.0),
+                          dict(navn="Finans", dkk=385_000.0, kode="FINANCIALS"),
+                          dict(navn="Energi", dkk=10_000.0, kode="ENERGY"),
+                          dict(navn="Forsyning", dkk=5_000.0, kode="UTILITIES")])
+    s = slides.brancher(_prs(), r)
+    kategorier, vaerdier = _cirkel_vaerdier(s)
+    assert kategorier == ["Industri", "Finans", "Øvrige"]
+    assert sum(vaerdier) == 1000                       # tDKK, som tabellens i alt-række
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    tekst = [[c.text for c in row.cells] for row in tabel.rows]
+    assert tekst[1][1:4] == ["I alt", "1.000", "100,0 %"]
+    assert ["Energi", "Forsyning"] == [x[1] for x in tekst if x[1] in ("Energi", "Forsyning")]
+
+
+def test_brancher_noterer_foreloebig_klassifikation_kun_naar_den_findes():
+    sektorer = lambda: [dict(navn="Industri", dkk=900.0), dict(navn="Finans", dkk=100.0,
+                                                                kode="FINANCIALS")]
+    med = " ".join(_tekster(slides.brancher(_prs(), _branche_rapport(sektorer(), 0.25))))
+    uden = " ".join(_tekster(slides.brancher(_prs(), _branche_rapport(sektorer()))))
+    assert "25,0 % af NAV er en foreløbig klassifikation" in med
+    assert "foreløbig" not in uden
+
+
+def test_brancher_uden_data_springes_over():
+    r = _rapport([])
+    r["brancher"] = None
+    assert slides.brancher(_prs(), r) is None
+
+
+def test_brancher_har_ingen_bidragskolonne_og_forklarer_diversificeret():
+    r = _branche_rapport([dict(navn="Industri", dkk=900.0, stoerste_fond="Seed Capital Denmark IV"),
+                          dict(navn="Diversificeret (fondsandele)", dkk=100.0, kode="DIVERSIFIED",
+                               stoerste_fond="Petersen & Partners Private Equity II")])
+    s = slides.brancher(_prs(), r)
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    assert len(tabel.columns) == 4
+    assert [c.text for c in tabel.rows[0].cells] == ["", "Sektor", "NAV", "Andel"]
+    assert not any("Seed Capital Denmark IV" in x for x in _tekster(s))
+    assert any("som forvalteren af Petersen & Partners Private Equity II ikke fordeler"
+               in x for x in _tekster(s))
+
+
+def test_brancher_viser_kun_sektorer():
+    industri = dict(navn="Industri", dkk=900.0, grupper=[
+        dict(navn="Kapitalgoder", dkk=600.0), dict(navn=data.IKKE_OPDELT, dkk=300.0)])
+    s = slides.brancher(_prs(), _branche_rapport([industri, dict(navn="Finans", dkk=100.0,
+                                                                 kode="FINANCIALS")]))
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    navne = [row.cells[1].text.strip() for row in tabel.rows]
+    assert navne == ["Sektor", "I alt", "Industri", "Finans"]
+    assert not any("Ikke opdelt" in x for x in _tekster(s))
+
+
+def _overlapper(a, b):
+    return (a[0] < b[0] + b[2] - 1e-9 and b[0] < a[0] + a[2] - 1e-9
+            and a[1] < b[1] + b[3] - 1e-9 and b[1] < a[1] + a[3] - 1e-9)
+
+
+def test_treemap_giver_arealer_i_forhold_til_vaerdierne_uden_overlap():
+    vaerdier = [27.5, 17.3, 15.2, 14.8, 12.0, 7.0, 4.2, 2.0]
+    kasser = slides._treemap(vaerdier, 1.0, 2.0, 10.0, 4.0)
+    for v, (x, y, w, h) in zip(vaerdier, kasser):
+        assert w * h == pytest.approx(v / sum(vaerdier) * 40.0)
+        assert x >= 1.0 - 1e-9 and y >= 2.0 - 1e-9
+        assert x + w <= 11.0 + 1e-9 and y + h <= 6.0 + 1e-9
+    assert not any(_overlapper(a, b) for i, a in enumerate(kasser) for b in kasser[i + 1:])
+    # squarified: ingen kasse bliver en tynd strimmel
+    assert max(max(w / h, h / w) for _, _, w, h in kasser) < 4
+
+
+def test_branchekort_viser_navn_beloeb_og_andel_og_samler_smaa_sektorer():
+    r = _branche_rapport([dict(navn="Industri", dkk=600_000.0),
+                          dict(navn="Finans", dkk=385_000.0, kode="FINANCIALS"),
+                          dict(navn="Energi", dkk=10_000.0, kode="ENERGY"),
+                          dict(navn="Forsyning", dkk=5_000.0, kode="UTILITIES")])
+    s = slides.branchekort(_prs(), r)
+    t = _tekster(s)
+    assert "Branchefordeling – overblik" in t
+    assert "Industri\n600 tDKK\n60,0 %" in t
+    # Industri, Finans og én samlet kasse for de to små sektorer
+    assert sum(sh.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE for sh in s.shapes) == 3
+    assert any("»Øvrige« samler energi og forsyning" in x for x in t)
+
+
+def test_regioner_farver_delregioner_efter_region_og_forklarer_ikke_opdelt():
+    europa = dict(navn="Europa", kode="EUROPE", dkk=800.0, stoerste_fond="Seed Capital Denmark IV",
+                  grupper=[dict(navn="Danmark", dkk=600.0),
+                           dict(navn="Øvrige Europa og ikke opdelt", dkk=200.0)])
+    usa = dict(navn="Nordamerika", kode="NORTH_AMERICA", dkk=200.0,
+               grupper=[dict(navn="USA", dkk=200.0)])
+    s = slides.regioner(_prs(), _branche_rapport([europa, usa], art="regioner"))
+    kategorier, vaerdier = _cirkel_vaerdier(s)
+    assert kategorier == ["Danmark", "Øvrige Europa og ikke opdelt", "USA"]
+    assert sum(vaerdier) == 1                          # tDKK
+    diagram = next(sh.chart for sh in s.shapes if sh.has_chart)
+    farver = [p.format.fill.fore_color.rgb for p in diagram.plots[0].series[0].points]
+    assert farver[:2] == slides.GEO_FARVER["EUROPE"][:2]
+    assert farver[2] == slides.GEO_FARVER["NORTH_AMERICA"][0]
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    assert [row.cells[1].text.strip() for row in tabel.rows][2:5] == [
+        "Europa", "Danmark", "Øvrige Europa og ikke opdelt"]
+    assert len(tabel.columns) == 4
+    noter = " ".join(_tekster(s))
+    assert "kun oplyser Europa" in noter and "kun oplyser Nordamerika" not in noter
+
+
+def test_regioner_uden_data_springes_over():
+    r = _rapport([])
+    r["regioner"] = None
+    assert slides.regioner(_prs(), r) is None
+
+
+def test_sammendrag_bruger_regionerne_fra_geografisk_eksponering():
+    r = _ford_rapport()
+    for f, m, v in zip(r["fonde"], ("X", "Y", "X"), (2020, 2022, 2023)):
+        f.update(manager=m, vintage=v)
+        f["n"]["irr"] = 0.12
+    r["fordelinger"]["segment"] = data.fordeling(r["fonde"], "segment")
+    r["total_dkk"] = data.dkk_total(r["fonde"])
+    r["sammendrag"] = data.sammendrag(r["fonde"], r["total_dkk"])
+    r["regioner"] = dict(grupper=[dict(navn="Europa", andel=0.75), dict(navn="USA", andel=0.25)])
+    t = _tekster(slides.sammendrag(_prs(), r))
+    assert "Geografi – andel af NAV" in t and "Investeringsstrategi – andel af tilsagn" in t
+    assert "Europa" in t and "USA" in t and "75,0 %" in t
+    assert any("Største geografi er Europa med 75,0 % af NAV" in x for x in t)
+    assert any("som på siden Geografisk eksponering" in x for x in t)
+
+
+def test_sammendrag_naevner_stoerste_enkelteksponering():
+    r = _ford_rapport()
+    for f, m, v in zip(r["fonde"], ("X", "Y", "X"), (2020, 2022, 2023)):
+        f.update(manager=m, vintage=v)
+        f["n"]["irr"] = 0.12
+    r["fordelinger"]["segment"] = data.fordeling(r["fonde"], "segment")
+    r["total_dkk"] = data.dkk_total(r["fonde"])
+    r["sammendrag"] = data.sammendrag(r["fonde"], r["total_dkk"])
+    r["stoerste_eksponering"] = dict(navn="FLATPAY", art="porteføljeselskab",
+                                     fond="Seed Capital Denmark IV", dkk=54_380_000.0,
+                                     andel=0.171, udeladt=["Home.Earth"])
+    t = _tekster(slides.sammendrag(_prs(), r))
+    assert any("Største enkelteksponering er FLATPAY (porteføljeselskab via Seed Capital Denmark "
+               "IV) med 54.380 tDKK, svarende til 17,1 % af NAV." in x for x in t)
+    assert any("Home.Earth indgår ikke" in x for x in t)
+
+
+def test_selskabstabel_har_branchekolonne_med_gics_sektor():
+    prs = Presentation(str(MASTER))
+    _ryd_slides(prs)
+    s = _ny_slide(prs, L_TEKST)
+    raekker = [_selskab("A", date(2023, 1, 10), None) | dict(industri="Finans")]
+    beh = dict(dato=date(2026, 6, 30), raekker=raekker, skaleret=True, type="selskaber")
+    slides._beholdningstabel(s, 3.0, beh, dict(valuta="DKK"), "Investor A/S")
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    assert tabel.cell(0, 1).text == "Branche" and tabel.cell(1, 1).text == "Finans"
+
+
+def test_branchekort_uden_data_springes_over():
+    r = _rapport([])
+    r["brancher"] = None
+    assert slides.branchekort(_prs(), r) is None
+
+
+def test_sammendrag_har_ikke_tvpi_punktet():
+    r = _ford_rapport()
+    for f, m, v in zip(r["fonde"], ("X", "Y", "X"), (2020, 2022, 2023)):
+        f.update(manager=m, vintage=v)
+        f["n"]["irr"] = 0.12
+    r["fordelinger"]["segment"] = data.fordeling(r["fonde"], "segment")
+    r["total_dkk"] = data.dkk_total(r["fonde"])
+    r["sammendrag"] = data.sammendrag(r["fonde"], r["total_dkk"])
+    assert not any("TVPI har" in x for x in _tekster(slides.sammendrag(_prs(), r)))
+
+
+def _fond_med_underfonde(antal=2, afstemning=None):
+    """En almindelig fondsside (ikke feeder) med en kort tabel over underliggende fonde."""
+    f = _feeder()
+    raekker = [dict(navn=f"Fond {i}", type="FUND", instrument=None, vintage=2021, closing=None,
+                    kostpris=100.0, dagsvaerdi=120.0, udloddet=10.0, total=130.0,
+                    kostpris_fond=1.0, dagsvaerdi_fond=1.0, udloddet_fond=0.0, sektor=None,
+                    tvpi=1.3, irr=10.0, document_id=1) for i in range(antal)]
+    f["beholdninger"] = dict(dato=date(2026, 6, 30), raekker=raekker, skaleret=True, andel=0.03,
+                             type="fonde", kode="PD3LGT")
+    f.update(fund_name="Private Debt III LGT", valuta="DKK", nav_afstemning=afstemning,
+             historik=[dict(dato=date(2025, 12, 31), nav=1.0, indbetalt=1.0, udloddet=0.0),
+                       dict(dato=date(2026, 6, 30), nav=2.0, indbetalt=1.0, udloddet=0.0)],
+             bro=[("Indbetalt kapital", 1.0, True), ("NAV", 2.0, True)])
+    return f
+
+
+def test_fondsside_med_underliggende_fonde_har_hverken_graf_eller_vaerdibro():
+    s = slides.fondsside(_prs(), _fond_med_underfonde(), "Investor A/S")
+    assert not any(sh.has_chart for sh in s.shapes)
+    assert not any(x.startswith("Fra indbetalt kapital til NAV") for x in _tekster(s))
+    assert any(x.startswith("Underliggende fonde") for x in _tekster(s))
+
+
+def test_fondsside_forklarer_forskellen_mellem_nav_og_dagsvaerdi():
+    a = dict(nav=54_956_000.0, dagsvaerdi=62_260_000.0, forskel=-7_304_000.0,
+             carry=-8_440_000.0, oevrige=1_136_000.0, ejerandel=0.0, andel=0.0287,
+             nav_andel=0.0287, beholdninger_dato=date(2026, 6, 30), nav_dato=date(2026, 6, 30))
+    noter = " ".join(_tekster(slides.fondsside(_prs(), _fond_med_underfonde(afstemning=a),
+                                               "Investor A/S")))
+    assert ("NAV (54.956) er 7.304 tDKK lavere end dagsværdien i alt (62.260): hensat carried "
+            "interest -8.440; fondens likvider og øvrige poster +1.136.") in noter
+    assert "Total værdi er dagsværdi plus positionernes udlodninger" in noter
+    uden = dict(a, carry=None, oevrige=None, ejerandel=None, nav_andel=None)
+    noter = " ".join(_tekster(slides.fondsside(_prs(), _fond_med_underfonde(afstemning=uden),
+                                               "Investor A/S")))
+    assert "Forvalteren oplyser ikke fondens samlede NAV, så forskellen kan ikke opdeles" in noter
+
+
+def test_lange_noter_flyttes_op_over_logoet():
+    assert slides._noter_y("x" * 300) == slides.Y_NOTER                 # to linjer: som altid
+    lang = slides._noter_y("x" * 1000)                                  # fem linjer
+    assert lang < slides.Y_NOTER
+    assert lang + 5 * slides.NOTE_LINJE <= slides.NOTE_BUND + 1e-9
+
+
+def test_feederside_viser_gics_sektorer_og_delregioner():
+    f = _feeder()
+    linje = lambda top, under, andel: dict(top_kode=None, top=top, under_kode=None, under=under,
+                                           andel=andel, foreloebig=0.0)
+    f["brancher"] = dict(dato=date(2026, 6, 30), grundlag="HOLDINGS", gennem="PSCP5", linjer=[
+        linje("Industri", "Kapitalgoder", 0.3), linje("Industri", "Erhvervsservice", 0.2),
+        linje("Sundhedspleje", "Sundhedsudstyr og -ydelser", 0.5)])
+    f["regioner"] = dict(dato=date(2025, 12, 31), grundlag="HOLDINGS", gennem="PSCP5", linjer=[
+        linje("Nordamerika", "USA", 0.6), linje("Europa", "Frankrig", 0.4)])
+    t = _tekster(slides.fondsside(_prs(), f, "Investor A/S"))
+    assert "Industri" in t and "Sundhedspleje" in t and "50,0 %" in t     # sektor lagt sammen
+    assert "USA" in t and "Frankrig" in t
+    assert any("Branche (GICS-sektor) og geografi er fordelt som på siderne" in x for x in t)
+    assert any("Den geografiske fordeling er pr. 31.12.2025." in x for x in t)
+    assert not any("Branchefordelingen er pr." in x for x in t)      # samme dato som NAV
+
+
+def _med_benchmark(r):
+    r["benchmark"] = dict(dato=None, indeks={
+        "MSCI ACWI": {"INDUSTRIALS": 0.10, "FINANCIALS": 0.16, "ENERGY": 0.74},
+        "MSCI World": {"INDUSTRIALS": 0.11, "FINANCIALS": 0.15, "ENERGY": 0.74}})
+    return r
+
+
+def test_brancher_viser_benchmark_pr_sektor():
+    r = _med_benchmark(_branche_rapport([
+        dict(navn="Industri", dkk=900.0),
+        dict(navn="Diversificeret (fondsandele)", dkk=100.0, kode="DIVERSIFIED")]))
+    s = slides.brancher(_prs(), r)
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    rk = [[c.text for c in row.cells] for row in tabel.rows]
+    assert rk[0][-2:] == ["MSCI ACWI", "MSCI World"]
+    assert rk[2][1:] == ["Industri", "1", "90,0 %", "10,0 %", "11,0 %"]
+    assert rk[3][-2:] == [slides.IKKE_OPLYST] * 2              # ingen sektor i indeksene
+    assert any("Benchmark er sektorvægtene i MSCI ACWI og MSCI World" in x for x in _tekster(s))
+
+
+def test_brancher_uden_benchmark_har_fire_kolonner():
+    s = slides.brancher(_prs(), _branche_rapport([dict(navn="Industri", dkk=900.0)]))
+    assert len(next(sh.table for sh in s.shapes if sh.has_table).columns) == 4
+    assert not any("Benchmark" in x for x in _tekster(s))
+
+
+def test_branchekort_viser_acwi_i_de_store_kasser():
+    r = _med_benchmark(_branche_rapport([dict(navn="Industri", dkk=600_000.0),
+                                         dict(navn="Finans", dkk=400_000.0, kode="FINANCIALS")]))
+    t = _tekster(slides.branchekort(_prs(), r))
+    assert any(x.startswith("Industri\n600 tDKK\n60,0 %\nMSCI ACWI 10,0 %") for x in t)
+
+
+def test_regionskort_deler_regioner_i_delregioner_og_naevner_smaa_regioner():
+    europa = dict(navn="Europa", kode="EUROPE", dkk=900_000.0, grupper=[
+        dict(navn="Danmark", dkk=700_000.0), dict(navn="Frankrig", dkk=190_000.0),
+        dict(navn="Benelux", dkk=6_000.0), dict(navn="Sydeuropa", dkk=4_000.0)])
+    usa = dict(navn="Nordamerika", kode="NORTH_AMERICA", dkk=99_000.0,
+               grupper=[dict(navn="USA", dkk=99_000.0)])
+    row = dict(navn="Resten af verden", kode="ROW", dkk=1_000.0,
+               grupper=[dict(navn="Asien og Stillehavsområdet", dkk=1_000.0)])
+    s = slides.regionskort(_prs(), _branche_rapport([europa, usa, row], art="regioner"))
+    t = _tekster(s)
+    assert "Geografisk eksponering – overblik" in t
+    assert "Europa" in t                                   # båndet: kun navnet, intet tal
+    # en region for lille til bånd og delregioner står som én kasse med sit eget tal
+    assert any(x.startswith("Nordamerika") and "9,9 %" in x for x in t)
+    assert "Danmark\n700 tDKK\n70,0 %" in t
+    # hvert beløb står én gang: kasserne plus den for lille region i noten giver 100 %
+    procenter = [float(p.replace(",", ".")) for x in t if not x.startswith("Kilde")
+                 for p in re.findall(r"(\d+,\d) %", x)]
+    assert sum(procenter) + 0.1 == pytest.approx(100.0, abs=0.05)
+    assert any("»Øvrige« under Europa samler Benelux og Sydeuropa" in x for x in t)
+    assert any("Resten af verden (1 tDKK, 0,1 %) er for lille til at blive vist" in x for x in t)
+
+
+def test_regionskort_uden_data_springes_over():
+    r = _rapport([])
+    r["regioner"] = None
+    assert slides.regionskort(_prs(), r) is None
+
+
+def _ejendomsrapport():
+    """Hele NAV 1.000.000: en ejendomsfond, en blandet fond med 10 % ejendomme og en PE-fond."""
+    linje = lambda kode, top, under, andel: dict(top_kode=kode, top=top, under_kode=None,
+                                                 under=under, andel=andel, foreloebig=0.0)
+    fond = lambda navn, nav, brancher, regioner: dict(
+        fund_name=navn, nav_dato=date(2026, 6, 30), n=dict(nav_dkk=nav),
+        brancher=dict(grundlag="HOLDINGS", dato=date(2026, 6, 30), gennem=None, linjer=brancher),
+        regioner=dict(grundlag="HOLDINGS", dato=date(2026, 6, 30), gennem=None, linjer=regioner))
+    fonde = [
+        fond("Home.Earth", 300_000.0, [linje("REAL_ESTATE", "Ejendomme", None, 1.0)],
+             [linje("EUROPE", "Europa", "Danmark", 1.0)]),
+        fond("Commercial Real Estate Denmark", 140_000.0,
+             [linje("REAL_ESTATE", "Ejendomme", None, 1.0)],
+             [linje("EUROPE", "Europa", "Danmark", 1.0)]),
+        fond("K Alternativ Private Equity 2021", 100_000.0,
+             [linje("INDUSTRIALS", "Industri", None, 0.95),
+              linje("REAL_ESTATE", "Ejendomme", None, 0.05)],
+             [linje("NORTH_AMERICA", "Nordamerika", "USA", 1.0)]),
+        fond("Seed Capital Denmark IV", 460_000.0,
+             [linje("FINANCIALS", "Finans", None, 0.6), linje("ENERGY", "Energi", None, 0.4)],
+             [linje("EUROPE", "Europa", "Danmark", 0.7), linje("EUROPE", "Europa", "Frankrig", 0.3)])]
+    r = _rapport([])
+    r["kurser"] = {}
+    r["brancher"] = data.eksponering(fonde, "brancher")
+    r["regioner"] = data.eksponering(fonde, "regioner")
+    r["uden_ejendomme"] = {art: data.opdel_ejendomme(fonde, art) for art in ("brancher", "regioner")}
+    return r
+
+
+def _procenter(tekster):
+    return [float(p.replace(",", ".")) for x in tekster for p in re.findall(r"(\d+,\d) %", x)]
+
+
+def test_branchekort_ejendomme_deler_sliden_og_regner_paa_hver_dels_base():
+    s = slides.branchekort_ejendomme(_prs(), _ejendomsrapport())
+    t = _tekster(s)
+    assert "Branchefordeling – ejendomme for sig" in t
+    # båndene: delenes andel af hele NAV summerer til 100 %
+    assert any(x.startswith("Ejendomme  ·  445 tDKK  ·  44,5 %") for x in t)
+    assert any(x.startswith("Øvrige investeringer  ·  555 tDKK  ·  55,5 %") for x in t)
+    # ejendomme pr. fond, i procent af ejendommene; K Alternativs 5 tDKK er under 2 %
+    assert "Home.Earth\n300 tDKK\n67,4 %" in t
+    # for smal til tekst: tegnet, men nævnt i noten med sit tal
+    assert any("K Alternativ Private Equity 2021 (5 tDKK, 1,1 % af ejendommene) er for lille" in x
+               for x in t)
+    # resten i procent af de øvrige investeringer: Finans 276 af 555
+    assert any(x.startswith("Finans\n276 tDKK\n49,7 %") for x in t)
+    assert not any(x.startswith("Ejendomme\n") for x in t)
+    # hver del summerer til 100 % af sig selv
+    ejendomme = ("Home.Earth", "Commercial", "K Alternativ")
+    assert sum(_procenter(x for x in t if x.startswith(ejendomme))) + 1.1 == pytest.approx(
+        100.0, abs=0.15)
+    assert sum(_procenter(x for x in t if "tDKK" in x and "  ·  " not in x
+                          and not x.startswith((*ejendomme, "Kilde")))) == pytest.approx(
+        100.0, abs=0.15)
+    assert any("herunder ejendomsandelen af K Alternativ Private Equity 2021." in x for x in t)
+
+
+def test_regionskort_ejendomme_fordeler_resten_paa_regioner():
+    s = slides.regionskort_ejendomme(_prs(), _ejendomsrapport())
+    t = _tekster(s)
+    assert "Geografisk eksponering – ejendomme for sig" in t
+    # resten: Seed 460 i Europa (Danmark 322, Frankrig 138) og K Alternativ 95 i USA
+    procenter = _procenter(x for x in t if "tDKK" in x and "  ·  " not in x and not x.startswith(
+        ("Home.Earth", "Commercial", "K Alternativ", "Kilde")))
+    assert sum(procenter) == pytest.approx(100.0, abs=0.15)
+    assert any(x.startswith("Danmark\n322 tDKK\n58,0 %") for x in t)
+    assert any("antages at ligge geografisk som resten af fonden" in x for x in t)
+
+
+def test_ejendomsopdelte_kort_uden_ejendomme_springes_over():
+    r = _rapport([])
+    r["uden_ejendomme"] = {"brancher": None, "regioner": None}
+    assert slides.branchekort_ejendomme(_prs(), r) is None
+    assert slides.regionskort_ejendomme(_prs(), r) is None

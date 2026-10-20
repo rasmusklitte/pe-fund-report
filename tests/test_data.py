@@ -1,6 +1,7 @@
 """Beregninger i data.py, som ikke kræver databasen."""
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from pe_fund_report import data
@@ -71,7 +72,33 @@ def test_segment_bruger_struktur_foer_fokus():
     assert data.segment("DIRECT", "BUYOUT", "ALL") == "Buyout"
     assert data.segment("DIRECT", "VENTURE", float("nan")) == "Venture"
     assert data.segment("DIRECT", "JUNIOR_DEBT", "MID_LARGE") == "Private credit"
+    # private credit er sin egen aktivklasse, også som fund of funds
+    assert data.segment("FUND_OF_FUNDS", "JUNIOR_DEBT", "SMALL_MID") == "Private credit"
+    assert data.segment("DIRECT", "REAL_ESTATE", None) == "Ejendomme"
     assert data.segment(None, None, None) is None
+
+
+def test_fondsstoerrelse_dropper_gammel_metric_for_stamdata():
+    nav_dato = date(2026, 6, 30)
+    frisk = (1_044.8e6, date(2026, 6, 30), 7)
+    gammel = (52.9e6, date(2023, 6, 30), 8)
+    assert data.fondsstoerrelse(frisk, 2_000e6, nav_dato) == (
+        1_044.8e6, dict(tekst="Fondsrapport pr. 30.06.2026 (TOTAL_COMMITMENTS)", document_id=7))
+    # Home.Earth: tilsagnene er vokset siden den daterede opgørelse
+    assert data.fondsstoerrelse(gammel, 158.2e6, nav_dato)[0] == 158.2e6
+    assert data.fondsstoerrelse(gammel, None, nav_dato)[0] == 52.9e6
+    assert data.fondsstoerrelse(None, 158.2e6, nav_dato)[1]["document_id"] is None
+
+
+def test_vaerdibro_uden_opdeling_viser_ikke_nuller():
+    ka = pd.DataFrame(dict(period_end=[date(2026, 6, 30)] * 3, basis=["ITD"] * 3,
+                           account_code=["CA110", "CA290", "CA900"],
+                           amount=[6_045_470.0, 1_163_069.0, 7_208_539.0]))
+    n = dict(indbetalt=6_045_470.0, udloddet=0.0, nav=7_208_539.0)
+    bro = data._vaerdibro(ka, date(2026, 6, 30), n)
+    assert [p for p, _ in bro] == ["Indbetalt kapital", "Udlodninger",
+                                   "Værdiskabelse efter omkostninger og carry", "NAV"]
+    assert sum(v for _, v in bro[:-1]) == pytest.approx(n["nav"])
 
 
 def _beholdning(type_, raekker):
@@ -319,3 +346,450 @@ def test_sammendrag_finder_hoejeste_og_laveste_tvpi():
 def test_sammendrag_uden_dkk_tal_har_ingen_portefoeljetal():
     sm = data.sammendrag(_sam_fonde(), None)
     assert sm["tilsagn_dkk"] is None and sm["tvpi"] is None and sm["picc"] is None
+
+
+# ---------- udvikling i kvartalet og året ----------
+
+def test_perioder_er_forrige_kvartals_og_aars_ultimo():
+    p = data.perioder(date(2026, 6, 30))
+    assert p["kvartal"] == (date(2026, 3, 31), date(2026, 6, 30))
+    assert p["aar"] == (date(2025, 12, 31), date(2026, 6, 30))
+    q1 = data.perioder(date(2026, 3, 31))
+    assert q1["kvartal"] == q1["aar"] == (date(2025, 12, 31), date(2026, 3, 31))
+
+
+def _historik(*punkter):
+    """(dato, nav, indbetalt, udloddet) -> historik som i data.fond()."""
+    return [dict(dato=d, nav=n, indbetalt=i, udloddet=u) for d, n, i, u in punkter]
+
+
+def test_periodeaendring_gaar_op_og_regner_modified_dietz():
+    h = _historik((date(2025, 12, 31), 100.0, 80.0, 0.0), (date(2026, 3, 31), 105.0, 80.0, 0.0),
+                  (date(2026, 6, 30), 130.0, 100.0, 5.0))
+    flows = [(date(2025, 6, 1), -80.0, "kald"), (date(2026, 5, 16), -20.0, "kald"),
+             (date(2026, 5, 16), 5.0, "udlodning")]
+    u = data._periodeaendring(h, flows, date(2026, 3, 31), date(2026, 6, 30))
+    assert (u["primo"], u["kald"], u["udlodning"], u["ultimo"]) == (105.0, 20.0, 5.0, 130.0)
+    assert u["primo"] + u["kald"] - u["udlodning"] + u["vaerdi"] == u["ultimo"]
+    assert u["vaerdi"] == 10.0
+    # nettoflowet på 15 er i fonden 45 af periodens 91 dage
+    assert u["afkast"] == pytest.approx(10.0 / (105.0 + 15.0 * 45 / 91))
+    assert u["tvpi_aendring"] == pytest.approx(135 / 100 - 105 / 80)
+
+
+def test_periodeaendring_falder_tilbage_paa_seneste_nav_foer_perioden():
+    f = dict(historik=_historik((date(2025, 9, 30), 50.0, 40.0, 0.0),
+                                (date(2026, 3, 31), 60.0, 50.0, 0.0),
+                                (date(2026, 6, 30), 62.0, 50.0, 0.0)),
+             kapitalstroemme=[(date(2025, 11, 1), -10.0, "kald")], noter=[])
+    data.udvikling(f, data.perioder(date(2026, 6, 30)))
+    aar = f["udvikling"]["aar"]
+    assert aar["primo_dato"] == date(2025, 9, 30)
+    assert aar["kald"] == 10.0           # kaldet i Q4 25 tæller med, så broen går op
+    assert aar["vaerdi"] == 2.0
+    assert len(f["noter"]) == 1 and "30.09.2025" in f["noter"][0]
+    assert f["udvikling"]["kvartal"]["primo_dato"] == date(2026, 3, 31)
+
+
+def test_periodeaendring_uden_nav_foer_perioden_starter_fra_nul():
+    h = _historik((date(2026, 6, 30), 9.0, 10.0, 0.0))
+    u = data._periodeaendring(h, [(date(2026, 4, 15), -10.0, "kald")],
+                              date(2026, 3, 31), date(2026, 6, 30))
+    assert (u["primo"], u["kald"], u["vaerdi"]) == (0.0, 10.0, -1.0)
+
+
+def _udv_fond(navn, valuta, primo, kald, ultimo, primo_dato=date(2026, 3, 31)):
+    u = dict(fra=date(2026, 3, 31), til=date(2026, 6, 30), primo_dato=primo_dato, primo=primo,
+             kald=kald, udlodning=0.0, vaerdi=ultimo - primo - kald, ultimo=ultimo,
+             flows=[(date(2026, 5, 16), kald, "kald")] if kald else [], afkast=None)
+    return dict(fund_name=navn, valuta=valuta, udvikling={"kvartal": u})
+
+
+def test_omregning_til_dkk_giver_valutakursaendring_som_residual():
+    kurser = {("EUR", date(2026, 3, 31)): 7.0, ("EUR", date(2026, 5, 16)): 7.2,
+              ("EUR", date(2026, 6, 30)): 7.5}
+    kurs = lambda v, d: 1.0 if v == "DKK" else kurser.get((v, d))
+    a, b = _udv_fond("A", "DKK", 100.0, 10.0, 120.0), _udv_fond("B", "EUR", 10.0, 2.0, 13.0)
+    data.omregn_udvikling_til_dkk([a, b], kurs)
+    ua, ub = a["udvikling"]["kvartal"], b["udvikling"]["kvartal"]
+    assert ua["valuta_dkk"] == 0.0 and ua["vaerdi_dkk"] == 10.0
+    assert (ub["primo_dkk"], ub["kald_dkk"], ub["ultimo_dkk"]) == (70.0, 14.4, 97.5)
+    assert ub["vaerdi_dkk"] == 7.5
+    assert ub["valuta_dkk"] == pytest.approx(97.5 - 70.0 - 14.4 - 7.5)
+
+    t = data.portefoelje_udvikling([a, b])["kvartal"]
+    assert t["primo"] + t["kald"] - t["udlodning"] + t["vaerdi"] + t["valuta"] == \
+        pytest.approx(t["ultimo"])
+    assert [n for n, _ in t["bidrag"]] == ["B", "A"]      # 7,5 + 5,6 i valuta > 10
+
+
+def test_portefoelje_udvikling_er_none_uden_kurs():
+    a = _udv_fond("A", "USD", 10.0, 0.0, 11.0)
+    data.omregn_udvikling_til_dkk([a], lambda v, d: None)
+    assert data.portefoelje_udvikling([a]) == {"kvartal": None}
+
+
+def test_forkortelse_af_genkender_forvalternes_korte_navne():
+    for kort, lang in [("ASF VII", "AlpInvest Secondaries Fund VII"),
+                       ("ACF VIII", "AlpInvest Co-Investment Fund VIII"),
+                       ("WPEF IX", "Waterland Private Equity Fund IX"),
+                       ("Charlesbank X", "Charlesbank Equity Fund X"),
+                       ("Advent Tech II", "Advent Global Technology II"),
+                       ("Paragon IV", "The Paragon Fund IV")]:
+        assert data._forkortelse_af(kort, lang), kort
+    for kort, lang in [("Trivest VII", "Trivest Discovery Fund II"),
+                       ("Waterland VIII", "Waterland Private Equity Fund IX"),
+                       ("TA XIV", "TA XIV")]:
+        assert not data._forkortelse_af(kort, lang), kort
+
+
+def _beh_linje(navn, fv, kost, udl=0.0, vintage=2020, closing=None):
+    return dict(navn=navn, dagsvaerdi=fv, kostpris=kost, udloddet=udl, vintage=vintage,
+                closing=closing)
+
+
+def test_vaerdibevaegelser_parrer_omdoebte_og_udelader_afhaendede():
+    primo = _beholdning("fonde", [_beh_linje("AlpInvest Secondaries Fund VII", 100.0, 80.0),
+                                  _beh_linje("Gammel Fond I", 50.0, 40.0)])
+    nu = _beholdning("fonde", [_beh_linje("ASF VII", 90.0, 85.0, udl=5.0),
+                               _beh_linje("Ny Fond I", 12.0, 10.0, closing=date(2026, 5, 1))])
+    f = dict(fund_name="KAPE", valuta="DKK", beholdninger=nu,
+             beholdninger_primo={"kvartal": primo},
+             udvikling={"kvartal": dict(fra=date(2026, 3, 31))})
+    vb = data.vaerdibevaegelser([f], {"DKK": (1.0, date(2026, 6, 30))})
+    linjer = {x["navn"]: x["kvartal"] for x in vb["linjer"]}
+    assert linjer == {"ASF VII": (90 + 5 - 85) - (100 - 80), "Ny Fond I": 2.0}
+    assert vb["usammenlignelige"] == {"kvartal": [("KAPE", "Gammel Fond I")]}
+
+
+def test_vaerdibevaegelser_markerer_fond_med_uaendrede_tal():
+    beh = _beholdning("selskaber", [_beh_linje("A", 10.0, 5.0)])
+    f = dict(fund_name="SEED", valuta="DKK", beholdninger=beh,
+             beholdninger_primo={"kvartal": _beholdning("selskaber", [_beh_linje("A", 10.0, 5.0)])},
+             udvikling={"kvartal": dict(fra=date(2026, 3, 31))})
+    vb = data.vaerdibevaegelser([f], {"DKK": (1.0, date(2026, 6, 30))})
+    assert vb["uaendrede"] == {"kvartal": ["SEED"]} and vb["linjer"] == []
+
+
+def test_vaerdibevaegelser_udelader_ejendomsfond():
+    # ejendommenes værdier er før gæld og uden kostpris, så de rangeres ikke
+    beh = _beholdning("ejendomme", [_beh_linje("HTC", 38.0, None)]) | dict(skaleret=False)
+    f = dict(fund_name="Home.Earth", valuta="EUR", beholdninger=beh,
+             beholdninger_primo={"kvartal": _beholdning("ejendomme", [_beh_linje("HTC", 29.0, None)])},
+             udvikling={"kvartal": dict(fra=date(2026, 3, 31))})
+    vb = data.vaerdibevaegelser([f], {"EUR": (7.47, date(2026, 6, 30))})
+    assert vb["linjer"] == [] and vb["ejendomsfonde"] == ["Home.Earth"]
+    assert vb["uskalerede"] == []
+
+
+# ---------- rabat på kald ----------
+
+def test_kaldt_bruger_forvalterens_tal_ved_rabat():
+    # PPPC2: kaldt 3.200.000 EUR, betalt 3.125.000 EUR (25 % rabat på første kald)
+    assert data.kaldt(3_125_000.0, 3_200_000.0) == 3_200_000.0
+    assert data.kaldt(20_511_966.0, 20_511_963.0) == 20_511_966.0      # afrunding, ikke rabat
+    assert data.kaldt(22_734_924.0, None) == 22_734_924.0              # ingen MM110
+    assert data.kaldt(100.0, 90.0) == 100.0                            # mindre kaldt: ikke rabat
+
+
+# ---------- gennemlysning af feedere ----------
+
+def test_selskab_fjerner_instrumentord():
+    assert data._selskab("STADA Common") == "STADA"
+    assert data._selskab("Pavion Junior Pref") == "Pavion"
+    assert data._selskab("VPP Pref Equity") == "VPP"
+    assert data._selskab("Equity") == "Equity"           # første ord bliver altid
+    assert data._selskab("Summa Equity Fund III (No.2) AB") == "Summa Equity Fund III (No.2) AB"
+
+
+def _holdings(rows, instrument=None, industri=None, forslag=None):
+    """rows: (section, name, invested, fair_value) som i rpt.v_portfolio_holding."""
+    n = len(rows)
+    return pd.DataFrame(dict(
+        report_date=[date(2026, 6, 30)] * n, section=[r[0] for r in rows],
+        name=[r[1] for r in rows], segment=[None] * n, trade_date=[date(2025, 1, 1)] * n,
+        vintage=[None] * n, instrument=instrument or [None] * n, commitment=[None] * n,
+        invested=[r[2] for r in rows], distributions=[0.0] * n, fair_value=[r[3] for r in rows],
+        paid_in_pct=[None] * n, multiple=[None] * n, irr_pct=[None] * n, document_id=[7] * n,
+        industry_code=industri or [None] * n, industry_suggested=forslag or [None] * n))
+
+
+def test_beholdninger_samler_trancher_og_skalerer_efter_nav(monkeypatch):
+    h = _holdings([("UNREALISED", "STADA", 60.0, 66.0), ("UNREALISED", "STADA Common", 40.0, 54.0),
+                   ("UNREALISED", "Opella", 100.0, 80.0)], instrument=["PIK", "Equity", "PIK"])
+    monkeypatch.setattr(data, "read_sql", lambda *a, **k: h)
+    beh = data._beholdninger("PSCP5", date(2026, 6, 30), None, nav=20.0)
+    assert beh["kode"] == "PSCP5" and beh["skaleret"] and beh["type"] == "selskaber"
+    assert [r["navn"] for r in beh["raekker"]] == ["STADA", "Opella"]
+    stada = beh["raekker"][0]
+    assert (stada["kostpris_fond"], stada["dagsvaerdi_fond"]) == (100.0, 120.0)
+    assert stada["instrument"] == "PIK, Equity" and stada["tvpi"] == pytest.approx(1.2)
+    assert beh["andel"] == pytest.approx(20.0 / 200.0)
+    assert sum(r["dagsvaerdi"] for r in beh["raekker"]) == pytest.approx(20.0)   # = NAV
+
+
+def test_beholdninger_hos_secondaryfond_er_underliggende_fonde(monkeypatch):
+    h = _holdings([("SECONDARY", "Fund A", 10.0, 30.0), ("CO_INVESTMENT", "Selskab", 5.0, 10.0)])
+    monkeypatch.setattr(data, "read_sql", lambda *a, **k: h)
+    assert data._beholdninger("NEP6", date(2026, 6, 30), None, nav=4.0)["type"] == "fonde"
+
+
+def test_vaerdibevaegelser_matcher_uden_hensyn_til_store_bogstaver():
+    primo = _beholdning("selskaber", [_beh_linje("DiversiTech", 10.0, 8.0)])
+    nu = _beholdning("selskaber", [_beh_linje("Diversitech", 12.0, 8.0)])
+    f = dict(fund_name="PPPC2", valuta="DKK", beholdninger=nu,
+             beholdninger_primo={"kvartal": primo},
+             udvikling={"kvartal": dict(fra=date(2026, 3, 31))})
+    vb = data.vaerdibevaegelser([f], {"DKK": (1.0, date(2026, 6, 30))})
+    assert [x["kvartal"] for x in vb["linjer"]] == [2.0] and vb["usammenlignelige"] == {}
+
+
+def test_udligningsrente_i_indbetalt_og_udloddet():
+    # betalt udligningsrente er en indbetaling, modtaget en udlodning; kildeskat ingen af dem
+    cf = pd.DataFrame(dict(
+        flow_class=["CONTRIBUTION", "EQUALISATION", "DISTRIBUTION", "EQUALISATION",
+                    "WITHHOLDING_TAX"],
+        amount=[-1000.0, -17.0, 300.0, 5.0, -2.0]))
+    assert -cf[data._er_indbetaling(cf)].amount.sum() == 1017.0
+    assert cf[data._er_udlodning(cf)].amount.sum() == 305.0
+
+
+def _branchelinje(sektor_kode, gruppe, andel, foreloebig=0.0):
+    sektor = data.SEKTORER.get(sektor_kode, sektor_kode or data.IKKE_KLASSIFICERET)
+    return dict(top_kode=sektor_kode, top=sektor, under_kode=None, under=gruppe,
+                andel=andel, foreloebig=foreloebig)
+
+
+def _branchefond(navn, nav_dkk, linjer, grundlag="GP_BREAKDOWN", dato=date(2026, 6, 30)):
+    return dict(fund_name=navn, nav_dato=date(2026, 6, 30), n=dict(nav_dkk=nav_dkk),
+                brancher=None if linjer is None else dict(grundlag=grundlag, dato=dato,
+                                                          gennem=None, linjer=linjer))
+
+
+def _branchefonde():
+    return [
+        _branchefond("A", 600.0, [_branchelinje("INDUSTRIALS", "Kapitalgoder", 0.5),
+                                  _branchelinje("INDUSTRIALS", data.IKKE_OPDELT, 0.25),
+                                  _branchelinje("HEALTH_CARE", "Sundhedsudstyr og -ydelser", 0.25, 1.0)]),
+        _branchefond("B", 300.0, [_branchelinje("INDUSTRIALS", "Erhvervsservice", 1.0, 0.5)],
+                     grundlag="HOLDINGS", dato=date(2025, 12, 31)),
+        _branchefond("C", 100.0, None),
+    ]
+
+
+def test_eksponering_brancher_summerer_til_porteføljens_nav_i_dkk():
+    b = data.eksponering(_branchefonde(), "brancher")
+    assert b["total_dkk"] == 1000.0
+    assert sum(s["dkk"] for s in b["grupper"]) == pytest.approx(1000.0)
+    assert sum(s["andel"] for s in b["grupper"]) == pytest.approx(1.0)
+    industri = b["grupper"][0]
+    assert industri["navn"] == "Industri" and industri["dkk"] == pytest.approx(750.0)
+    assert sum(g["dkk"] for g in industri["under"]) == pytest.approx(industri["dkk"])
+    assert industri["stoerste_fond"] == "A" and industri["fonde"] == ["A", "B"]
+
+
+def test_eksponering_brancher_sorterer_ikke_opdelt_og_uklassificeret_sidst():
+    b = data.eksponering(_branchefonde(), "brancher")
+    assert [s["navn"] for s in b["grupper"]] == ["Industri", "Sundhedspleje",
+                                                  data.IKKE_KLASSIFICERET]
+    assert [g["navn"] for g in b["grupper"][0]["under"]] == [
+        "Kapitalgoder", "Erhvervsservice", data.IKKE_OPDELT]
+
+
+def test_eksponering_brancher_fond_uden_fordeling_er_ikke_klassificeret():
+    b = data.eksponering(_branchefonde(), "brancher")
+    assert b["uden_fordeling"] == ["C"]
+    assert b["grupper"][-1]["dkk"] == 100.0 and b["grupper"][-1]["under"] == []
+
+
+def test_eksponering_brancher_vaegter_foreloebig_klassifikation_med_nav():
+    b = data.eksponering(_branchefonde(), "brancher")
+    # A: 25 % af 600 helt foreløbig; B: halvdelen af 300
+    assert b["foreloebig_dkk"] == pytest.approx(150.0 + 150.0)
+    assert b["foreloebig_andel"] == pytest.approx(0.3)
+    assert b["foreloebige_fonde"] == ["A", "B"]
+
+
+def test_eksponering_brancher_noterer_afvigende_dato_og_strategiplacering():
+    fonde = _branchefonde()
+    fonde.append(_branchefond("D", 0.0, [_branchelinje("REAL_ESTATE", data.IKKE_OPDELT, 1.0)],
+                              grundlag="FUND_DEFAULT"))
+    b = data.eksponering(fonde, "brancher")
+    assert b["andre_datoer"] == [("B", date(2025, 12, 31))]
+    assert b["efter_strategi"] == [("D", "Ejendomme")]
+
+
+def test_eksponering_brancher_uden_dkk_kurs_er_none():
+    fonde = _branchefonde()
+    fonde[1]["n"]["nav_dkk"] = None
+    assert data.eksponering(fonde, "brancher") is None
+
+
+def _ejendomsfonde():
+    """En ren ejendomsfond, en blandet fond med 10 % ejendomme og en fond uden ejendomme."""
+    fonde = [
+        _branchefond("Ejd", 400.0, [_branchelinje("REAL_ESTATE", data.IKKE_OPDELT, 1.0)],
+                     grundlag="FUND_DEFAULT"),
+        _branchefond("Bland", 500.0, [_branchelinje("INDUSTRIALS", "Kapitalgoder", 0.9),
+                                      _branchelinje("REAL_ESTATE", data.IKKE_OPDELT, 0.1)]),
+        _branchefond("PE", 100.0, [_branchelinje("FINANCIALS", "Forsikring", 1.0)])]
+    regioner = {"Ejd": [("EUROPE", "DENMARK", 1.0)], "Bland": [("EUROPE", "FRANCE", 0.6),
+                                                               ("NORTH_AMERICA", "US", 0.4)],
+                "PE": [("EUROPE", "DENMARK", 1.0)]}
+    for f in fonde:
+        f["regioner"] = _regionfond(f["fund_name"], 0.0, regioner[f["fund_name"]])["regioner"]
+    return fonde
+
+
+def test_opdel_ejendomme_tager_sektoren_fra_alle_fonde_og_giver_resten_egen_base():
+    opd = data.opdel_ejendomme(_ejendomsfonde(), "brancher")
+    ejd, rest = opd["ejendomme"], opd["resten"]
+    assert ejd["total_dkk"] == pytest.approx(450.0) and ejd["andel"] == pytest.approx(0.45)
+    assert [(x["navn"], x["dkk"]) for x in ejd["fonde"]] == [("Ejd", 400.0),
+                                                             ("Bland", pytest.approx(50.0))]
+    assert sum(x["andel"] for x in ejd["fonde"]) == pytest.approx(1.0)
+    assert ejd["blandede"] == ["Bland"]
+    # resten: ingen ejendomme, og andelene er af resten (550), ikke af hele NAV
+    assert rest["total_dkk"] == pytest.approx(550.0)
+    assert ejd["total_dkk"] + rest["total_dkk"] == pytest.approx(1000.0)
+    assert [(g["navn"], g["dkk"]) for g in rest["grupper"]] == [
+        ("Industri", pytest.approx(450.0)), ("Finans", pytest.approx(100.0))]
+    assert sum(g["andel"] for g in rest["grupper"]) == pytest.approx(1.0)
+    assert rest["efter_strategi"] == []           # den rene ejendomsfond er helt ude
+
+
+def test_opdel_ejendomme_regioner_fordeler_den_blandede_fond_forholdsmaessigt():
+    opd = data.opdel_ejendomme(_ejendomsfonde(), "regioner")
+    rest = opd["resten"]
+    assert rest["total_dkk"] == pytest.approx(550.0)
+    europa, usa = rest["grupper"]
+    # Bland: 450 tilbage, 60/40; PE: 100 i Danmark; ejendomsfondens Danmark er væk
+    assert europa["dkk"] == pytest.approx(270.0 + 100.0)
+    assert usa["dkk"] == pytest.approx(180.0)
+    assert sum(g["andel"] for g in rest["grupper"]) == pytest.approx(1.0)
+
+
+def test_opdel_ejendomme_uden_ejendomme_eller_dkk_er_none():
+    fonde = _ejendomsfonde()[2:]
+    assert data.opdel_ejendomme(fonde, "brancher") is None
+    fonde = _ejendomsfonde()
+    fonde[0]["n"]["nav_dkk"] = None
+    assert data.opdel_ejendomme(fonde, "regioner") is None
+
+
+def test_branchegrupper_daekker_alle_gics_grupper():
+    assert len(data.BRANCHEGRUPPER) == 25
+    assert set(data.SEKTORER) >= {"ENERGY", "MATERIALS", "INDUSTRIALS", "CONSUMER_DISCRETIONARY",
+                                  "CONSUMER_STAPLES", "HEALTH_CARE", "FINANCIALS",
+                                  "INFORMATION_TECHNOLOGY", "COMMUNICATION_SERVICES",
+                                  "UTILITIES", "REAL_ESTATE"}
+
+
+def _regionfond(navn, nav_dkk, linjer, grundlag="HOLDINGS"):
+    return dict(fund_name=navn, nav_dato=date(2026, 6, 30), n=dict(nav_dkk=nav_dkk),
+                regioner=dict(grundlag=grundlag, dato=date(2026, 6, 30), gennem=None, linjer=[
+                    dict(top_kode=top, top=data.REGIONER[top], under_kode=under,
+                         under=data.DELREGIONER[under], andel=andel, foreloebig=0.0)
+                    for top, under, andel in linjer]))
+
+
+def test_eksponering_regioner_summerer_og_saetter_ikke_opdelt_sidst():
+    fonde = [_regionfond("A", 800.0, [("EUROPE", "DENMARK", 0.5), ("EUROPE", "EUROPE_OTHER", 0.25),
+                                      ("NORTH_AMERICA", "US", 0.25)]),
+             _regionfond("B", 200.0, [("EUROPE", "FRANCE", 0.5), ("NORTH_AMERICA", "USA_OTHER", 0.5)],
+                         grundlag="GP_BREAKDOWN")]
+    b = data.eksponering(fonde, "regioner")
+    assert sum(g["dkk"] for g in b["grupper"]) == pytest.approx(1000.0)
+    europa, usa = b["grupper"]
+    assert europa["navn"] == "Europa" and europa["dkk"] == pytest.approx(700.0)
+    assert [u["navn"] for u in europa["under"]] == ["Danmark", "Frankrig",
+                                                    "Øvrige Europa og ikke opdelt"]
+    assert [u["navn"] for u in usa["under"]] == ["USA", "Nordamerika, ikke opdelt"]
+    assert europa["under"][1]["stoerste_fond"] == "B"
+    assert sum(u["dkk"] for u in usa["under"]) == pytest.approx(usa["dkk"])
+
+
+def test_delregioner_daekker_databasens_koder():
+    assert set(data.DELREGIONER) >= data.IKKE_OPDELTE_REGIONER
+    assert len(data.DELREGIONER) == 15
+    assert set(data.REGIONER) == {"NORTH_AMERICA", "EUROPE", "ROW"}
+
+
+def test_beholdninger_viser_gics_sektoren_som_industri(monkeypatch):
+    h = _holdings([("UNREALISED", "FLATPAY", 10.0, 90.0), ("UNREALISED", "Landfolk", 5.0, 4.0),
+                   ("UNREALISED", "Ukendt", 1.0, 1.0)],
+                  industri=["FINANCIALS", "CONSUMER_DISCRETIONARY", None],
+                  forslag=[True, False, None])
+    monkeypatch.setattr(data, "read_sql", lambda *a, **k: h)
+    beh = data._beholdninger("SEED4", date(2026, 6, 30), 0.5)
+    r = {x["navn"]: x for x in beh["raekker"]}
+    assert r["FLATPAY"]["industri"] == "Finans" and r["FLATPAY"]["industri_foreloebig"]
+    assert r["Landfolk"]["industri"] == "Forbrugsgoder" and not r["Landfolk"]["industri_foreloebig"]
+    assert r["Ukendt"]["industri"] is None and not r["Ukendt"]["industri_foreloebig"]
+
+
+def _eksponeringsfond(navn, valuta, nav_dkk, raekker, type_="selskaber", skaleret=True):
+    return dict(fund_name=navn, valuta=valuta, n=dict(nav_dkk=nav_dkk),
+                beholdninger=dict(type=type_, skaleret=skaleret, dato=date(2026, 6, 30),
+                                  raekker=[dict(navn=n, dagsvaerdi=v) for n, v in raekker]))
+
+
+def test_stoerste_eksponering_sammenligner_i_dkk_og_udelader_ejendomme():
+    fonde = [_eksponeringsfond("DKK-fond", "DKK", 500.0, [("A", 100.0), ("B", 50.0)]),
+             _eksponeringsfond("EUR-fond", "EUR", 300.0, [("C", 20.0)], type_="fonde"),
+             _eksponeringsfond("Ejendomme", "DKK", 200.0, [("Hus", 999.0)], type_="ejendomme"),
+             _eksponeringsfond("Uskaleret", "DKK", 0.0, [("Hele fonden", 5000.0)], skaleret=False)]
+    e = data.stoerste_eksponering(fonde, {"DKK": (1.0, None), "EUR": (7.5, None)})
+    # C: 20 EUR = 150 DKK slår A's 100 DKK; ejendomme og uskalerede tal er ikke med
+    assert e["navn"] == "C" and e["dkk"] == 150.0 and e["art"] == "underliggende fond"
+    assert e["andel"] == pytest.approx(150.0 / 1000.0)
+    assert e["udeladt"] == ["Ejendomme", "Uskaleret"]
+
+
+def test_stoerste_eksponering_uden_beholdninger_er_none():
+    fonde = [dict(fund_name="X", valuta="DKK", n=dict(nav_dkk=1.0), beholdninger=None)]
+    assert data.stoerste_eksponering(fonde, {"DKK": (1.0, None)}) is None
+
+
+def _afstemningsbeh(dagsvaerdi_fond, andel=0.01, type_="selskaber"):
+    return dict(type=type_, skaleret=True, andel=andel, dato=date(2026, 6, 30),
+                raekker=[dict(dagsvaerdi_fond=v, dagsvaerdi=v * andel) for v in dagsvaerdi_fond])
+
+
+def test_nav_afstemning_deler_forskellen_i_carry_oevrige_og_ejerandel():
+    # fonden: beholdninger 2.168, NAV før carry 2.208, NAV 1.914 (mio.); investor 1 % + lidt
+    beh = _afstemningsbeh([1_500e6, 668e6])
+    a = data.nav_afstemning(19.3e6, date(2026, 6, 30), beh, 1_914e6, 2_208e6)
+    assert a["forskel"] == pytest.approx(19.3e6 - 21.68e6)
+    assert a["carry"] == pytest.approx(0.01 * (1_914e6 - 2_208e6))
+    assert a["oevrige"] == pytest.approx(0.01 * (2_208e6 - 2_168e6))
+    assert a["ejerandel"] == pytest.approx(19.3e6 - 0.01 * 1_914e6)
+    assert a["carry"] + a["oevrige"] + a["ejerandel"] == pytest.approx(a["forskel"])
+    assert a["nav_andel"] == pytest.approx(19.3e6 / 1_914e6)
+
+
+def test_nav_afstemning_uden_fondens_nav_giver_kun_forskellen():
+    a = data.nav_afstemning(9e6, date(2026, 6, 30), _afstemningsbeh([1_000e6]))
+    assert a["forskel"] == pytest.approx(-1e6)
+    assert a["carry"] is None and a["oevrige"] is None and a["ejerandel"] is None
+
+
+def test_nav_afstemning_er_none_uden_synlig_forskel_feeder_eller_ejendomme():
+    beh = _afstemningsbeh([1_000e6])
+    assert data.nav_afstemning(10e6 + 400, date(2026, 6, 30), beh) is None
+    assert data.nav_afstemning(1.0, date(2026, 6, 30), beh | dict(via="X")) is None
+    assert data.nav_afstemning(1.0, date(2026, 6, 30), beh | dict(type="ejendomme")) is None
+    assert data.nav_afstemning(1.0, date(2026, 6, 30), beh | dict(skaleret=False)) is None
+
+
+def test_benchmark_har_gics_sektorer_der_summerer_til_hundrede():
+    bm = data.benchmark()
+    assert set(bm["indeks"]) == {"MSCI ACWI", "MSCI World"}
+    for vaegte in bm["indeks"].values():
+        assert set(vaegte) <= set(data.SEKTORER) - data.UDEN_GICS
+        assert sum(vaegte.values()) == pytest.approx(1.0, abs=0.001)
+    assert bm["indeks"]["MSCI ACWI"]["INFORMATION_TECHNOLOGY"] == pytest.approx(0.3321)
+
+
+def test_benchmark_uden_fil_er_none(tmp_path):
+    assert data.benchmark(tmp_path / "findes_ikke.yaml") is None

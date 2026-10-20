@@ -43,10 +43,127 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
 - **Slide notes go to the client.** Keep them to sources and method; no file paths, view names or
   internal workflow states. `data.py` phrases caveats the same way — "forvalteren oplyser ikke …",
   not "ikke indlæst i databasen".
-- `report.py` assembles the slide order and saves; `cli.py` is only argument parsing.
+- `report.py` assembles the slide order and saves; `cli.py` is only argument parsing. Order:
+  cover, executive summary, udvikling | *Porteføljeoversigt* section: tilsagn på tværs, ændringer
+  pr. fond, segment, branche, branche-overblik (treemap), branche med ejendomme for sig,
+  geografisk eksponering, geografi-overblik (treemap), geografi med ejendomme for sig,
+  gennemlysning, værdibevægelser |
+  *Fondsoversigter* section: the portfolio overview table, then each fund page and its company
+  cards | definitions, end slide. The geography-by-commitment slide is no longer built (the data
+  stays: the executive summary falls back on it).
+- Page footer: `slides.sidefod()` runs last in `report.byg()` and clones the master's slide-number
+  placeholder onto every `L_TEKST` slide as "**<investor>** | Side n" (n is a `slidenum` field).
+  Cover, dividers and end slide get none but still count. *Lange tilsagn* (`slides.lange_tilsagn`,
+  the only user of `benchmark`) is kept and tested but no longer in the deck - the appendix was dropped.
+- **Feeder look-through.** PPPC2 and PPPE2 are our feeders into PSCP5 and NEP6
+  (`underlying_fund_code`). When a feeder has no holdings of its own,
+  `data._feeder_beholdninger()` takes the underlying fund's holdings and **scales by NAV**:
+  `andel = feeder NAV / underlying total fair value`, so the positions add up to the
+  investor's NAV (the user chose this). Scaling through the commitment chain overstates the
+  position 1.7-2.4x. `beh["via"]` makes `fondsside` show `_gennemlysningsblok` (top 10
+  positions + the GP's breakdown from `rpt.v_portfolio_breakdown`) instead of the NAV chart and
+  bridge, and makes `virksomhedsprofiler` skip the fund. `_beholdninger()` adds up lines with
+  the same name, and in tranche tables (`instrument` set) it groups by company via `_selskab()`,
+  which strips instrument words. Matching between quarters ignores case.
+- **Property funds.** Home.Earth reports properties (`section = 'PROPERTY'`), not companies.
+  `data._ejendomme()` keeps them as whole-fund values before debt (they sum to GAV, while the
+  investor's share is NAV after debt), so they are not scaled by ownership, and translates the
+  valuation basis via `VAERDIGRUNDLAG`. `fondsside` shows `_ejendomsblok` instead of the NAV
+  chart and value bridge: a full-width waterfall (`_nav_bro`) from each property up to GAV,
+  then (with `TOTAL_ASSETS`) other assets up and debt down to NAV, scaled by investor NAV /
+  fund NAV (`FUND_NAV` metric) so it ends at the investor's NAV. A real-estate fund without
+  property lines (CRED) gets the same page from its GAV/TOTAL_ASSETS/FUND_NAV metrics via
+  `data._ejendomsbalance()`. They stay out of `vaerdibevaegelser` and `gennemlysning`, and
+  get no company cards.
+- **Evergreen funds** (`evergreen: true` in `fund_info.yaml`, since the database has no flag):
+  løbetid shows "Evergreen", and the ownership share is investor NAV / fund NAV rather than
+  commitment / fund commitments, because new units are issued at the current price.
+- Fund names in the deck drop the company form (`data.uden_selskabsform`, applied to
+  `fund_name` in `data.fond()`); the legal name is `juridisk_navn`, shown in Excel's Stamdata.
+- `excel.py` writes `<deck>_data.xlsx` next to the deck (skip it with `--uden-data`). This is
+  the **internal** reconciliation workbook, not for the client: every database row carries its
+  `document_id` (an in-workbook link to the *Dokumenter* sheet) and a file link to the PDF
+  under `paths.DOKUMENTER` (`../pe-external-fund-data/documents`, override with `PE_DOCUMENTS`;
+  `fund.document.rel_path` is relative to it). Derived figures are Excel formulas, and the
+  *Kontrol* columns recompute them from the other sheets (SUMIFS over *Kapitalstrømme*, XIRR
+  over *IRR*). The source rows come from `f["kilder"]` and `r["dokumenter"]` /
+  `r["kursopslag"]` in `data.py`. When you add a read to `data.fond()`, keep its
+  `document_id` and put the rows in `kilder`, so the figure can be traced.
 - The *Executive summary* (slide 2) formats `data.sammendrag()`: portfolio figures in DKK
-  (from `total_dkk`), highest/lowest TVPI fund and the largest geography/segment from
-  `r["fordelinger"]`. There is no portfolio IRR across currencies; IRR is only shown per fund.
+  (from `total_dkk`), highest/lowest TVPI fund and the largest geography/segment. Geography is the
+  same regions as *Geografisk eksponering* (`r["regioner"]`, NAV look-through; falls back to the
+  funds' geography focus by commitment when that is `None`); segment is by commitment from
+  `r["fordelinger"]`. `slides._sammendragsfordelinger()` picks them, and the block headings say
+  which measure each uses. One bullet names the largest single exposure from
+  `data.stoerste_eksponering()` (pure): the largest holding line across funds — company or
+  underlying fund, feeders looked through — as the investor's share in DKK; property and unscaled
+  holdings are left out and named in the note. There is no portfolio IRR across currencies; IRR is only shown per fund.
+- **Industry and geography slides** (`slides.brancher` / `slides.regioner`, after the segment
+  slide): one shared data path, configured per `art` in `data.ARTER`. `data._eksponering()` reads
+  each fund's shares from `rpt.v_industry_exposure` / `rpt.v_geography_exposure` (GP breakdown, else
+  holdings at fair value, else `FUND_DEFAULT` from the fund's strategy; feeders look through) and
+  only uses the view's amounts as weights. `eksponering(fonde, art)` (pure) multiplies by the fund's
+  own `nav_dkk`, so the groups sum to the portfolio NAV in DKK; keys are neutral (`grupper` →
+  `under`: sector → industry group, region → subregion). Names come from `SEKTORER` /
+  `BRANCHEGRUPPER` and `REGIONER` / `DELREGIONER`; `*_OTHER` subregions are "ikke opdelt" and are
+  explained in the slide note. Classifications with `is_suggested = 1` go into `foreloebig_andel`:
+  the slide says "foreløbig klassifikation" and `byg()` warns. The geography pie has one slice per
+  subregion, coloured by region family (`GEO_FARVER`). Excel sheets *Brancher* and *Geografi*
+  recompute each line as share × NAV. The method is in the slides' source notes, not in
+  `DEFINITIONER`, which is full. Don't alias SQL columns `top` (reserved word in T-SQL). The
+  region codes are the database's (`NORTH_AMERICA`, `EUROPE`, `ROW`); a new code in
+  `portfolio.geo_region`/`geo_subregion` needs a line in `REGIONER`/`DELREGIONER`.
+- **Industry slides.** *Branchefordeling* shows GICS sectors only (pie + table); the industry
+  groups stay in the data and in the Excel *Brancher* sheet. *Branchefordeling – overblik*
+  (`slides.branchekort`) draws the same sectors as a squarified treemap (`slides._treemap`, pure,
+  areas proportional to the values) of native rectangles, with the pie's colours and »Øvrige« for
+  sectors under `BR_MIN`; each box shows name, tDKK and %, shrinking to name + % or % only when
+  small. *Geografisk eksponering – overblik* (`slides.regionskort`) is the same idea nested:
+  one box per region with a header band, split into its subregions in the pie's colours (small
+  subregions in »Øvrige« within the region); a region too thin for text is drawn and named in
+  the note.
+- **Treemaps with property for itself** (`slides.branchekort_ejendomme` / `regionskort_ejendomme`,
+  each right after its overview). The area is split into Ejendomme (left, per fund) and
+  »Øvrige investeringer« (right, drawn by the same `_branchekasser` / `_regionskasser` helpers as
+  the overviews), widths proportional to NAV. The bands show each part's share of total NAV; the
+  box percentages are of the part's own NAV, so each part sums to 100 %. Ejendomme is the GICS
+  sector `REAL_ESTATE` across all funds (property funds wholly, plus the real-estate share of
+  mixed funds), from `data.opdel_ejendomme()` (pure) in `r["uden_ejendomme"][art]`; `resten` is
+  an ordinary `eksponering()` result over the funds' non-property NAV. The data has no industry ×
+  geography cross, so on the geography slide a mixed fund's property share is assumed to sit like
+  the rest of the fund (said in the note). The industry slide keeps the sectors' colours from
+  *Branchefordeling* and shows ACWI ex real estate, rescaled to 100 %.
+- **MSCI benchmark.** `config/benchmark.yaml` holds the MSCI ACWI and World sector weights, keyed
+  by `industry_code` (update it from MSCI's factsheet; set `dato` to show the date). `data.benchmark()`
+  loads it into `r["benchmark"]`; *Branchefordeling* adds one column per index (n/a for
+  Diversificeret and other non-GICS rows) and the treemap prints the first index (ACWI) in the
+  larger boxes. Without the file the slides are as before.
+- **Fund-page notes.** `data.nav_afstemning()` (pure) explains why the investor's NAV differs from
+  the holdings' fair value in the table: with `FUND_NAV`/`FUND_NAV_EXCL_CARRY` from
+  `rpt.v_fund_metric` it splits the gap into accrued carry, the fund's cash and other items, and
+  the investor's NAV share vs. the ownership share (the parts sum to the gap); without them the
+  note says it cannot be split. Feeders (scaled to NAV) and property funds get no such note.
+  `slides._navnote` writes it; parts under 2 % of the gap are left out. A page with an
+  underlying-funds table shows no NAV chart or value bridge. `slides._noter_y()` moves long notes
+  up (and the content's bottom edge with them) so they stay clear of the logo and footer.
+- **Feeder pages.** The Branche/Geografi bars use the same GICS sectors and subregions as the
+  cross-fund slides (`slides._feederfordeling` from `f["brancher"]`/`f["regioner"]`); the GP's
+  own categories (`KATEGORIER`) are only a fallback.
+- **Branche column.** Company tables (header "Branche") and company cards show the GICS sector (`SEKTORER`) from
+  `rpt.v_portfolio_holding.industry_code` as `industri`; `sektor` is the GP's own label, kept for
+  Excel and the property funds' valuation basis. Unreviewed classifications are counted in the
+  fund page's source note.
+- **Quarter and year to date.** `data.perioder()` gives the quarter and year windows ending at the
+  report date. `data.udvikling()` sets `f["udvikling"][periode]` per fund from `historik` and
+  `kapitalstroemme`: NAV primo (latest NAV on or before the start; a gap falls back to an older
+  NAV with a note), calls, distributions, value change as the residual, Modified Dietz return.
+  `omregn_udvikling_til_dkk()` converts with the rate on each date, and the currency effect is
+  the DKK residual. `portefoelje_udvikling()` (pure) sums to `r["udvikling"]`, and
+  `vaerdibevaegelser()` (pure) compares holdings with `beholdninger_primo`. Holding names are
+  not stable between GP reports, so `_par()`/`_forkortelse_af()` pair renamed lines, and
+  anything unpaired goes in `usammenlignelige` instead of being counted as a gain or loss. The
+  slides are `udvikling` (after the executive summary), `aendringer_pr_fond` and
+  `vaerdibevaegelser`.
 - The *Definitioner* slide before the end slide prints `slides.DEFINITIONER`, plain text that
   describes how `data.py` calculates each figure. Change a calculation, update its definition.
 - `deck.py` + `style.py` are the shared PPIM house-style modules, **kept byte-identical to the
@@ -86,8 +203,11 @@ not use. Non-negotiables:
 - **Never add fund-level amounts to investor-level amounts.** `rpt.v_nav` is our share;
   `rpt.v_portfolio_holding` is the whole fund and is scaled by the ownership share in
   `_beholdninger()`. When fund size is unknown the holdings are shown unscaled and labelled so.
-- Cash flows carry the LP sign (paid < 0). `EQUALISATION` stays out of paid-in and distributions,
-  `WITHHOLDING_TAX` out of IRR.
+- Cash flows carry the LP sign (paid < 0). `WITHHOLDING_TAX` stays out of IRR.
+- `EQUALISATION` (late-closing interest) deviates from the data guide by the user's choice:
+  paid equalisation counts in paid-in and received in distributions (`data._er_indbetaling` /
+  `_er_udlodning`), with a note on the fund page. It is outside the commitment, so called
+  capital, discount and resttilsagn are computed without it (like the GP's MM110).
 - IRR is `data.xirr` (act/365 bisection) over the investor's cash flows with NAV as the final flow;
   the portfolio IRR is pooled over all funds, not averaged. `data.total()` returns `None` when the
   funds are not all in the same currency — the slides then drop the total row.
@@ -117,7 +237,8 @@ Fund master data comes from `rpt.v_fund_master`, joined in `data._investeringer(
   extension years as one-year steps ("10+1+1"); the database holds only the total.
 - fund size: the dated `TOTAL_COMMITMENTS` metric first, else `total_commitments`.
 - manager and logo: for our feeder companies (`underlying_fund_code` set) the underlying
-  fund's manager, not our own.
+  fund's manager and logo, not our own. Logos come from `rpt.v_fund_logo` by fund code: the
+  fund's own logo where it has one (PD3LGT: LGT, while its manager is AEP), else the manager's.
 
 `config/fund_info.yaml` holds only what the database does not: `beskrivelse` and
 `estimerede_cashflows` for notices that never arrived. Optional: `benchmark` (shown on

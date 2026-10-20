@@ -1,0 +1,33 @@
+# Sektorvægte (GICS) i MSCI-indeksene, vist som benchmark på branchesiderne.
+#
+# Nøglerne er databasens sektorkoder (portfolio.industry.industry_code), så de passer til
+# porteføljens sektorer uanset de danske navne. Vægtene er i procent og summerer til ca. 100.
+# dato: den dato, MSCI har opgjort vægtene pr.; står den tom, vises ingen dato på sliden.
+# Opdater tallene, når der kommer en ny faktaark fra MSCI.
+
+dato: 2026-09-30
+indeks:
+  MSCI ACWI:
+    INFORMATION_TECHNOLOGY: 33.21
+    FINANCIALS: 16.17
+    INDUSTRIALS: 10.27
+    HEALTH_CARE: 8.42
+    CONSUMER_DISCRETIONARY: 8.24
+    COMMUNICATION_SERVICES: 8.01
+    CONSUMER_STAPLES: 4.51
+    ENERGY: 3.96
+    MATERIALS: 3.51
+    UTILITIES: 2.25
+    REAL_ESTATE: 1.45
+  MSCI World:
+    INFORMATION_TECHNOLOGY: 31.78
+    FINANCIALS: 15.74
+    INDUSTRIALS: 10.80
+    HEALTH_CARE: 9.20
+    CONSUMER_DISCRETIONARY: 8.36
+    COMMUNICATION_SERVICES: 8.31
+    CONSUMER_STAPLES: 4.77
+    ENERGY: 4.03
+    MATERIALS: 3.21
+    UTILITIES: 2.30
+    REAL_ESTATE: 1.52

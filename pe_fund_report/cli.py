@@ -1,4 +1,4 @@
-"""Kommandolinjen: pe-fund-report MOTORTRAMP [--as-of ÅÅÅÅ-MM-DD] [--out sti]."""
+"""Kommandolinjen: pe-fund-report MOTORTRAMP [--as-of ÅÅÅÅ-MM-DD] [--out sti] [--uden-data]."""
 import argparse
 
 from .report import byg
@@ -12,8 +12,10 @@ def main(argv=None):
     ap.add_argument("--as-of", help="rapportdato (ÅÅÅÅ-MM-DD); standard er seneste NAV-dato")
     ap.add_argument("--out", help="sti til pptx-filen; standard er exports/<INVESTOR>_<dato>.pptx")
     ap.add_argument("--master", help="anden slidemaster end assets/ppim_slidemaster.pptx")
+    ap.add_argument("--uden-data", action="store_true",
+                    help="spring dataudtrækket <pptx>_data.xlsx over")
     a = ap.parse_args(argv)
-    byg(a.investor, a.as_of, a.out, a.master)
+    byg(a.investor, a.as_of, a.out, a.master, med_data=not a.uden_data)
 
 
 if __name__ == "__main__":
