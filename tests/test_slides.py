@@ -957,15 +957,17 @@ def test_regionskort_deler_regioner_i_delregioner_og_naevner_smaa_regioner():
     t = _tekster(s)
     assert "Geografisk eksponering – overblik" in t
     assert "Europa" in t                                   # båndet: kun navnet, intet tal
-    # en region for lille til bånd og delregioner står som én kasse med sit eget tal
-    assert any(x.startswith("Nordamerika") and "9,9 %" in x for x in t)
+    assert "USA\n99 tDKK\n9,9 %" in t
     assert "Danmark\n700 tDKK\n70,0 %" in t
-    # hvert beløb står én gang: kasserne plus den for lille region i noten giver 100 %
+    # den mindste region er gjort stor nok til en etiket i stedet for at stå i noten
+    assert "Resten af verden" in t and "Asien og Stillehavsområdet\n0,1 %" in t
+    assert any("De mindste kasser er gjort større" in x for x in t)
+    assert not any("er for lille til at blive vist" in x for x in t)
+    # hvert beløb står én gang: kasserne giver 100 %
     procenter = [float(p.replace(",", ".")) for x in t if not x.startswith("Kilde")
                  for p in re.findall(r"(\d+,\d) %", x)]
-    assert sum(procenter) + 0.1 == pytest.approx(100.0, abs=0.05)
+    assert sum(procenter) == pytest.approx(100.0, abs=0.05)
     assert any("»Øvrige« under Europa samler Benelux og Sydeuropa" in x for x in t)
-    assert any("Resten af verden (1 tDKK, 0,1 %) er for lille til at blive vist" in x for x in t)
 
 
 def test_regionskort_uden_data_springes_over():
@@ -1017,14 +1019,14 @@ def test_branchekort_ejendomme_deler_sliden_og_regner_paa_hver_dels_base():
     # ejendomme pr. fond, i procent af ejendommene; K Alternativs 5 tDKK er under 2 %
     assert "Home.Earth\n300 tDKK\n67,4 %" in t
     # for smal til tekst: tegnet, men nævnt i noten med sit tal
-    assert any("K Alternativ Private Equity 2021 (5 tDKK, 1,1 % af ejendommene) er for lille" in x
-               for x in t)
+    # en lille fond får en kasse, der er stor nok til navn og procent
+    assert "K Alternativ Private Equity 2021 1,1 %" in t
     # resten i procent af de øvrige investeringer: Finans 276 af 555
     assert any(x.startswith("Finans\n276 tDKK\n49,7 %") for x in t)
     assert not any(x.startswith("Ejendomme\n") for x in t)
     # hver del summerer til 100 % af sig selv
     ejendomme = ("Home.Earth", "Commercial", "K Alternativ")
-    assert sum(_procenter(x for x in t if x.startswith(ejendomme))) + 1.1 == pytest.approx(
+    assert sum(_procenter(x for x in t if x.startswith(ejendomme))) == pytest.approx(
         100.0, abs=0.15)
     assert sum(_procenter(x for x in t if "tDKK" in x and "  ·  " not in x
                           and not x.startswith((*ejendomme, "Kilde")))) == pytest.approx(
@@ -1037,7 +1039,7 @@ def test_regionskort_ejendomme_fordeler_resten_paa_regioner():
     t = _tekster(s)
     assert "Geografisk eksponering – ejendomme for sig" in t
     # resten: Seed 460 i Europa (Danmark 322, Frankrig 138) og K Alternativ 95 i USA
-    procenter = _procenter(x for x in t if "tDKK" in x and "  ·  " not in x and not x.startswith(
+    procenter = _procenter(x for x in t if "%" in x and "  ·  " not in x and not x.startswith(
         ("Home.Earth", "Commercial", "K Alternativ", "Kilde")))
     assert sum(procenter) == pytest.approx(100.0, abs=0.15)
     assert any(x.startswith("Danmark\n322 tDKK\n58,0 %") for x in t)

@@ -120,8 +120,11 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   sectors under `BR_MIN`; each box shows name, tDKK and %, shrinking to name + % or % only when
   small. *Geografisk eksponering – overblik* (`slides.regionskort`) is the same idea nested:
   one box per region with a header band, split into its subregions in the pie's colours (small
-  subregions in »Øvrige« within the region); a region too thin for text is drawn and named in
-  the note.
+  subregions in »Øvrige« within the region). Every box must say what it is: `slides._gulv` lifts
+  the area of boxes under `KORT_MINDST` (3 %) of their treemap so they can carry a label (the
+  figures stay the actual ones; `_gulvnote` says so), and `_kortkasse` falls back to smaller type
+  and then to a label turned 90° in tall, narrow boxes. It returns whether the name fit; a box
+  that only has room for its percentage is named in the note.
 - **Treemaps with property for itself** (`slides.branchekort_ejendomme` / `regionskort_ejendomme`,
   each right after its overview). The area is split into Ejendomme (left, per fund) and
   »Øvrige investeringer« (right, drawn by the same `_branchekasser` / `_regionskasser` helpers as

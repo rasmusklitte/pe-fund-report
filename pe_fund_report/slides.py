@@ -1577,6 +1577,23 @@ KORT_LYSE = {SAGE_LYS, TAUPE, CREAM, BR_OEVRIGE, _rgb(style.PPIM_BEIGE),
              _rgb(style.PPIM_RED_LIGHT), _rgb(style.GRID)}
 
 
+KORT_MINDST = 0.03        # mindste areal i et kort (andel af fladen), så kassen kan bære en etiket
+
+
+def _gulv(vaerdier, mindst=KORT_MINDST):
+    """Værdierne med de mindste løftet til mindst x summen, og om nogen blev løftet.
+
+    Kun arealet ændres; kasserne viser stadig de faktiske tal, og noten siger det.
+    """
+    gulv = mindst * sum(vaerdier)
+    return [max(v, gulv) if v > 0 else v for v in vaerdier], any(0 < v < gulv for v in vaerdier)
+
+
+def _gulvnote(loeftet):
+    return (["De mindste kasser er gjort større, så de kan bære en etiket; tallene i dem er de "
+             "faktiske."] if loeftet else [])
+
+
 def _treemap(vaerdier, x, y, w, h):
     """Kasser (x, y, w, h) med areal i forhold til vaerdier, i samme rækkefølge som dem.
 
@@ -1619,22 +1636,26 @@ def _treemap(vaerdier, x, y, w, h):
 def _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra=None):
     """Én kasse i branche- og geografikortet: navn, beløb og andel, så stort som kassen tillader.
 
-    ekstra er en linje mere (fx benchmarkvægten), som kun vises i de store kasser.
+    ekstra er en linje mere (fx benchmarkvægten), som kun vises i de store kasser. En høj, smal
+    kasse får navn og procent på tværs (lodret). Returnerer, om navnet kom med.
     """
     kx, ky, kw, kh = kasse
     f = _bjaelke(s, kx, ky, kw, kh, farve)
     f.line.fill.solid()
     f.line.color.rgb, f.line.width = HVID, Pt(2)          # hvide mellemrum mellem kasserne
     tekstfarve = SORT if farve in KORT_LYSE else HVID
-    ind = 0.08
+    ind = 0.08 if min(kw, kh) >= 0.45 else 0.03     # små kasser: mindre luft, mere plads til tekst
     # et navn, der er bredere end kassen, deles som i cirkeldiagrammet i stedet for midt i ordet
     passer = lambda pt: len(navn) * pt * 0.0085 <= kw - 2 * ind
 
-    def har_plads(linjer):
+    def har_plads(linjer, bredde=kw, hoejde=kh):
         # et navn, der stadig ombrydes, fylder flere linjer; ellers løber procenten ud af kassen
-        hoejde = sum(ceil(len(del_) * pt * 0.0085 / (kw - 2 * ind)) * pt * 1.2 / 72
-                     for tekst, pt, _ in linjer for del_ in tekst.split("\n"))
-        return hoejde <= kh - 2 * ind + 0.05
+        brugt = sum(ceil(len(del_) * pt * 0.0085 / max(bredde - 2 * ind, 0.05)) * pt * 1.2 / 72
+                    for tekst, pt, _ in linjer for del_ in tekst.split("\n"))
+        # og intet ord må være bredere end kassen, for så deles det midt i ordet
+        ord_ = max((len(o) * pt * 0.0085 for tekst, pt, _ in linjer for o in tekst.split()),
+                   default=0)
+        return brugt <= hoejde - 2 * ind + 0.05 and ord_ <= bredde - 2 * ind + 0.02
 
     store = mellem = None
     if kw >= 1.5 and kh >= 0.85:
@@ -1653,10 +1674,18 @@ def _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra=None):
         linjer = mellem
     elif mellem and har_plads(mellem[:1] + [(f"{tusind(dkk)} tDKK  ·  {pct(andel)}", 8.5, True)]):
         linjer = mellem[:1] + [(f"{tusind(dkk)} tDKK  ·  {pct(andel)}", 8.5, True)]
-    elif kh >= 0.3:
-        linjer = [(f"{navn} {pct(andel)}", 8, True)]
     else:
-        linjer = [(pct(andel), 7.5, True)]
+        # en lille kasse skal stadig sige, hvad den er: navn og procent så småt som nødvendigt,
+        # og på tværs, hvis kassen er høj og smal
+        smaa = [[(navn, 8, True), (pct(andel), 8, True)], [(f"{navn} {pct(andel)}", 8, True)],
+                [(navn, 7, True), (pct(andel), 7, True)], [(f"{navn} {pct(andel)}", 7, True)],
+                [(f"{navn} {pct(andel)}", 6, True)]]
+        linjer = next((x for x in smaa if har_plads(x)), None)
+        if linjer is None and kh > kw:
+            linjer = next((x for x in smaa if har_plads(x, kh, kw)), None)
+            if linjer:
+                return _lodret_etiket(s, kasse, ind, linjer, tekstfarve)
+        linjer = linjer or [(pct(andel), 7, True)]
     tf = _tekst(s, kx + ind, ky + ind, max(kw - 2 * ind, 0.1), max(kh - 2 * ind, 0.1),
                 linjer[0][0], linjer[0][1], fed=linjer[0][2], farve=tekstfarve)
     for tekst, pt, fed in linjer[1:]:
@@ -1665,25 +1694,44 @@ def _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra=None):
         run.text = tekst
         run.font.name, run.font.size, run.font.bold = BROED_FONT, Pt(pt), fed
         run.font.color.rgb = tekstfarve
-    return f
+    return len(linjer) > 1 or linjer[0][0] != pct(andel)
+
+
+def _lodret_etiket(s, kasse, ind, linjer, farve):
+    """Etiketten i en høj, smal kasse, drejet en kvart omgang, så den læses nedefra og op."""
+    kx, ky, kw, kh = kasse
+    b, h = kh - 2 * ind, kw - 2 * ind
+    # tekstboksen drejes om sit centrum, så den lægges med centrum i kassens centrum
+    tf = _tekst(s, kx + kw / 2 - b / 2, ky + kh / 2 - h / 2, b, max(h, 0.1),
+                linjer[0][0], linjer[0][1], fed=linjer[0][2], farve=farve)
+    for tekst, pt, fed in linjer[1:]:
+        run = tf.add_paragraph().add_run()
+        run.text = tekst
+        run.font.name, run.font.size, run.font.bold = BROED_FONT, Pt(pt), fed
+        run.font.color.rgb = farve
+    s.shapes[-1].rotation = 270
+    return True
 
 
 def _branchekasser(s, b, x, y, w, h, bm_navn=None, bm=None, faste=None):
-    """Sektorerne i b som kasser i fladen (x, y, w, h); returnerer navnene i »Øvrige«.
+    """Sektorerne i b som kasser i fladen (x, y, w, h).
+
+    Returnerer (navnene i »Øvrige«, om små kasser blev gjort større).
 
     bm er {sektorkode: vægt} for indekset bm_navn, vist i de store kasser; »Øvrige« får de
     samlede sektorers sum. faste giver sektorerne samme farver som på en anden side.
     """
     bm = bm or {}
     skiver, _, smaa = _brancheskiver(b["grupper"], faste)
-    kasser = _treemap([max(dkk, 0.0) for _, dkk, _, _ in skiver], x, y, w, h)
+    vaerdier, loeftet = _gulv([max(dkk, 0.0) for _, dkk, _, _ in skiver])
+    kasser = _treemap(vaerdier, x, y, w, h)
     kode = {g["navn"]: g["kode"] for g in b["grupper"]}
     for kasse, (navn, dkk, andel, farve) in zip(kasser, skiver):
         koder = [kode[n] for n in smaa] if navn not in kode else [kode[navn]]
         vaegt = sum(bm[k] for k in koder if k in bm) if any(k in bm for k in koder) else None
         ekstra = f"{bm_navn} {pct(vaegt)}" if bm_navn and vaegt is not None else None
         _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra)
-    return smaa
+    return smaa, loeftet
 
 
 def branchekort(prs, r):
@@ -1701,7 +1749,8 @@ def branchekort(prs, r):
     # det første indeks (ACWI) som sammenligning i kassen
     indeks = (r.get("benchmark") or {}).get("indeks") or {}
     bm_navn, bm = next(iter(indeks.items()), (None, {}))
-    smaa = _branchekasser(s, b, X0, Y_TOP, X1 - X0, BR_NOTER - 0.1 - Y_TOP, bm_navn, bm)
+    smaa, loeftet = _branchekasser(s, b, X0, Y_TOP, X1 - X0, BR_NOTER - 0.1 - Y_TOP, bm_navn,
+                                   bm)
 
     noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Kassernes "
              "areal er sektorens andel af investors NAV, fordelt som på siden Branchefordeling; "
@@ -1709,6 +1758,7 @@ def branchekort(prs, r):
     if len(smaa) > 1:
         noter.append(f"»Øvrige« samler {_navne([n.lower() for n in smaa])}, hver under "
                      f"{pct(BR_MIN, 0)} af NAV.")
+    noter += _gulvnote(loeftet)
     noter += _diversificeret_noter(b)
     noter += _eksponeringsnoter(r, b, "branchefordeling", "Branchefordelingen", "Branchen")
     noter += _benchmarknote(r)
@@ -1718,7 +1768,6 @@ def branchekort(prs, r):
 
 GEO_HOVED_H = 0.30        # regionens overskriftsbånd i geografikortet (tommer)
 GEO_HOVED = _rgb("#3A3F33")   # båndets farve: en dyb salvie, mørkere end alle delregionerne
-GEO_SYNLIG = 0.25         # en kasse med en side under dette (tommer) får ingen tekst og nævnes
 
 
 def _regionsramme(s, kasse):
@@ -1744,7 +1793,8 @@ def regionskort(prs, r):
         return None
     s = _oversigtsslide(prs, r, "Geografisk eksponering – overblik",
                         enhed="investors NAV, beløb i tusinde DKK")
-    oevrige_noter, for_smaa = _regionskasser(s, b, X0, Y_TOP, X1 - X0, BR_NOTER - 0.1 - Y_TOP)
+    oevrige_noter, for_smaa, loeftet = _regionskasser(s, b, X0, Y_TOP, X1 - X0,
+                                                      BR_NOTER - 0.1 - Y_TOP)
 
     vist = {u["navn"] for g in b["grupper"] for u in g["under"]}
     noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Kassernes "
@@ -1752,6 +1802,7 @@ def regionskort(prs, r):
              "siden Geografisk eksponering."]
     noter += _ikke_opdelt_noter(vist)
     noter += _regionsnoter(oevrige_noter, for_smaa)
+    noter += _gulvnote(loeftet)
     noter += _eksponeringsnoter(r, b, "geografisk fordeling", "Den geografiske fordeling",
                                 "Geografien")
     _afslut_noter(s, r, noter)
@@ -1761,7 +1812,7 @@ def regionskort(prs, r):
 def _regionsnoter(oevrige_noter, for_smaa):
     noter = []
     if for_smaa:
-        noter.append(f"{_navne(for_smaa)} er for lille til at blive vist med tekst.")
+        noter.append(f"{_navne(for_smaa)} har ikke plads til sit navn i kortet.")
     if oevrige_noter:
         noter.append("; ".join(oevrige_noter) + f", hver under {pct(BR_MIN, 0)} af NAV.")
     return noter
@@ -1770,21 +1821,20 @@ def _regionsnoter(oevrige_noter, for_smaa):
 def _regionskasser(s, b, x, y, w, h):
     """Regionerne i b som kasser i fladen (x, y, w, h), hver delt i sine delregioner.
 
-    Returnerer (»Øvrige«-noterne, regionerne, der er for små til tekst).
+    Returnerer (»Øvrige«-noterne, regionerne, der er for små til tekst, om små kasser blev
+    gjort større).
     """
     regioner_ = [g for g in b["grupper"] if g["dkk"] > 0]
-    kasser = _treemap([g["dkk"] for g in regioner_], x, y, w, h)
+    vaerdier, loeftet = _gulv([g["dkk"] for g in regioner_])
+    kasser = _treemap(vaerdier, x, y, w, h)
     oevrige_noter, for_smaa = [], []
     for kasse, g in zip(kasser, regioner_):
         familie = GEO_FARVER.get(g["kode"]) or [BR_UDEN_GICS]
         kx, ky, kw, kh = kasse
-        if min(kw, kh) < GEO_SYNLIG:
-            # for lille til tekst: tegnes, men nævnes i noten, så den ikke forsvinder
-            _bjaelke(s, kx, ky, kw, kh, familie[0])
-            for_smaa.append(f"{g['navn']} ({tusind(g['dkk'])} tDKK, {pct(g['andel'])})")
-            continue
         if not g["under"] or kw < 1.2 or kh < 0.9:
-            _kortkasse(s, kasse, g["navn"], g["dkk"], g["andel"], familie[0])
+            if not _kortkasse(s, kasse, g["navn"], g["dkk"], g["andel"], familie[0]):
+                # plads til procenten, men ikke navnet: noten siger, hvad kassen er
+                for_smaa.append(f"{g['navn']} ({tusind(g['dkk'])} tDKK, {pct(g['andel'])})")
             _regionsramme(s, kasse)
             continue
         # båndet øverst: kun regionens navn. Regionens beløb står allerede fordelt i
@@ -1807,11 +1857,13 @@ def _regionskasser(s, b, x, y, w, h):
                 oevrige_noter.append(f"»Øvrige« under {g['navn']} samler "
                                      f"{_navne([u['navn'] for u in smaa])}")
         poster = [p for p in poster if p[1] > 0]
-        indre = _treemap([p[1] for p in poster], kx, ky + GEO_HOVED_H, kw, kh - GEO_HOVED_H)
+        vaerdier, indre_loeftet = _gulv([p[1] for p in poster])
+        loeftet |= indre_loeftet
+        indre = _treemap(vaerdier, kx, ky + GEO_HOVED_H, kw, kh - GEO_HOVED_H)
         for k, (navn, dkk, andel, farve) in zip(indre, poster):
             _kortkasse(s, k, navn, dkk, andel, farve)
         _regionsramme(s, kasse)
-    return oevrige_noter, for_smaa
+    return oevrige_noter, for_smaa, loeftet
 
 
 # ---------- overblikkene med ejendommene for sig ----------
@@ -1837,7 +1889,7 @@ def _ejendomsopdelt(s, opd, tegn_resten):
 
     Delenes bredde følger deres andel af NAV. Ejendommene vises pr. fond; tegn_resten(x, y, w,
     h) tegner resten. En kasse for smal til tekst tegnes og nævnes i noten. Returnerer
-    (ejendomsnoterne, hvad tegn_resten returnerer).
+    (ejendomsnoterne, om små ejendomskasser blev gjort større, hvad tegn_resten returnerer).
     """
     ejd, rest = opd["ejendomme"], opd["resten"]
     w, h = X1 - X0 - EJD_LUFT, EJD_NOTER - 0.1 - Y_TOP
@@ -1850,17 +1902,13 @@ def _ejendomsopdelt(s, opd, tegn_resten):
     skiver, _, smaa = _skiver([(x["navn"], x["dkk"], x["andel"], EJD_FARVER[i % len(EJD_FARVER)])
                                for i, x in enumerate(ejd["fonde"])])
     kasser = []
-    for kasse, (navn, dkk, andel, farve) in zip(_treemap([x[1] for x in skiver], X0, ky, ew, kh),
-                                                 skiver):
+    vaerdier, loeftet = _gulv([x[1] for x in skiver])
+    for kasse, (navn, dkk, andel, farve) in zip(_treemap(vaerdier, X0, ky, ew, kh), skiver):
         navn = "Øvrige fonde" if navn == "Øvrige" else navn
-        for_lille = min(kasse[2], kasse[3]) < GEO_SYNLIG
-        if for_lille:
-            _bjaelke(s, *kasse, farve)
-        else:
-            _kortkasse(s, kasse, navn, dkk, andel, farve)
+        for_lille = not _kortkasse(s, kasse, navn, dkk, andel, farve)
         kasser.append((navn, dkk, andel, for_lille))
     _regionsramme(s, (X0, ky, ew, kh))
-    return (_ejendomsnoter(ejd, smaa if len(smaa) > 1 else [], kasser),
+    return (_ejendomsnoter(ejd, smaa if len(smaa) > 1 else [], kasser), loeftet,
             tegn_resten(rx, ky, rw, kh))
 
 
@@ -1877,9 +1925,9 @@ def _ejendomsnoter(ejd, smaa_fonde, kasser):
         if navn == "Øvrige fonde":
             hvad = "ejendomsandelen af " if set(smaa_fonde) <= set(blandede) else ""
             noter.append(f"»Øvrige fonde« {tal} er {hvad}{_navne(smaa_fonde)}"
-                         + ("; for lille til at blive vist med tekst." if for_lille else "."))
+                         + ("; kassen har ikke plads til navnet." if for_lille else "."))
         elif for_lille:
-            noter.append(f"{navn} {tal} er for lille til at blive vist med tekst.")
+            noter.append(f"{navn} {tal} har ikke plads til sit navn i kortet.")
     return noter
 
 
@@ -1904,7 +1952,7 @@ def branchekort_ejendomme(prs, r):
     bm = {k: v / uden for k, v in bm.items() if k != EJENDOMSSEKTOR} if uden > 0 else {}
     # sektorerne beholder deres farver fra Branchefordeling
     faste = _brancheskiver(r["brancher"]["grupper"])[1] if r.get("brancher") else None
-    ejd_noter, smaa = _ejendomsopdelt(s, opd, lambda x, y, w, h: _branchekasser(
+    ejd_noter, ejd_loeftet, (smaa, loeftet) = _ejendomsopdelt(s, opd, lambda x, y, w, h: _branchekasser(
         s, rest, x, y, w, h, bm_navn, bm, faste))
 
     noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger; fordelt som "
@@ -1913,6 +1961,7 @@ def branchekort_ejendomme(prs, r):
     if len(smaa) > 1:
         noter.append(f"»Øvrige« samler {_navne([n.lower() for n in smaa])}, hver under "
                      f"{pct(BR_MIN, 0)} af de øvrige investeringer.")
+    noter += _gulvnote(ejd_loeftet or loeftet)
     noter += _diversificeret_noter(rest)
     noter += _paa_restens_base(_eksponeringsnoter(r, rest, "branchefordeling",
                                                   "Branchefordelingen", "Branchen"))
@@ -1933,7 +1982,7 @@ def regionskort_ejendomme(prs, r):
     rest = opd["resten"]
     s = _oversigtsslide(prs, r, "Geografisk eksponering – ejendomme for sig",
                         enhed="investors NAV, beløb i tusinde DKK")
-    ejd_noter, (oevrige_noter, for_smaa) = _ejendomsopdelt(
+    ejd_noter, ejd_loeftet, (oevrige_noter, for_smaa, loeftet) = _ejendomsopdelt(
         s, opd, lambda x, y, w, h: _regionskasser(s, rest, x, y, w, h))
 
     noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger; fordelt som "
@@ -1943,6 +1992,7 @@ def regionskort_ejendomme(prs, r):
         noter.append("Ejendomsandelen af en blandet fond antages at ligge geografisk som resten "
                      "af fonden.")
     noter += _ikke_opdelt_noter({u["navn"] for g in rest["grupper"] for u in g["under"]})
+    noter += _gulvnote(ejd_loeftet or loeftet)
     noter += _paa_restens_base(_regionsnoter(oevrige_noter, for_smaa)
                                + _eksponeringsnoter(r, rest, "geografisk fordeling",
                                                     "Den geografiske fordeling", "Geografien"))
