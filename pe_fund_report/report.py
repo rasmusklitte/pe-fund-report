@@ -22,22 +22,23 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
     s = _ny_slide(prs, L_FORSIDE)
     # porteføljen rummer også private credit og ejendomme, så ikke "private equity"
     _saet_ph(s, 0, f"{r['navn']} – alternative investeringer")
-    _saet_ph(s, 1, f"Fondsrapport pr. {r['as_of']:%d.%m.%Y}")
+    _saet_ph(s, 1, f"Porteføljerapport pr. {r['as_of']:%d.%m.%Y}")
     slides.sammendrag(prs, r)
     slides.udvikling(prs, r)            # springes over uden DKK-kurser for alle fonde
 
     s = _ny_slide(prs, L_SKILLE[0])
     _saet_ph(s, 0, "Porteføljeoversigt")
     slides.tilsagn_paa_tvaers(prs, r)
+    slides.valutafordeling(prs, r)      # springes over uden DKK-kurser for alle fonde
     slides.aendringer_pr_fond(prs, r)
     # geografien efter tilsagn vises ikke længere; Geografisk eksponering afløser den
     slides.fordeling(prs, r, "segment", "Porteføljefordeling efter investeringsstrategi")
-    slides.brancher(prs, r)             # springes over uden DKK-kurser for alle fonde
-    slides.branchekort(prs, r)          # samme fordeling som kasser, der fylder sliden
+    # slides.brancher, branchekort, regioner og regionskort findes stadig, men er ikke med i
+    # decket for tiden; ejendomssiderne nedenfor bygger på samme data
     slides.branchekort_ejendomme(prs, r)    # ejendomme for sig, resten på sin egen base
-    slides.regioner(prs, r)             # springes over uden DKK-kurser for alle fonde
-    slides.regionskort(prs, r)          # samme geografi som kasser, der fylder sliden
+    slides.branchekort_aktivklasser(prs, r)     # Private Equity, Private Credit og ejendomme
     slides.regionskort_ejendomme(prs, r)    # ejendomme for sig, resten på sin egen base
+    slides.regionskort_aktivklasser(prs, r)     # Private Equity, Private Credit og ejendomme
     slides.gennemlysning(prs, r)        # springes over, hvis fondene har forskellige valutaer
     slides.vaerdibevaegelser(prs, r)    # springes over, hvis ingen fond har beholdninger
 

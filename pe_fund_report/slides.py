@@ -409,18 +409,18 @@ FEEDER_SIDST = {IKKE_KLASSIFICERET, "Ikke klassificeret af forvalteren",
 def _feederfordeling(beh, f):
     """Branche- og geografiblokken på en feeders side som [(overskrift, [{navn, andel}])].
 
-    Branche er GICS-sektoren og geografi delregionen, fordelt som på siderne
+    Branche er GICS-sektoren og geografi regionen, fordelt som på siderne
     Branchefordeling og Geografisk eksponering (f["brancher"], f["regioner"]). Uden dem
     bruges forvalterens egen fordeling eller fordelingen på typer af positioner.
     """
     blokke = []
-    for art, overskrift, felt in (("brancher", "Branche", "top"), ("regioner", "Geografi", "under")):
+    for art, overskrift in (("brancher", "Branche"), ("regioner", "Geografi")):
         b = f.get(art)
         if not b:
             continue
         andele = {}
         for x in b["linjer"]:
-            navn = x[felt] or x["top"]
+            navn = x["top"]
             andele[navn] = andele.get(navn, 0.0) + x["andel"]
         blokke.append((overskrift, [dict(navn=n, andel=a) for n, a in sorted(
             andele.items(), key=lambda x: (x[0] in FEEDER_SIDST, -x[1]))]))
@@ -498,8 +498,8 @@ def _gennemlysningskilde(beh, f, investor_navn):
         tekst += " Trancher i samme selskab er lagt sammen; multiple er (dagsværdi + udloddet) / kostpris."
     blokke = [b for b, _ in _feederfordeling(beh, f)]
     if f.get("brancher") or f.get("regioner"):
-        tekst += (" Branche (GICS-sektor) og geografi er fordelt som på siderne Branchefordeling "
-                  "og Geografisk eksponering, i procent af dagsværdien.")
+        tekst += (" Branche (GICS-sektor) og geografi er fordelt efter forvalterens fordeling "
+                  "eller beholdningernes dagsværdi, i procent af dagsværdien.")
         # nævn kun en fordeling, der er opgjort på en anden dato end fondens NAV
         afvig = {navn: b["dato"] for navn, b in (("Branchefordelingen", f.get("brancher")),
                                                  ("Den geografiske fordeling", f.get("regioner")))
@@ -885,7 +885,8 @@ def _kolonnehoved(s, kol, hoved_h):
 
 
 def _fondscelle(s, r, f, kol, i, y, raekke_h):
-    """Rækkens første seks kolonner: fond, forvalterlogo, type, vintage, løbetid og valuta."""
+    """Rækkens faste kolonner: fond, forvalterlogo og de af type, vintage, løbetid og valuta,
+    som kol har (fundet ved kolonnenavnet)."""
     if i % 2 == 1:
         _bjaelke(s, X0 - 0.05, y, X1 - X0 + 0.1, raekke_h, CREAM)
     if i:
@@ -904,8 +905,12 @@ def _fondscelle(s, r, f, kol, i, y, raekke_h):
                f"opgjort pr. {afvigende:%d.%m.%Y}", 6.5, farve=TERRA)
     _logo(s, f["logo"], x_midt=_lt_x(1, kol) + kol[1][1] / 2, y_midt=midt,
           maks_b=min(1.05, kol[1][1] - 0.15), maks_h=min(0.34, raekke_h - 0.2))
-    for j, vaerdi in ((2, f["segment"]), (3, f["vintage"]), (4, f["loebetid"]),
-                      (5, f["valuta"])):
+    felter = {"Type": f["segment"], "Vintage": f["vintage"], "Løbetid": f["loebetid"],
+              "Valuta": f["valuta"]}
+    for j, (navn, _, _) in enumerate(kol):
+        if navn not in felter:
+            continue
+        vaerdi = felter[navn]
         _tekst(s, _lt_x(j, kol), y, kol[j][1], raekke_h, vaerdi or IKKE_OPLYST, 8.5, just=C,
                anker=MSO_ANCHOR.MIDDLE)
 
@@ -1026,11 +1031,11 @@ def lange_tilsagn(prs, r):
 
 # Kolonnerne i Tilsagn på tværs af fonde: Lange tilsagn med tal i stedet for vandfaldet
 # (valutaen står på linjen over kolonnenavnet, som på fordelingssiderne)
-TPT_KOL = [("Fond", 2.15, V), ("Forvalter", 1.10, C), ("Type", 0.85, C), ("Vintage", 0.58, C),
-           ("Løbetid", 0.62, C), ("Valuta", 0.45, C), ("Tilsagn", 0.73, C), ("PICC", 0.58, C),
+TPT_KOL = [("Fond", 2.57, V), ("Forvalter", 1.20, C), ("Type", 0.95, C), ("Vintage", 0.58, C),
+           ("Valuta", 0.45, C), ("Tilsagn", 0.73, C), ("PICC", 0.58, C),
            ("DKK\nResttilsagn", 0.88, C), ("DKK\nNAV", 0.88, C), ("TVPI", 0.78, C),
            ("IRR", 0.78, C)]
-TPT_TILSAGN, TPT_PICC, TPT_REST_DKK, TPT_NAV_DKK, TPT_TVPI = 6, 7, 8, 9, 10
+TPT_VALUTA, TPT_TILSAGN, TPT_PICC, TPT_REST_DKK, TPT_NAV_DKK, TPT_TVPI = 4, 5, 6, 7, 8, 9
 
 
 def _kursnote(r, beloeb="Resttilsagn og NAV"):
@@ -1081,7 +1086,7 @@ def tilsagn_paa_tvaers(prs, r):
         _bjaelke(s, X0 - 0.05, y, X1 - X0 + 0.1, raekke_h, SAGE_LYS)
         _tekst(s, _lt_x(0, TPT_KOL), y, TPT_KOL[0][1], raekke_h, "I alt", 9, fed=True,
                anker=MSO_ANCHOR.MIDDLE)
-        celler = [(5, r["valuta"] or "")]
+        celler = [(TPT_VALUTA, r["valuta"] or "")]
         if t:
             celler += [(TPT_TILSAGN, tusind(t["tilsagn"])), (TPT_PICC, pct(t["picc"])),
                        (TPT_TVPI, gange(t["tvpi"])), (TPT_TVPI + 1, pct(t["irr"]))]
@@ -1117,23 +1122,23 @@ def tilsagn_paa_tvaers(prs, r):
 def portefoeljeoversigt(prs, r):
     """Én række pr. fond med nøgletal og en samlet række for porteføljen."""
     s = _oversigtsslide(prs, r, "Porteføljeoversigt")
-    raekker = [["Fond", "Strategi", "Vintage", "Valuta", "Tilsagn", "Indbetalt", "PICC",
-                "Udloddet", "NAV", "DPI", "TVPI", "IRR"]]
+    raekker = [["Fond", "Strategi", "Vintage", "Løbetid", "Valuta", "Tilsagn", "Indbetalt",
+                "PICC", "Udloddet", "NAV", "DPI", "TVPI", "IRR"]]
     for f in r["fonde"]:
         n = f["n"]
         raekker.append([f["fund_name"] + _datomarkering(r, f["fund_name"]),
                         f["segment"] or IKKE_OPLYST, f["vintage"] or IKKE_OPLYST,
-                        f["valuta"], tusind(n["tilsagn"]), tusind(n["indbetalt"]), pct(n["picc"]),
+                        f["loebetid"] or IKKE_OPLYST, f["valuta"], tusind(n["tilsagn"]), tusind(n["indbetalt"]), pct(n["picc"]),
                         tusind(n["udloddet"]), tusind(n["nav"]), gange(n["dpi"]),
                         gange(n["tvpi"]), pct(n["irr"])])
     t = r["total"]
     if t:
-        raekker.append(["I alt", "", "", r["valuta"], tusind(t["tilsagn"]), tusind(t["indbetalt"]),
-                        pct(t["picc"]), tusind(t["udloddet"]), tusind(t["nav"]), gange(t["dpi"]),
-                        gange(t["tvpi"]), pct(t["irr"])])
+        raekker.append(["I alt", "", "", "", r["valuta"], tusind(t["tilsagn"]),
+                        tusind(t["indbetalt"]), pct(t["picc"]), tusind(t["udloddet"]),
+                        tusind(t["nav"]), gange(t["dpi"]), gange(t["tvpi"]), pct(t["irr"])])
     _tabel(s, X0, Y_TOP, X1 - X0, raekker,
-           bredder=[3.0, 1.75, 0.7, 0.65, 0.95, 0.95, 0.8, 0.95, 0.95, 0.7, 0.7, 0.75],
-           just=[V, V, C, C, H, H, H, H, H, H, H, H], raekke_h=_raekke_h(len(raekker)), pt=9,
+           bredder=[2.65, 1.6, 0.7, 0.95, 0.65, 0.88, 0.88, 0.75, 0.88, 0.88, 0.65, 0.65, 0.7],
+           just=[V, V, C, C, C, H, H, H, H, H, H, H, H], raekke_h=_raekke_h(len(raekker)), pt=9,
            hoved=True, total=bool(t), zebra=True)
     noter = ["Kilde: Forvalterrapporter og egne beregninger.",
              "IRR er beregnet på investors cash flows og NAV; samlet IRR er poolet over alle fonde."
@@ -1433,11 +1438,11 @@ def _geoskiver(regioner):
     return _skiver(poster)
 
 
-def _cirkel(s, x, y, w, h, skiver):
+def _cirkel(s, x, y, w, h, skiver, serie="NAV, tDKK"):
     """Cirkeldiagram som rigtigt diagram; etiketterne skrives med danske talformater."""
     cd = CategoryChartData(number_format="#,##0")
     cd.categories = [navn for navn, *_ in skiver]
-    cd.add_series("NAV, tDKK", [round(dkk / 1000) for _, dkk, *_ in skiver])
+    cd.add_series(serie, [round(dkk / 1000) for _, dkk, *_ in skiver])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.PIE, Inches(x), Inches(y), Inches(w), Inches(h),
                                  cd).chart
     diagram.has_legend = diagram.has_title = False
@@ -1781,14 +1786,10 @@ def _regionsramme(s, kasse):
 
 
 def regionskort(prs, r):
-    """Geografien som kort over hele sliden: regioner som kasser, delt i delregioner.
-
-    Hver region har et bånd med navnet og er derunder delt i sine delregioner
-    med cirkeldiagrammets farver (regionens farvefamilie). Delregioner under BR_MIN samles i
-    »Øvrige« inden for regionen. En region, der er for lille til bånd og delregioner, står som
-    én kasse. None uden DKK-tal for alle fonde.
+    """Geografien som kort over hele sliden: én kasse pr. region i cirkeldiagrammets farve.
+    None uden DKK-tal for alle fonde.
     """
-    b = r.get("regioner")
+    b = _kun_regioner(r.get("regioner"))
     if not b:
         return None
     s = _oversigtsslide(prs, r, "Geografisk eksponering – overblik",
@@ -1796,11 +1797,9 @@ def regionskort(prs, r):
     oevrige_noter, for_smaa, loeftet = _regionskasser(s, b, X0, Y_TOP, X1 - X0,
                                                       BR_NOTER - 0.1 - Y_TOP)
 
-    vist = {u["navn"] for g in b["grupper"] for u in g["under"]}
     noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Kassernes "
-             "areal er delregionens andel af investors NAV, samlet pr. region og fordelt som på "
-             "siden Geografisk eksponering."]
-    noter += _ikke_opdelt_noter(vist)
+             "areal er regionens andel af investors NAV, fordelt som på siden Geografisk "
+             "eksponering."]
     noter += _regionsnoter(oevrige_noter, for_smaa)
     noter += _gulvnote(loeftet)
     noter += _eksponeringsnoter(r, b, "geografisk fordeling", "Den geografiske fordeling",
@@ -1884,32 +1883,72 @@ def _delbaand(s, x, y, w, navn, dkk, andel):
            anker=MSO_ANCHOR.MIDDLE)
 
 
-def _ejendomsopdelt(s, opd, tegn_resten):
-    """Fladen delt i ejendomme (til venstre) og resten, hver med sit bånd og sine kasser.
+def _delbredder(andele, w, mindst):
+    """Bredderne for dele med andelene: proportionale, men mindst `mindst` hver (lige brede,
+    hvis der ikke er plads til det)."""
+    if len(andele) * mindst >= w:
+        return [w / len(andele)] * len(andele)
+    faste = {}
+    while True:
+        ledig = w - sum(faste.values())
+        rest = sum(a for i, a in enumerate(andele) if i not in faste) or 1.0
+        for_smalle = {i: mindst for i, a in enumerate(andele)
+                      if i not in faste and ledig * a / rest < mindst}
+        if not for_smalle:
+            return [faste.get(i, ledig * a / rest) for i, a in enumerate(andele)]
+        faste |= for_smalle
 
-    Delenes bredde følger deres andel af NAV. Ejendommene vises pr. fond; tegn_resten(x, y, w,
-    h) tegner resten. En kasse for smal til tekst tegnes og nævnes i noten. Returnerer
-    (ejendomsnoterne, om små ejendomskasser blev gjort større, hvad tegn_resten returnerer).
+
+def _delt_flade(s, dele, ejd, noter_y=EJD_NOTER):
+    """Fladen delt i delene fra venstre og ejendommene til højre, hver med sit bånd og sine
+    kasser.
+
+    dele er [(navn, total_dkk, andel af hele NAV, tegn)], hvor tegn(x, y, w, h) tegner delens
+    kasser; ejd er ejendomsdelen fra data (None uden ejendomme), vist pr. fond. Bredderne
+    følger andelene, med EJD_MIN_W som mindste bredde. En kasse for smal til tekst tegnes og
+    nævnes i noten. Returnerer (ejendomsnoterne, om små ejendomskasser blev gjort større,
+    [hvad tegn returnerer pr. del]).
     """
-    ejd, rest = opd["ejendomme"], opd["resten"]
-    w, h = X1 - X0 - EJD_LUFT, EJD_NOTER - 0.1 - Y_TOP
-    ew = min(max(EJD_MIN_W, w * ejd["andel"]), w - EJD_MIN_W)
-    rx, rw = X0 + ew + EJD_LUFT, w - ew
-    _delbaand(s, X0, Y_TOP, ew, "Ejendomme", ejd["total_dkk"], ejd["andel"])
-    _delbaand(s, rx, Y_TOP, rw, "Øvrige investeringer", rest["total_dkk"], 1 - ejd["andel"])
+    alle = list(dele) + ([("Ejendomme", ejd["total_dkk"], ejd["andel"], None)] if ejd else [])
+    w = X1 - X0 - EJD_LUFT * (len(alle) - 1)
+    h = noter_y - 0.1 - Y_TOP
     ky, kh = Y_TOP + GEO_HOVED_H, h - GEO_HOVED_H
+    x, resultater, ejd_noter, loeftet = X0, [], [], False
+    for (navn, dkk, andel, tegn), bw in zip(alle, _delbredder([a[2] for a in alle], w,
+                                                               EJD_MIN_W)):
+        _delbaand(s, x, Y_TOP, bw, navn, dkk, andel)
+        if tegn is not None:
+            resultater.append(tegn(x, ky, bw, kh))
+        else:
+            ejd_noter, loeftet = _ejendomskasser(s, ejd, x, ky, bw, kh)
+        x += bw + EJD_LUFT
+    return ejd_noter, loeftet, resultater
 
-    skiver, _, smaa = _skiver([(x["navn"], x["dkk"], x["andel"], EJD_FARVER[i % len(EJD_FARVER)])
-                               for i, x in enumerate(ejd["fonde"])])
+
+def _ejendomskasser(s, ejd, x, y, w, h):
+    """Ejendommene pr. fond som kasser i fladen. Returnerer (noterne, om små kasser blev
+    gjort større)."""
+    skiver, _, smaa = _skiver([(f["navn"], f["dkk"], f["andel"], EJD_FARVER[i % len(EJD_FARVER)])
+                               for i, f in enumerate(ejd["fonde"])])
     kasser = []
-    vaerdier, loeftet = _gulv([x[1] for x in skiver])
-    for kasse, (navn, dkk, andel, farve) in zip(_treemap(vaerdier, X0, ky, ew, kh), skiver):
+    vaerdier, loeftet = _gulv([k[1] for k in skiver])
+    for kasse, (navn, dkk, andel, farve) in zip(_treemap(vaerdier, x, y, w, h), skiver):
         navn = "Øvrige fonde" if navn == "Øvrige" else navn
         for_lille = not _kortkasse(s, kasse, navn, dkk, andel, farve)
         kasser.append((navn, dkk, andel, for_lille))
-    _regionsramme(s, (X0, ky, ew, kh))
-    return (_ejendomsnoter(ejd, smaa if len(smaa) > 1 else [], kasser), loeftet,
-            tegn_resten(rx, ky, rw, kh))
+    _regionsramme(s, (x, y, w, h))
+    return _ejendomsnoter(ejd, smaa if len(smaa) > 1 else [], kasser), loeftet
+
+
+def _ejendomsopdelt(s, opd, tegn_resten):
+    """Fladen delt i de alternative investeringer (til venstre) og ejendomme (til højre).
+    Returnerer (ejendomsnoterne, om små ejendomskasser blev gjort større, hvad tegn_resten
+    returnerer)."""
+    ejd, rest = opd["ejendomme"], opd["resten"]
+    ejd_noter, loeftet, (resultat,) = _delt_flade(
+        s, [("Alternative investeringer", rest["total_dkk"], 1 - ejd["andel"], tegn_resten)],
+        ejd)
+    return ejd_noter, loeftet, resultat
 
 
 def _ejendomsnoter(ejd, smaa_fonde, kasser):
@@ -1932,13 +1971,14 @@ def _ejendomsnoter(ejd, smaa_fonde, kasser):
 
 
 def _paa_restens_base(noter):
-    """Restens noter siger »af NAV« om andele, der her er af de øvrige investeringer."""
-    return [n.replace("af NAV", "af de øvrige investeringer") for n in noter]
+    """Restens noter siger »af NAV« om andele, der her er af de alternative investeringer."""
+    return [n.replace("af NAV", "af de alternative investeringer") for n in noter]
 
 
 def branchekort_ejendomme(prs, r):
-    """Branchekortet med ejendommene for sig: ejendomme pr. fond og de øvrige sektorer, hver
-    med andele af sin egen del. None uden DKK-tal eller uden ejendomme."""
+    """Branchekortet med ejendommene for sig: de alternative investeringer fordelt på
+    sektorer og ejendomme pr. fond, hver med andele af sin egen del. None uden DKK-tal eller
+    uden ejendomme."""
     opd = (r.get("uden_ejendomme") or {}).get("brancher")
     if not opd or not opd["resten"]:
         return None
@@ -1955,12 +1995,13 @@ def branchekort_ejendomme(prs, r):
     ejd_noter, ejd_loeftet, (smaa, loeftet) = _ejendomsopdelt(s, opd, lambda x, y, w, h: _branchekasser(
         s, rest, x, y, w, h, bm_navn, bm, faste))
 
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger; fordelt som "
-             "på siden Branchefordeling, sektorerne følger GICS."]
+    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
+             "NAV er fordelt efter forvalterens branchefordeling eller beholdningernes dagsværdi, "
+             "med feederfondene gennemlyst; sektorerne følger GICS."]
     noter += ejd_noter
     if len(smaa) > 1:
         noter.append(f"»Øvrige« samler {_navne([n.lower() for n in smaa])}, hver under "
-                     f"{pct(BR_MIN, 0)} af de øvrige investeringer.")
+                     f"{pct(BR_MIN, 0)} af de alternative investeringer.")
     noter += _gulvnote(ejd_loeftet or loeftet)
     noter += _diversificeret_noter(rest)
     noter += _paa_restens_base(_eksponeringsnoter(r, rest, "branchefordeling",
@@ -1974,24 +2015,25 @@ def branchekort_ejendomme(prs, r):
 
 
 def regionskort_ejendomme(prs, r):
-    """Geografikortet med ejendommene for sig: ejendomme pr. fond og de øvrige investeringer
-    fordelt på regioner, hver med andele af sin egen del. None uden DKK-tal eller ejendomme."""
+    """Geografikortet med ejendommene for sig: de alternative investeringer fordelt på
+    regioner og ejendomme pr. fond, hver med andele af sin egen del. None uden DKK-tal eller
+    ejendomme."""
     opd = (r.get("uden_ejendomme") or {}).get("regioner")
     if not opd or not opd["resten"]:
         return None
-    rest = opd["resten"]
+    rest = _kun_regioner(opd["resten"])
     s = _oversigtsslide(prs, r, "Geografisk eksponering – ejendomme for sig",
                         enhed="investors NAV, beløb i tusinde DKK")
     ejd_noter, ejd_loeftet, (oevrige_noter, for_smaa, loeftet) = _ejendomsopdelt(
         s, opd, lambda x, y, w, h: _regionskasser(s, rest, x, y, w, h))
 
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger; fordelt som "
-             "på siden Geografisk eksponering."]
+    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
+             "NAV er fordelt efter forvalterens geografiske fordeling eller beholdningernes "
+             "dagsværdi, med feederfondene gennemlyst."]
     noter += ejd_noter
     if opd["ejendomme"]["blandede"]:
         noter.append("Ejendomsandelen af en blandet fond antages at ligge geografisk som resten "
                      "af fonden.")
-    noter += _ikke_opdelt_noter({u["navn"] for g in rest["grupper"] for u in g["under"]})
     noter += _gulvnote(ejd_loeftet or loeftet)
     noter += _paa_restens_base(_regionsnoter(oevrige_noter, for_smaa)
                                + _eksponeringsnoter(r, rest, "geografisk fordeling",
@@ -2000,53 +2042,304 @@ def regionskort_ejendomme(prs, r):
     return s
 
 
-def _ikke_opdelt_noter(vist):
-    """Forklaringer af de delregioner, hvor forvalteren ikke deler længere ned."""
-    forklaringer = {
-        "Nordamerika, ikke opdelt": "»Nordamerika, ikke opdelt« er den del, hvor forvalteren "
-                                    "kun oplyser Nordamerika.",
-        "Øvrige Europa og ikke opdelt": "»Øvrige Europa og ikke opdelt« er europæiske lande "
-                                        "uden egen delregion og den del, hvor forvalteren kun "
-                                        "oplyser Europa.",
-        "Global, ikke opdelt": "»Global, ikke opdelt« er den del, hvor forvalteren hverken "
-                               "oplyser land eller region."}
-    return [tekst for navn, tekst in forklaringer.items() if navn in vist]
+# Ejendomme forklares af _ejendomsnoter; her kun de to andre dele
+AKTIVKLASSE_NOTE = ("Private Credit er fondene med private credit som strategi, Private Equity "
+                    "de øvrige fonde, begge uden deres ejendomsandel.")
+AK_NOTER = EJD_NOTER - 0.12   # endnu en linje til noterne: tre dele skal forklares
+DELENS_BASE = "Procenterne i kasserne er af delens NAV, i båndene af investors samlede NAV."
+
+
+def _uden_gentagelser(noter):
+    return list(dict.fromkeys(noter))
+
+
+def _paa_delens_base(noter, navn):
+    """Delens noter siger »af NAV« om andele, der her er af delen."""
+    return [n.replace("af NAV", f"af {navn}-delen") for n in noter]
+
+
+def branchekort_aktivklasser(prs, r):
+    """Branchekortet delt i Private Equity, Private Credit og ejendomme, hver med andele af sin
+    egen del. None uden DKK-tal."""
+    opd = (r.get("aktivklasser") or {}).get("brancher")
+    if not opd or not opd["dele"]:
+        return None
+    s = _oversigtsslide(prs, r, "Branchefordeling pr. aktivklasse",
+                        enhed="investors NAV, beløb i tusinde DKK; Private Equity, Private "
+                              "Credit og ejendomme")
+    # indekset uden ejendomme, så det sammenlignes på samme base som delene
+    bm_info = r.get("benchmark") or {}
+    bm_navn, bm = next(iter((bm_info.get("indeks") or {}).items()), (None, {}))
+    uden = 1 - bm.get(EJENDOMSSEKTOR, 0.0)
+    bm = {k: v / uden for k, v in bm.items() if k != EJENDOMSSEKTOR} if uden > 0 else {}
+    # sektorerne beholder deres farver fra Branchefordeling
+    faste = _brancheskiver(r["brancher"]["grupper"])[1] if r.get("brancher") else None
+
+    def tegner(b):
+        return lambda x, y, w, h: _branchekasser(s, b, x, y, w, h, bm_navn, bm, faste)
+
+    ejd_noter, loeftet, resultater = _delt_flade(
+        s, [(d["navn"], d["total_dkk"], d["andel"], tegner(d["fordeling"])) for d in opd["dele"]],
+        opd["ejendomme"], noter_y=AK_NOTER)
+
+    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
+             "NAV er fordelt efter forvalterens branchefordeling eller beholdningernes dagsværdi, "
+             "med feederfondene gennemlyst; sektorerne følger GICS.", AKTIVKLASSE_NOTE]
+    noter += ejd_noter or [DELENS_BASE]
+    for d, (smaa, del_loeftet) in zip(opd["dele"], resultater):
+        loeftet |= del_loeftet
+        if len(smaa) > 1:
+            noter.append(f"»Øvrige« i {d['navn']} samler {_navne([n.lower() for n in smaa])}, "
+                         f"hver under {pct(BR_MIN, 0)} af delen.")
+    noter += _gulvnote(loeftet)
+    for d in opd["dele"]:
+        noter += _diversificeret_noter(d["fordeling"])
+        noter += _paa_delens_base(_eksponeringsnoter(r, d["fordeling"], "branchefordeling",
+                                                     "Branchefordelingen", "Branchen"), d["navn"])
+    if bm_navn:
+        dato = f" pr. {bm_info['dato']:%d.%m.%Y}" if bm_info.get("dato") else ""
+        noter.append(f"{bm_navn} er sektorvægtene{dato} (MSCI) uden sektoren Ejendomme, skaleret "
+                     "op til 100 %.")
+    _afslut_noter(s, r, _uden_gentagelser(noter), AK_NOTER)
+    return s
+
+
+def regionskort_aktivklasser(prs, r):
+    """Geografikortet delt i Private Equity, Private Credit og ejendomme, hver med andele af
+    sin egen del. None uden DKK-tal."""
+    opd = (r.get("aktivklasser") or {}).get("regioner")
+    if not opd or not opd["dele"]:
+        return None
+    s = _oversigtsslide(prs, r, "Geografisk eksponering pr. aktivklasse",
+                        enhed="investors NAV, beløb i tusinde DKK; Private Equity, Private "
+                              "Credit og ejendomme")
+    dele = [d | {"fordeling": _kun_regioner(d["fordeling"])} for d in opd["dele"]]
+
+    def tegner(b):
+        return lambda x, y, w, h: _regionskasser(s, b, x, y, w, h)
+
+    ejd_noter, loeftet, resultater = _delt_flade(
+        s, [(d["navn"], d["total_dkk"], d["andel"], tegner(d["fordeling"])) for d in dele],
+        opd["ejendomme"], noter_y=AK_NOTER)
+
+    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
+             "NAV er fordelt efter forvalterens geografiske fordeling eller beholdningernes "
+             "dagsværdi, med feederfondene gennemlyst.", AKTIVKLASSE_NOTE]
+    noter += ejd_noter or [DELENS_BASE]
+    if opd["ejendomme"] and opd["ejendomme"]["blandede"]:
+        noter.append("Ejendomsandelen af en blandet fond antages at ligge geografisk som resten "
+                     "af fonden.")
+    for d, (oevrige_noter, for_smaa, del_loeftet) in zip(dele, resultater):
+        loeftet |= del_loeftet
+        noter += _paa_delens_base(_regionsnoter(oevrige_noter, for_smaa)
+                                  + _eksponeringsnoter(r, d["fordeling"], "geografisk fordeling",
+                                                       "Den geografiske fordeling", "Geografien"),
+                                  d["navn"])
+    noter += _gulvnote(loeftet)
+    _afslut_noter(s, r, _uden_gentagelser(noter), AK_NOTER)
+    return s
+
+
+def _kun_regioner(b):
+    """b med regionerne alene: sliderne viser ikke delregionerne (de står i Excel).
+
+    Noten om fonde placeret efter strategi nævner derfor regionen, ikke delregionen.
+    """
+    if not b:
+        return b
+    region = {u["navn"]: g["navn"] for g in b["grupper"] for u in g["under"]}
+    return {**b, "grupper": [{**g, "under": []} for g in b["grupper"]],
+            "efter_strategi": [(fond, region.get(hvor, hvor))
+                               for fond, hvor in b.get("efter_strategi", [])]}
 
 
 def regioner(prs, r):
-    """Investors NAV fordelt på regioner og delregioner: cirkeldiagram og tabel.
-
-    Diagrammet har én skive pr. delregion i regionens farvefamilie, så både regionen og
-    delregionen kan aflæses; tabellen viser regionerne med delregionerne under, og hver
-    delregion har sin skives farve. None uden DKK-tal for alle fonde.
+    """Investors NAV fordelt på regionerne Europa, Nordamerika og Resten af verden:
+    cirkeldiagram og tabel, én skive og én række pr. region i regionens farve. None uden
+    DKK-tal for alle fonde.
     """
-    b = r.get("regioner")
+    b = _kun_regioner(r.get("regioner"))
     if not b:
         return None
     s = _oversigtsslide(prs, r, "Geografisk eksponering",
                         enhed="investors NAV, beløb i tusinde DKK")
     skiver, farver, smaa = _geoskiver(b["grupper"])
 
-    linjer = []
-    for g in b["grupper"]:
-        uden_under = not g["under"]
-        linjer.append((["", g["navn"], tusind(g["dkk"]), pct(g["andel"])],
-                       "gruppe", farver.get(g["navn"]) if uden_under else None))
-        linjer += [(["", "      " + u["navn"], tusind(u["dkk"]), pct(u["andel"])], "under",
-                    farver[u["navn"]]) for u in g["under"]]
-    _fordelingstabel(s, b, "Region / delregion", linjer, skiver)
+    linjer = [(["", g["navn"], tusind(g["dkk"]), pct(g["andel"])], "gruppe",
+               farver.get(g["navn"])) for g in b["grupper"]]
+    _fordelingstabel(s, b, "Region", linjer, skiver)
 
-    vist = {u["navn"] for g in b["grupper"] for u in g["under"]}
     noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
              "NAV er fordelt efter forvalterens geografiske fordeling eller beholdningernes "
              "dagsværdi, med feederfondene gennemlyst."]
-    noter += _ikke_opdelt_noter(vist)
     noter += _eksponeringsnoter(r, b, "geografisk fordeling", "Den geografiske fordeling",
                                 "Geografien")
     if len(smaa) > 1:
-        noter.append(f"Diagrammet samler delregionerne under {pct(BR_MIN, 0)} (grå i tabellen) "
+        noter.append(f"Diagrammet samler regionerne under {pct(BR_MIN, 0)} (grå i tabellen) "
                      "i »Øvrige«.")
     _afslut_noter(s, r, noter)
+    return s
+
+
+# ---------- valutafordeling ----------
+
+# samme valuta har samme farve i alle tre diagrammer; andre valutaer tager BR_FARVER i rækkefølge
+VALUTA_FARVER = {"DKK": SAGE, "EUR": TERRA, "USD": TAUPE}
+# (nøgle, navn i hullet, undertekst i hullet)
+VALUTA_MAAL = [("eksponering", "Eksponering", "NAV + resttilsagn"), ("nav", "NAV", None),
+               ("resttilsagn", "Resttilsagn", None)]
+# ringene står i en næsten ligesidet trekant midt på sliden: højden er fast (fra Y_TOP til
+# noterne), så afstanden mellem de nederste giver siderne. Ligesidet kan den ikke blive, for så
+# ville de nederste ringe røre hinanden
+VF_GRAF = 2.4             # diagrammets side (tommer); ringen fylder næsten hele
+VF_HUL = 56               # hullets diameter i procent af ringens
+VF_KANT = 0.02            # luft om ringen i diagrammet, som andel af siden
+VF_BASIS = 3.5            # afstanden mellem de nederste ringes midter
+VF_STREG_LUFT = 0.07      # luft mellem en forbindelseslinje og ringene
+
+
+def _valutafarver(vf):
+    """{valuta: farve} for alle valutaer i fordelingen, faste farver først."""
+    valutaer = [x["valuta"] for x in vf["eksponering"] or vf["nav"] or vf["resttilsagn"]]
+    ledige = iter([f for f in BR_FARVER if f not in VALUTA_FARVER.values()])
+    return {v: VALUTA_FARVER.get(v) or next(ledige, BR_OEVRIGE) for v in valutaer}
+
+
+def _fyld_diagramflade(diagram, kant):
+    """Lad tegnefladen fylde diagrammet (minus kant på hver side) i stedet for PowerPoints
+    automatiske layout, der lader en bred margen stå tom om en ring."""
+    plot_area = diagram._chartSpace.find(".//" + qn("c:plotArea"))
+    layout = plot_area.find(qn("c:layout"))
+    if layout is None:
+        layout = plot_area.makeelement(qn("c:layout"), {})
+        plot_area.insert(0, layout)
+    for barn in list(layout):
+        layout.remove(barn)
+    manuel = layout.makeelement(qn("c:manualLayout"), {})
+    layout.append(manuel)
+    for navn, vaerdi in (("layoutTarget", "inner"), ("xMode", "edge"), ("yMode", "edge"),
+                         ("x", kant), ("y", kant), ("w", 1 - 2 * kant), ("h", 1 - 2 * kant)):
+        manuel.append(manuel.makeelement(qn(f"c:{navn}"), {"val": str(vaerdi)}))
+
+
+def _lys(farve):
+    """Om en farve er så lys, at tekst på den skal være mørk."""
+    r, g, b = farve
+    return 0.299 * r + 0.587 * g + 0.114 * b > 150
+
+
+def _ring(s, x, y, side, poster, serie):
+    """Ringdiagram (doughnut) med valuta og andel skrevet på ringen; poster er
+    [(navn, dkk, andel, farve)]. Returnerer navnene, der er for små til en etiket."""
+    cd = CategoryChartData(number_format="#,##0")
+    cd.categories = [navn for navn, *_ in poster]
+    cd.add_series(serie, [round(dkk / 1000) for _, dkk, *_ in poster])
+    diagram = s.shapes.add_chart(XL_CHART_TYPE.DOUGHNUT, Inches(x), Inches(y), Inches(side),
+                                 Inches(side), cd).chart
+    diagram.has_legend = diagram.has_title = False
+    diagram.font.name, diagram.font.size = BROED_FONT, Pt(9)
+    diagram._chartSpace.find(".//" + qn("c:holeSize")).set("val", str(VF_HUL))
+    _fyld_diagramflade(diagram, VF_KANT)
+    plot = diagram.plots[0]
+    plot.vary_by_categories = True
+    uden_etiket = []
+    for punkt, (navn, _, andel, farve) in zip(plot.series[0].points, poster):
+        punkt.format.fill.solid()
+        punkt.format.fill.fore_color.rgb = farve
+        punkt.format.line.color.rgb = HVID
+        punkt.format.line.width = Pt(1.5)
+        if andel < BR_ETIKET:
+            uden_etiket.append(navn)
+            continue
+        para = punkt.data_label.text_frame.paragraphs[0]
+        for i, tekst in enumerate((navn, pct(andel))):
+            if i:
+                para._p.add_br()
+            run = para.add_run()
+            run.text = tekst
+            run.font.name, run.font.size, run.font.bold = BROED_FONT, Pt(9), bool(i)
+            run.font.color.rgb = SORT if _lys(farve) else HVID
+    return uden_etiket
+
+
+def _forbindelser(s, midter):
+    """Linjer mellem ringene, fra kant til kant: NAV og resttilsagn op til eksponeringen, og
+    et »+« mellem NAV og resttilsagn, da eksponeringen er summen af dem."""
+    ring = VF_GRAF * (1 - 2 * VF_KANT) / 2 + VF_STREG_LUFT
+    plus = 0.26                                  # plustegnets cirkel (tommer)
+
+    def linje(a, b, luft_a, luft_b):
+        """Linjen fra a mod b, startende luft_a fra a og sluttende luft_b før b."""
+        (x1, y1), (x2, y2) = a, b
+        laengde = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        ux, uy = (x2 - x1) / laengde, (y2 - y1) / laengde
+        _streg(s, x1 + ux * luft_a, y1 + uy * luft_a, x2 - ux * luft_b, y2 - uy * luft_b,
+               farve=SAGE_MID, pt=1.25)
+
+    nav, rest, eks = midter["nav"], midter["resttilsagn"], midter["eksponering"]
+    linje(nav, eks, ring, ring)
+    linje(rest, eks, ring, ring)
+    # basen er delt i to, med plustegnet i midten
+    midt = ((nav[0] + rest[0]) / 2, nav[1])
+    linje(nav, midt, ring, plus / 2 + VF_STREG_LUFT)
+    linje(midt, rest, plus / 2 + VF_STREG_LUFT, ring)
+    cirkel = s.shapes.add_shape(MSO_SHAPE.OVAL, Inches(midt[0] - plus / 2),
+                                Inches(midt[1] - plus / 2), Inches(plus), Inches(plus))
+    cirkel.fill.solid()
+    cirkel.fill.fore_color.rgb = SAGE_MID
+    cirkel.line.fill.background()
+    cirkel.shadow.inherit = False
+    tf = cirkel.text_frame
+    tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    _skriv(tf, "+", 13, fed=True, farve=HVID, just=C)
+
+
+def valutafordeling(prs, r):
+    """Tre ringdiagrammer i en trekant: eksponering øverst, NAV og resttilsagn under, hver
+    fordelt på fondenes valuta i DKK, med målets navn og total i hullet. None uden DKK-tal."""
+    vf = r.get("valutafordeling")
+    if not vf:
+        return None
+    s = _oversigtsslide(prs, r, "Valutafordeling", enhed="beløb i tusinde DKK")
+    farver = _valutafarver(vf)
+    mx, bund = (X0 + X1) / 2, Y_NOTER - 0.1 - VF_GRAF / 2
+    midter = {"eksponering": (mx, Y_TOP + VF_GRAF / 2),
+              "nav": (mx - VF_BASIS / 2, bund), "resttilsagn": (mx + VF_BASIS / 2, bund)}
+    _forbindelser(s, midter)
+    uden_etiket = set()
+    for maal, navn, under in VALUTA_MAAL:
+        mx, my = midter[maal]
+        poster = vf[maal]
+        if poster:
+            uden_etiket |= set(_ring(
+                s, mx - VF_GRAF / 2, my - VF_GRAF / 2, VF_GRAF,
+                [(x["valuta"], x["dkk"], x["andel"], farver[x["valuta"]]) for x in poster],
+                serie=f"{navn}, tDKK"))
+        # i hullet: målets navn, eventuelt hvad det består af, og totalen
+        i_alt = tusind(sum(x["dkk"] for x in poster))
+        hul_w = VF_GRAF * (1 - 2 * VF_KANT) * VF_HUL / 100 * 0.92
+        _tekst(s, mx - hul_w / 2, my - 0.32, hul_w, 0.3, navn, 12, fed=True, farve=SAGE,
+               just=C, anker=MSO_ANCHOR.BOTTOM)
+        if under:
+            _tekst(s, mx - hul_w / 2, my - 0.03, hul_w, 0.2, under, 8, farve=SAGE, just=C)
+        _tekst(s, mx - hul_w / 2, my + (0.15 if under else -0.01), hul_w, 0.22,
+               f"{i_alt} tDKK", 9.5, just=C)
+
+    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.",
+             "Eksponering er NAV plus resttilsagn. Hver fond indgår med hele sit beløb i "
+             "fondens valuta; valutaen i fondenes underliggende investeringer er ikke opgjort."]
+    if uden_etiket:
+        noter.append(f"{_navne(sorted(uden_etiket))} er under {pct(BR_ETIKET, 0)} og har ingen "
+                     "etiket i ringene.")
+    kursnote = _kursnote(r, "NAV og resttilsagn")
+    if kursnote:
+        noter.append(kursnote)
+    if any((f["n"].get("recallable") or 0) for f in r["fonde"]):
+        noter.append("Resttilsagnet indeholder genkaldelige udlodninger, som forvalteren kan "
+                     "kalde igen.")
+    noter += _datonoter(r)
+    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
     return s
 
 
@@ -2620,8 +2913,7 @@ def sammendrag(prs, r):
                         "beholdninger" if e["udeladt"] else "") + ".")
     if r.get("regioner"):
         noter.append("Geografien er investors NAV fordelt efter fondenes underliggende "
-                     "investeringer, som på siden Geografisk eksponering; "
-                     "investeringsstrategien er efter tilsagn.")
+                     "investeringer; investeringsstrategien er efter tilsagn.")
     kursnote = _kursnote(r, "Fondenes beløb")
     if kursnote:
         noter.append(kursnote)

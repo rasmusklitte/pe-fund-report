@@ -44,13 +44,26 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   internal workflow states. `data.py` phrases caveats the same way — "forvalteren oplyser ikke …",
   not "ikke indlæst i databasen".
 - `report.py` assembles the slide order and saves; `cli.py` is only argument parsing. Order:
-  cover, executive summary, udvikling | *Porteføljeoversigt* section: tilsagn på tværs, ændringer
-  pr. fond, segment, branche, branche-overblik (treemap), branche med ejendomme for sig,
-  geografisk eksponering, geografi-overblik (treemap), geografi med ejendomme for sig,
-  gennemlysning, værdibevægelser |
+  cover, executive summary, udvikling | *Porteføljeoversigt* section: tilsagn på tværs,
+  valutafordeling, ændringer pr. fond, segment, branche med ejendomme for sig, branche pr.
+  aktivklasse, geografi med ejendomme for sig, geografi pr. aktivklasse, gennemlysning,
+  værdibevægelser |
   *Fondsoversigter* section: the portfolio overview table, then each fund page and its company
   cards | definitions, end slide. The geography-by-commitment slide is no longer built (the data
-  stays: the executive summary falls back on it).
+  stays: the executive summary falls back on it). Nor are *Branchefordeling*, its overview,
+  *Geografisk eksponering* and its overview (`slides.brancher` / `branchekort` / `regioner` /
+  `regionskort`): the code and tests are kept for later use, and the data they show still feeds
+  the ejendomme-for-sig slides, the feeder pages and Excel. Client notes must therefore not refer
+  to those pages by name.
+- *Valutafordeling* (`slides.valutafordeling`, after *Tilsagn på tværs*): three doughnuts
+  (`slides._ring`) in a near-equilateral triangle in the middle of the slide (exposure on top,
+  NAV and resttilsagn below, `VF_BASIS` apart; a true equilateral would make the lower rings
+  touch), joined edge to edge by `_forbindelser` with a »+« between NAV and resttilsagn; no
+  table. Currency and % sit on the ring, the measure's name and total in the hole.
+  `_fyld_diagramflade` replaces PowerPoint's auto layout so the ring fills its chart box. Data
+  from `data.valutafordeling()` (pure) in `r["valutafordeling"]`: NAV, resttilsagn and exposure (= NAV + resttilsagn) in DKK
+  grouped by the fund's currency; `None` if a fund lacks a DKK figure. Colours are fixed per
+  currency in `VALUTA_FARVER`.
 - Page footer: `slides.sidefod()` runs last in `report.byg()` and clones the master's slide-number
   placeholder onto every `L_TEKST` slide as "**<investor>** | Side n" (n is a `slidenum` field).
   Cover, dividers and end slide get none but still count. *Lange tilsagn* (`slides.lange_tilsagn`,
@@ -108,9 +121,11 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   `BRANCHEGRUPPER` and `REGIONER` / `DELREGIONER`; `*_OTHER` subregions are "ikke opdelt" and are
   explained in the slide note. Classifications with `is_suggested = 1` go into `foreloebig_andel`:
   the slide says "foreløbig klassifikation" and `byg()` warns. The geography pie has one slice per
-  subregion, coloured by region family (`GEO_FARVER`). Excel sheets *Brancher* and *Geografi*
+  region, in the first colour of its family (`GEO_FARVER`). Excel sheets *Brancher* and *Geografi*
   recompute each line as share × NAV. The method is in the slides' source notes, not in
-  `DEFINITIONER`, which is full. Don't alias SQL columns `top` (reserved word in T-SQL). The
+  `DEFINITIONER`, which is full. The geography slides (pie, treemaps, feeder pages) show only the
+  three regions: `slides._kun_regioner()` empties `under`, so the subregions live on only in the
+  data and the Excel *Geografi* sheet. Don't alias SQL columns `top` (reserved word in T-SQL). The
   region codes are the database's (`NORTH_AMERICA`, `EUROPE`, `ROW`); a new code in
   `portfolio.geo_region`/`geo_subregion` needs a line in `REGIONER`/`DELREGIONER`.
 - **Industry slides.** *Branchefordeling* shows GICS sectors only (pie + table); the industry
@@ -118,17 +133,16 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   (`slides.branchekort`) draws the same sectors as a squarified treemap (`slides._treemap`, pure,
   areas proportional to the values) of native rectangles, with the pie's colours and »Øvrige« for
   sectors under `BR_MIN`; each box shows name, tDKK and %, shrinking to name + % or % only when
-  small. *Geografisk eksponering – overblik* (`slides.regionskort`) is the same idea nested:
-  one box per region with a header band, split into its subregions in the pie's colours (small
-  subregions in »Øvrige« within the region). Every box must say what it is: `slides._gulv` lifts
+  small. *Geografisk eksponering – overblik* (`slides.regionskort`) is the same idea with one
+  box per region in the pie's colours. Every box must say what it is: `slides._gulv` lifts
   the area of boxes under `KORT_MINDST` (3 %) of their treemap so they can carry a label (the
   figures stay the actual ones; `_gulvnote` says so), and `_kortkasse` falls back to smaller type
   and then to a label turned 90° in tall, narrow boxes. It returns whether the name fit; a box
   that only has room for its percentage is named in the note.
 - **Treemaps with property for itself** (`slides.branchekort_ejendomme` / `regionskort_ejendomme`,
-  each right after its overview). The area is split into Ejendomme (left, per fund) and
-  »Øvrige investeringer« (right, drawn by the same `_branchekasser` / `_regionskasser` helpers as
-  the overviews), widths proportional to NAV. The bands show each part's share of total NAV; the
+  each right after its overview). The area is split into »Alternative investeringer« (left,
+  drawn by the same `_branchekasser` / `_regionskasser` helpers as the overviews) and Ejendomme
+  (right, per fund), widths proportional to NAV. The bands show each part's share of total NAV; the
   box percentages are of the part's own NAV, so each part sums to 100 %. Ejendomme is the GICS
   sector `REAL_ESTATE` across all funds (property funds wholly, plus the real-estate share of
   mixed funds), from `data.opdel_ejendomme()` (pure) in `r["uden_ejendomme"][art]`; `resten` is
@@ -136,6 +150,14 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   geography cross, so on the geography slide a mixed fund's property share is assumed to sit like
   the rest of the fund (said in the note). The industry slide keeps the sectors' colours from
   *Branchefordeling* and shows ACWI ex real estate, rescaled to 100 %.
+- **Treemaps per asset class** (`slides.branchekort_aktivklasser` / `regionskort_aktivklasser`,
+  each right after its "ejendomme for sig" slide): the same idea in three parts, Private Equity |
+  Private Credit | Ejendomme, from `data.opdel_aktivklasser()` (pure) in
+  `r["aktivklasser"][art]`. Ejendomme is the same GICS-sector cut as `opdel_ejendomme()` (both
+  use `data._uden_ejendomme()`); Private Credit is the rest of the funds whose segment is private
+  credit (`JUNIOR_DEBT`), Private Equity the rest of the others. `slides._delt_flade` draws any
+  number of parts left to right with Ejendomme last; `_delbredder` keeps each part at least
+  `EJD_MIN_W` wide. `_ejendomsopdelt` is its one-part wrapper.
 - **MSCI benchmark.** `config/benchmark.yaml` holds the MSCI ACWI and World sector weights, keyed
   by `industry_code` (update it from MSCI's factsheet; set `dato` to show the date). `data.benchmark()`
   loads it into `r["benchmark"]`; *Branchefordeling* adds one column per index (n/a for

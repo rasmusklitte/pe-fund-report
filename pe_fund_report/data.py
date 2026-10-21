@@ -1068,6 +1068,30 @@ def dkk_total(fonde):
     return total
 
 
+def valutafordeling(fonde):
+    """NAV, resttilsagn og eksponering (NAV + resttilsagn) i DKK fordelt på fondenes valuta.
+
+    {"nav": [...], "resttilsagn": [...], "eksponering": [...]}, hver [{valuta, dkk, andel}]
+    med den største først; tom, når målet summerer til 0. None, hvis en fond mangler et
+    DKK-tal.
+    """
+    if not fonde or any(f["n"].get(k) is None for f in fonde
+                        for k in ("nav_dkk", "resttilsagn_dkk")):
+        return None
+    resultat = {}
+    for maal, beloeb in (("nav", lambda n: n["nav_dkk"]),
+                         ("resttilsagn", lambda n: n["resttilsagn_dkk"]),
+                         ("eksponering", lambda n: n["nav_dkk"] + n["resttilsagn_dkk"])):
+        pr_valuta = {}
+        for f in fonde:
+            pr_valuta[f["valuta"]] = pr_valuta.get(f["valuta"], 0.0) + beloeb(f["n"])
+        i_alt = sum(pr_valuta.values())
+        resultat[maal] = [] if not i_alt else [
+            dict(valuta=v, dkk=d, andel=d / i_alt)
+            for v, d in sorted(pr_valuta.items(), key=lambda x: -x[1])]
+    return resultat
+
+
 def _gruppesum(fonde):
     """Summen af en gruppe fonde til fordelingssiderne.
 
@@ -1190,12 +1214,23 @@ def opdel_ejendomme(fonde, art):
     """
     if not fonde or any(f["n"].get("nav_dkk") is None for f in fonde):
         return None
+    ejendomme, resten = _uden_ejendomme(fonde, art)
+    if ejendomme is None:
+        return None
+    return dict(ejendomme=ejendomme, resten=eksponering(resten, art))
+
+
+def _uden_ejendomme(fonde, art):
+    """(ejendomsdelen, fondene uden deres ejendomsandel) til opdelingerne.
+
+    Ejendomsdelen er {total_dkk, andel (af hele NAV), fonde: [{navn, dkk, andel (af
+    ejendommene)}], blandede}, eller None uden ejendomme. Resten er fondene med NAV uden
+    ejendomsandelen; i brancherne er sektoren fjernet og de øvrige skaleret op.
+    """
     andele = {f["fund_name"]: ejendomsandel(f) for f in fonde}
     ejendomme = sorted(((f["fund_name"], andele[f["fund_name"]] * f["n"]["nav_dkk"])
                         for f in fonde if andele[f["fund_name"]] > 0), key=lambda x: -x[1])
     i_alt = sum(dkk for _, dkk in ejendomme)
-    if i_alt <= 0:
-        return None
     resten = []
     for f in fonde:
         a = andele[f["fund_name"]]
@@ -1208,13 +1243,39 @@ def opdel_ejendomme(fonde, art):
                                                for x in b["linjer"]
                                                if x["top_kode"] != EJENDOMSSEKTOR]}
         resten.append(rest)
+    if i_alt <= 0:
+        return None, resten
     total = sum(f["n"]["nav_dkk"] for f in fonde)
-    return dict(
-        ejendomme=dict(total_dkk=i_alt, andel=i_alt / total if total else None,
-                       fonde=[dict(navn=n, dkk=dkk, andel=dkk / i_alt) for n, dkk in ejendomme],
-                       # fonde, der kun delvis er ejendomme; deres andel nævnes i noten
-                       blandede=[n for n, _ in ejendomme if andele[n] < 1 - 1e-9]),
-        resten=eksponering(resten, art))
+    return dict(total_dkk=i_alt, andel=i_alt / total if total else None,
+                fonde=[dict(navn=n, dkk=dkk, andel=dkk / i_alt) for n, dkk in ejendomme],
+                # fonde, der kun delvis er ejendomme; deres andel nævnes i noten
+                blandede=[n for n, _ in ejendomme if andele[n] < 1 - 1e-9]), resten
+
+
+PRIVATE_EQUITY, PRIVATE_CREDIT = "Private Equity", "Private Credit"
+
+
+def opdel_aktivklasser(fonde, art):
+    """Investors NAV delt i Private Equity, Private Credit og ejendomme, hver med sin egen base.
+
+    Ejendomme er som i opdel_ejendomme(); Private Credit er resten af fondene med private
+    credit som strategi (segmentet), Private Equity resten af de øvrige. {ejendomme: dict eller
+    None, dele: [{navn, total_dkk, andel (af hele NAV), fordeling: eksponering(...)}]}; en del
+    uden NAV udelades. None uden DKK-tal for alle fonde.
+    """
+    if not fonde or any(f["n"].get("nav_dkk") is None for f in fonde):
+        return None
+    ejendomme, resten = _uden_ejendomme(fonde, art)
+    total = sum(f["n"]["nav_dkk"] for f in fonde)
+    dele = []
+    for navn, med in ((PRIVATE_EQUITY, lambda f: f.get("segment") != FOKUS["JUNIOR_DEBT"]),
+                      (PRIVATE_CREDIT, lambda f: f.get("segment") == FOKUS["JUNIOR_DEBT"])):
+        fonde_ = [f for f in resten if med(f)]
+        i_alt = sum(f["n"]["nav_dkk"] for f in fonde_)
+        if i_alt > 0:
+            dele.append(dict(navn=navn, total_dkk=i_alt, andel=i_alt / total,
+                             fordeling=eksponering(fonde_, art)))
+    return dict(ejendomme=ejendomme, dele=dele)
 
 
 def sammendrag(fonde, total_dkk):
@@ -1480,12 +1541,16 @@ def investor_rapport(investor_code, as_of=None):
     return dict(investor=investor_code, navn=investor_navn(investor_code),
                 as_of=rapport_dato, fonde=fonde, total=total(fonde),
                 kurser=kurser, total_dkk=total_dkk, sammendrag=sammendrag(fonde, total_dkk),
+                valutafordeling=valutafordeling(fonde),
                 fordelinger={k: fordeling(fonde, k) for k in ("geografi", "segment")},
                 brancher=eksponering(fonde, "brancher"), benchmark=benchmark(),
                 regioner=eksponering(fonde, "regioner"),
                 # samme fordelinger med ejendommene for sig og resten på sin egen base
                 uden_ejendomme={art: opdel_ejendomme(fonde, art)
                                 for art in ("brancher", "regioner")},
+                # og delt i Private Equity, Private Credit og ejendomme
+                aktivklasser={art: opdel_aktivklasser(fonde, art)
+                              for art in ("brancher", "regioner")},
                 gennemlysning=gennemlysning(fonde),
                 stoerste_eksponering=stoerste_eksponering(fonde, kurser),
                 perioder=rapport_perioder, udvikling=portefoelje_udvikling(fonde),

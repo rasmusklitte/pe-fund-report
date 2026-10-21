@@ -258,6 +258,54 @@ def test_dkk_total_er_none_naar_en_fond_mangler_kurs():
     assert data.dkk_total([_dkk_fond(100.0, 200.0), _dkk_fond(None, None)]) is None
 
 
+def test_valutafordeling_summerer_pr_valuta_og_eksponering_er_nav_plus_rest():
+    fond = lambda valuta, nav, rest: dict(valuta=valuta, n=dict(nav_dkk=nav, resttilsagn_dkk=rest))
+    vf = data.valutafordeling([fond("DKK", 600.0, 100.0), fond("EUR", 300.0, 300.0),
+                               fond("DKK", 100.0, 0.0)])
+    assert [(x["valuta"], x["dkk"]) for x in vf["nav"]] == [("DKK", 700.0), ("EUR", 300.0)]
+    assert [(x["valuta"], x["dkk"]) for x in vf["resttilsagn"]] == [("EUR", 300.0), ("DKK", 100.0)]
+    assert [(x["valuta"], x["dkk"]) for x in vf["eksponering"]] == [("DKK", 800.0), ("EUR", 600.0)]
+    for maal in vf.values():
+        assert sum(x["andel"] for x in maal) == pytest.approx(1.0)
+
+
+def test_valutafordeling_er_none_naar_en_fond_mangler_dkk_tal():
+    assert data.valutafordeling([dict(valuta="EUR", n=dict(nav_dkk=None,
+                                                           resttilsagn_dkk=None))]) is None
+    nul = data.valutafordeling([dict(valuta="DKK", n=dict(nav_dkk=5.0, resttilsagn_dkk=0.0))])
+    assert nul["resttilsagn"] == []
+
+
+def _aktiv_fond(navn, segment, nav, brancher):
+    return dict(fund_name=navn, segment=segment, nav_dato=date(2026, 6, 30),
+                n=dict(nav_dkk=nav),
+                brancher=dict(grundlag="HOLDINGS", dato=date(2026, 6, 30), gennem=None, linjer=[
+                    dict(top_kode=k, top=k.title(), under_kode=None, under=None, andel=a,
+                         foreloebig=0.0) for k, a in brancher]))
+
+
+def test_opdel_aktivklasser_summerer_til_nav_og_placerer_kredit_og_ejendomme():
+    fonde = [_aktiv_fond("Ejendom", "Ejendomme", 200.0, [("REAL_ESTATE", 1.0)]),
+             _aktiv_fond("PE", "Buyout", 500.0, [("FINANCIALS", 0.9), ("REAL_ESTATE", 0.1)]),
+             _aktiv_fond("Kredit", data.FOKUS["JUNIOR_DEBT"], 300.0, [("INDUSTRIALS", 1.0)])]
+    opd = data.opdel_aktivklasser(fonde, "brancher")
+    dele = {d["navn"]: d for d in opd["dele"]}
+    assert dele[data.PRIVATE_EQUITY]["total_dkk"] == pytest.approx(450.0)   # uden ejendomme
+    assert dele[data.PRIVATE_CREDIT]["total_dkk"] == pytest.approx(300.0)
+    assert opd["ejendomme"]["total_dkk"] == pytest.approx(250.0)            # inkl. PE's 10 %
+    assert sum(d["andel"] for d in opd["dele"]) + opd["ejendomme"]["andel"] == pytest.approx(1.0)
+    assert [g["kode"] for g in dele[data.PRIVATE_CREDIT]["fordeling"]["grupper"]] == ["INDUSTRIALS"]
+
+
+def test_opdel_aktivklasser_udelader_tom_del_og_klarer_sig_uden_ejendomme():
+    opd = data.opdel_aktivklasser([_aktiv_fond("PE", "Buyout", 500.0, [("FINANCIALS", 1.0)])],
+                                  "brancher")
+    assert opd["ejendomme"] is None
+    assert [d["navn"] for d in opd["dele"]] == [data.PRIVATE_EQUITY]
+    assert data.opdel_aktivklasser([dict(fund_name="X", segment=None, n=dict(nav_dkk=None))],
+                                   "brancher") is None
+
+
 def test_omregn_til_dkk_bruger_valutaens_kurs():
     f = dict(valuta="EUR", n=dict(tilsagn=30.0, indbetalt=20.0, udloddet=4.0, resttilsagn=10.0,
                                         nav=20.0), noter=[])
