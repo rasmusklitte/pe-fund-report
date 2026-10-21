@@ -1262,22 +1262,26 @@ def _gruppesum(fonde):
 def fordeling(fonde, noegle):
     """Fondene grupperet på noegle ("geografi" eller "segment") med andel af tilsagnet i DKK.
 
-    {total, grupper: [{navn, fonde, sum, andel}], andele: {fund_name: andel}}. Grupperne
-    sorteres efter tilsagn i DKK. Andelene er None, hvis en fond mangler en DKK-kurs.
+    {total, grupper: [{navn, fonde, sum, andel, andel_nav}], andele: {fund_name: andel}}.
+    andel_nav er gruppens andel af NAV i DKK (executive summary). Grupperne sorteres efter
+    tilsagn i DKK. Andelene er None, hvis en fond mangler en DKK-kurs.
     """
     total = _gruppesum(fonde)
-    i_alt = total["tilsagn_dkk"]
+    i_alt, nav_i_alt = total["tilsagn_dkk"], total["nav_dkk"]
     andel = lambda v: v / i_alt if i_alt and v is not None else None
+    andel_nav = lambda v: v / nav_i_alt if nav_i_alt and v is not None else None
     grupper = {}
     for f in fonde:
         grupper.setdefault(f[noegle] or "Ikke oplyst", []).append(f)
-    resultat = [dict(navn=navn, fonde=g, sum=(s := _gruppesum(g)), andel=andel(s["tilsagn_dkk"]))
+    resultat = [dict(navn=navn, fonde=g, sum=(s := _gruppesum(g)), andel=andel(s["tilsagn_dkk"]),
+                     andel_nav=andel_nav(s["nav_dkk"]))
                 for navn, g in grupper.items()]
     if noegle == "segment":
         resultat.sort(key=lambda g: _strategi_plads(g["navn"]))
     else:
         resultat.sort(key=lambda g: -(g["sum"]["tilsagn_dkk"] or 0))
-    return dict(total=total | {"andel": andel(i_alt)}, grupper=resultat,
+    return dict(total=total | {"andel": andel(i_alt), "andel_nav": andel_nav(nav_i_alt)},
+                grupper=resultat,
                 andele={f["fund_name"]: andel(f["n"].get("tilsagn_dkk")) for f in fonde})
 
 

@@ -520,8 +520,13 @@ def test_sammendrag_viser_noegletal_hoejdepunkter_og_fordeling():
     assert slides.tusind(td["resttilsagn_dkk"] + td["nav_dkk"]) in t
     assert any("3 fonde hos 2 forvaltere med vintage 2020–2023" in x for x in t)
     assert any(x.startswith("Største geografi er Europa") for x in t)
-    # uden gennemlyste regioner falder geografien tilbage på fondenes fokus efter tilsagn
-    assert "Geografi – andel af tilsagn²" in t and "Investeringsstrategi – andel af tilsagn" in t
+    assert any(f"Den samlede eksponering er {slides.tusind(td['resttilsagn_dkk'] + td['nav_dkk'])} "
+               "tDKK inklusive NAV, og resttilsagnet på "
+               f"{slides.tusind(td['resttilsagn_dkk'])} tDKK kan stadig kaldes af forvalterne."
+               in x for x in t)
+    # uden gennemlyste regioner falder geografien tilbage på fondenes fokus efter tilsagn;
+    # strategien er efter NAV
+    assert "Geografi – andel af tilsagn²" in t and "Investeringsstrategi – andel af NAV" in t
     assert any("² Geografien er fondenes geografiske fokus." in x for x in t)
     assert not any("egment" in x for x in t)
     for sh in s.shapes:
@@ -854,7 +859,7 @@ def test_sammendrag_bruger_regionerne_fra_geografisk_eksponering():
     r["sammendrag"] = data.sammendrag(r["fonde"], r["total_dkk"])
     r["regioner"] = dict(grupper=[dict(navn="Europa", andel=0.75), dict(navn="USA", andel=0.25)])
     t = _tekster(slides.sammendrag(_prs(), r))
-    assert "Geografi – andel af NAV²" in t and "Investeringsstrategi – andel af tilsagn" in t
+    assert "Geografi – andel af NAV²" in t and "Investeringsstrategi – andel af NAV" in t
     assert "Europa" in t and "USA" in t and "75,0 %" in t
     assert any("Største geografi er Europa med 75,0 % af NAV" in x for x in t)
     assert any("Geografien er fordelt efter fondenes underliggende investeringer." in x
@@ -883,9 +888,27 @@ def test_sammendrag_naevner_det_stoerste_segment_ikke_det_foerste():
     r["total_dkk"] = data.dkk_total(r["fonde"])
     r["sammendrag"] = data.sammendrag(r["fonde"], r["total_dkk"])
     # segmenterne står i strategiorden, så det største er ikke nødvendigvis først
-    r["fordelinger"]["segment"] = dict(grupper=[dict(navn="Private equity", andel=0.3),
-                                                dict(navn="Ejendomme", andel=0.7)])
+    r["fordelinger"]["segment"] = dict(
+        total=dict(andel_nav=1.0),
+        grupper=[dict(navn="Private equity", andel=0.6, andel_nav=0.3),
+                 dict(navn="Ejendomme", andel=0.4, andel_nav=0.7)])
     t = _tekster(slides.sammendrag(_prs(), r))
+    assert any("største investeringsstrategi er Ejendomme med 70,0 % af NAV" in x for x in t)
+
+
+def test_sammendrag_viser_strategien_efter_tilsagn_uden_nav_i_dkk():
+    r = _ford_rapport()
+    for f, m, v in zip(r["fonde"], ("X", "Y", "X"), (2020, 2022, 2023)):
+        f.update(manager=m, vintage=v)
+        f["n"]["irr"] = 0.12
+    r["total_dkk"] = data.dkk_total(r["fonde"])
+    r["sammendrag"] = data.sammendrag(r["fonde"], r["total_dkk"])
+    r["fordelinger"]["segment"] = dict(
+        total=dict(andel_nav=None),
+        grupper=[dict(navn="Private equity", andel=0.3, andel_nav=None),
+                 dict(navn="Ejendomme", andel=0.7, andel_nav=None)])
+    t = _tekster(slides.sammendrag(_prs(), r))
+    assert "Investeringsstrategi – andel af tilsagn" in t
     assert any("største investeringsstrategi er Ejendomme med 70,0 % af tilsagnet" in x
                for x in t)
 

@@ -118,8 +118,9 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
 - The *Executive summary* (slide 2) formats `data.sammendrag()`: portfolio figures in DKK
   (from `total_dkk`), highest/lowest TVPI fund and the largest geography/segment. Geography is the
   same regions as *Geografisk eksponering* (`r["regioner"]`, NAV look-through; falls back to the
-  funds' geography focus by commitment when that is `None`); segment is by commitment from
-  `r["fordelinger"]`. `slides._sammendragsfordelinger()` picks them, and the block headings say
+  funds' geography focus by commitment when that is `None`); segment is the funds' strategy by
+  NAV in DKK (`andel_nav` from `r["fordelinger"]`, the user's choice), by commitment when a fund
+  lacks a DKK figure. The segment slide itself stays by commitment. `slides._sammendragsfordelinger()` picks them, and the block headings say
   which measure each uses. One bullet names the largest single exposure from
   `data.stoerste_eksponering()` (pure): the largest look-through line of
   `_positionskandidater()` — company or underlying fund, feeders looked through, the same name in
@@ -173,8 +174,9 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
 - **One colour per category.** Each GICS sector has a fixed colour in `slides.SEKTOR_FARVER`,
   the same on every slide and in every part (the user's rule: a colour always means the same
   category). Grey is reserved: `BR_OEVRIGE` only for »Øvrige« / »Øvrige fonde«, `BR_UDEN_GICS`
-  for non-GICS rows. Real Estate is a muted slate (the house colours are taken by sectors and
-  regions), and the property segments are fixed shades of that slate in `EJD_SEGMENT_FARVER`.
+  for non-GICS rows. Real Estate is a dusty plum, the only purple, so it is not confused with
+  the property-segment slates on *pr. aktivklasse* (the house colours are taken by sectors and
+  regions), and the property segments are fixed slate shades in `EJD_SEGMENT_FARVER`.
   Regions keep `GEO_FARVER`.
 - **Treemaps with property for itself** (`slides.branchekort_ejendomme` / `regionskort_ejendomme`,
   kept but not in the deck). The area is split into »Alternative investeringer« (left,

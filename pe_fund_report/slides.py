@@ -1515,9 +1515,10 @@ SEKTOR_FARVER = {"FINANCIALS": TAUPE, "INDUSTRIALS": TERRA, "HEALTH_CARE": SAGE_
                  "CONSUMER_DISCRETIONARY": OLIVEN, "CONSUMER_STAPLES": _rgb(style.PPIM_RED_LIGHT),
                  "COMMUNICATION_SERVICES": SAGE, "MATERIALS": ROED, "UTILITIES": SAGE_MID,
                  "ENERGY": _rgb(style.PPIM_BEIGE),
-                 # husfarverne er brugt af sektorerne og regionerne; en dæmpet skifer skiller
-                 # ejendommene tydeligt fra Information Technologys brune
-                 "REAL_ESTATE": _rgb("#5F6B73")}
+                 # husfarverne er brugt af sektorerne og regionerne; en dæmpet blomme er den
+                 # eneste lilla, så den ikke forveksles med ejendomssegmenternes skifer
+                 # (EJD_SEGMENT_FARVER) på siden pr. aktivklasse
+                 "REAL_ESTATE": _rgb("#6E5470")}
 
 
 def _skiver(poster):
@@ -3207,7 +3208,8 @@ def _hoejdepunkter(r, fod=None):
             f"Der er indbetalt {tusind(sm['indbetalt_dkk'])} tDKK, svarende til "
             f"{pct(sm['picc'])} af tilsagnet på {tusind(sm['tilsagn_dkk'])} tDKK, og fondene "
             f"har udloddet {tusind(sm['udloddet_dkk'])} tDKK.",
-            f"Resttilsagnet på {tusind(sm['resttilsagn_dkk'])} tDKK kan endnu kaldes af "
+            f"Den samlede eksponering er {tusind(sm['eksponering_dkk'])} tDKK inklusive NAV, og "
+            f"resttilsagnet på {tusind(sm['resttilsagn_dkk'])} tDKK kan stadig kaldes af "
             "forvalterne.",
             f"Porteføljens værdi, udlodninger og NAV, er {gange(sm['tvpi'])} den indbetalte "
             "kapital."]
@@ -3261,12 +3263,16 @@ def _sammendragsfordelinger(r):
 
     Geografien er de samme regioner som på siden Geografisk eksponering: investors NAV
     gennemlyst til fondenes investeringer. Uden den (en fond mangler DKK-kurs) bruges fondenes
-    geografiske fokus efter tilsagn. Segmentet er altid efter tilsagn.
+    geografiske fokus efter tilsagn. Segmentet er fondenes strategi efter NAV i DKK, og uden
+    DKK-tal efter tilsagn.
     """
     fd = r["fordelinger"]
     geo = ((r["regioner"]["grupper"], "NAV") if r.get("regioner")
            else (fd["geografi"]["grupper"], "tilsagnet"))
-    return {"geografi": geo, "segment": (fd["segment"]["grupper"], "tilsagnet")}
+    seg = fd["segment"]
+    seg = (([g | {"andel": g["andel_nav"]} for g in seg["grupper"]], "NAV")
+           if (seg.get("total") or {}).get("andel_nav") else (seg["grupper"], "tilsagnet"))
+    return {"geografi": geo, "segment": seg}
 
 
 def _fordelingsbjaelker(s, x, y, w, overskrift, grupper, maks, raekke_h=0.23, label_b=1.75,
@@ -3300,7 +3306,7 @@ def _fordelingsbjaelker(s, x, y, w, overskrift, grupper, maks, raekke_h=0.23, la
 
 
 def sammendrag(prs, r):
-    """Executive summary: nøgletal for hele porteføljen, højdepunkter og fordeling af tilsagn."""
+    """Executive summary: nøgletal for hele porteføljen, højdepunkter og fordeling af NAV."""
     s = _oversigtsslide(prs, r, "Executive summary", enhed="beløb i tusinde DKK")
     sm = r["sammendrag"]
 

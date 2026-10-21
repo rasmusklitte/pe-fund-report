@@ -460,6 +460,17 @@ def test_fordeling_summerer_dkk_og_regner_andele_af_tilsagnet():
     assert fd["andele"]["B"] == pytest.approx(300 / 600)
 
 
+def test_fordeling_regner_ogsaa_andele_af_nav():
+    fd = data.fordeling(_ford_fonde(), "geografi")
+    # NAV i DKK: A 60, B 225, C 110, D 0 = 395
+    assert fd["grupper"][0]["andel_nav"] == pytest.approx(335 / 395)
+    assert sum(g["andel_nav"] for g in fd["grupper"]) == pytest.approx(1.0)
+    assert fd["total"]["andel_nav"] == 1.0
+    fonde = _ford_fonde()
+    fonde[1]["n"]["nav_dkk"] = None             # mangler kurs
+    assert all(g["andel_nav"] is None for g in data.fordeling(fonde, "geografi")["grupper"])
+
+
 def test_fordeling_viser_kun_tilsagn_i_fondens_valuta_naar_gruppen_har_een_valuta():
     fd = data.fordeling(_ford_fonde(), "geografi")
     eu, dk = fd["grupper"][0], fd["grupper"][1]
