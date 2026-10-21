@@ -588,8 +588,7 @@ FANER = [
     ("Beholdninger", "Fondenes beholdninger ultimo og primo, hele fonden og investors andel. "
                      "For feederne (Gennem udfyldt) er det den underliggende fonds positioner, og "
                      "ejerandelen er feederens NAV / den underliggende fonds samlede dagsværdi."),
-    ("Værdibevægelser", "Beholdningernes værdibevægelse i kvartalet og året (siden "
-                        "»Største værdibevægelser«)."),
+    ("Værdibevægelser", "Beholdningernes værdibevægelse i kvartalet og året."),
     ("Brancher", "Siden Branchefordeling: hver fonds GICS-andele (fra rpt.v_industry_exposure) "
                  "ganget med fondens NAV i DKK; Foreløbig er den del af linjen, hvis klassifikation "
                  "ikke er gennemgået (is_suggested)."),

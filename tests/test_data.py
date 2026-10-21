@@ -65,12 +65,34 @@ def test_geografi_oversaetter_alle_databasens_koder():
     assert data.geografi(None) is None
 
 
+def test_strategi_noegle_sorterer_efter_strategi_og_saa_navn():
+    fonde = [dict(fund_name=n, segment=s) for n, s in [
+        ("A ejendom", "Ejendomme"), ("B kredit", "Private credit"), ("C ukendt", "Shipping"),
+        ("D sek", "Secondaries"), ("E fof", "Fund of funds"), ("F pe", "Private equity"),
+        ("A pe", "Private equity"), ("G intet", None)]]
+    assert [f["fund_name"] for f in sorted(fonde, key=data.strategi_noegle)] == [
+        "A pe", "F pe", "E fof", "D sek", "B kredit", "A ejendom", "C ukendt", "G intet"]
+
+
+def test_segmentfordeling_staar_i_strategiorden_ikke_efter_stoerrelse():
+    fond = lambda navn, segment, tilsagn: dict(
+        fund_name=navn, segment=segment, valuta="DKK",
+        n=dict(tilsagn=tilsagn, tilsagn_dkk=tilsagn, indbetalt=0.0, indbetalt_dkk=0.0,
+               udloddet=0.0, udloddet_dkk=0.0, nav=0.0, nav_dkk=0.0, resttilsagn=tilsagn,
+               resttilsagn_dkk=tilsagn, tvpi=None, irr=None))
+    fd = data.fordeling([fond("Ejd", "Ejendomme", 900.0), fond("PE", "Private equity", 100.0)],
+                        "segment")
+    assert [g["navn"] for g in fd["grupper"]] == ["Private equity", "Ejendomme"]
+
+
 def test_segment_bruger_struktur_foer_fokus():
     assert data.segment("FUND_OF_FUNDS", "BUYOUT", None) == "Fund of funds"
-    assert data.segment("SECONDARY", "BUYOUT", "SMALL_MID") == "Secondary fund of funds"
-    assert data.segment("DIRECT", "BUYOUT", "SMALL_MID") == "Small/mid-cap buyout"
-    assert data.segment("DIRECT", "BUYOUT", "ALL") == "Buyout"
-    assert data.segment("DIRECT", "VENTURE", float("nan")) == "Venture"
+    assert data.segment("SECONDARY", "BUYOUT", "SMALL_MID") == "Secondaries"
+    # buyout, venture og growth er samlet Private equity, uanset størrelsesfokus
+    assert data.segment("DIRECT", "BUYOUT", "SMALL_MID") == "Private equity"
+    assert data.segment("DIRECT", "BUYOUT", "ALL") == "Private equity"
+    assert data.segment("DIRECT", "VENTURE", float("nan")) == "Private equity"
+    assert data.segment("DIRECT", "GROWTH", None) == "Private equity"
     assert data.segment("DIRECT", "JUNIOR_DEBT", "MID_LARGE") == "Private credit"
     # private credit er sin egen aktivklasse, også som fund of funds
     assert data.segment("FUND_OF_FUNDS", "JUNIOR_DEBT", "SMALL_MID") == "Private credit"
@@ -471,6 +493,18 @@ def test_omregning_til_dkk_giver_valutakursaendring_som_residual():
     assert [n for n, _ in t["bidrag"]] == ["B", "A"]      # 7,5 + 5,6 i valuta > 10
 
 
+def test_fortegnsafvigelser_skelner_valuta_fra_dietz():
+    def fond(navn, vaerdi, vist, afkast):
+        u = dict(vaerdi=vaerdi, vaerdi_dkk=vist, valuta_dkk=0.0, afkast=afkast)
+        return dict(fund_name=navn, udvikling={"aar": u})
+    fonde = [fond("Valuta", -118.0, 297.0, -0.023),       # USD faldt i værdi, kursen vendte den
+             fond("Dietz", 50.0, 50.0, -0.01),            # samme valuta, men modsat afkast
+             fond("Ens", 10.0, 70.0, 0.02),
+             fond("Nul", 0.0, 0.0, -0.01), fond("Uden kurs", 5.0, None, -0.01)]
+    assert data.fortegnsafvigelser(fonde) == [("Valuta", "aar", "valuta"),
+                                               ("Dietz", "aar", "dietz")]
+
+
 def test_portefoelje_udvikling_er_none_uden_kurs():
     a = _udv_fond("A", "USD", 10.0, 0.0, 11.0)
     data.omregn_udvikling_til_dkk([a], lambda v, d: None)
@@ -631,14 +665,14 @@ def test_eksponering_brancher_summerer_til_porteføljens_nav_i_dkk():
     assert sum(s["dkk"] for s in b["grupper"]) == pytest.approx(1000.0)
     assert sum(s["andel"] for s in b["grupper"]) == pytest.approx(1.0)
     industri = b["grupper"][0]
-    assert industri["navn"] == "Industri" and industri["dkk"] == pytest.approx(750.0)
+    assert industri["navn"] == "Industrials" and industri["dkk"] == pytest.approx(750.0)
     assert sum(g["dkk"] for g in industri["under"]) == pytest.approx(industri["dkk"])
     assert industri["stoerste_fond"] == "A" and industri["fonde"] == ["A", "B"]
 
 
 def test_eksponering_brancher_sorterer_ikke_opdelt_og_uklassificeret_sidst():
     b = data.eksponering(_branchefonde(), "brancher")
-    assert [s["navn"] for s in b["grupper"]] == ["Industri", "Sundhedspleje",
+    assert [s["navn"] for s in b["grupper"]] == ["Industrials", "Health Care",
                                                   data.IKKE_KLASSIFICERET]
     assert [g["navn"] for g in b["grupper"][0]["under"]] == [
         "Kapitalgoder", "Erhvervsservice", data.IKKE_OPDELT]
@@ -664,7 +698,7 @@ def test_eksponering_brancher_noterer_afvigende_dato_og_strategiplacering():
                               grundlag="FUND_DEFAULT"))
     b = data.eksponering(fonde, "brancher")
     assert b["andre_datoer"] == [("B", date(2025, 12, 31))]
-    assert b["efter_strategi"] == [("D", "Ejendomme")]
+    assert b["efter_strategi"] == [("D", "Real Estate")]
 
 
 def test_eksponering_brancher_uden_dkk_kurs_er_none():
@@ -689,6 +723,21 @@ def _ejendomsfonde():
     return fonde
 
 
+def test_opdel_ejendomme_fordeler_ejendommene_paa_segment_og_region():
+    fonde = _ejendomsfonde()
+    fonde[0]["re_sektor"] = "RESIDENTIAL"
+    # brancher: den rene ejendomsfond under sit segment, den blandede fonds 50 uden segment sidst
+    seg = data.opdel_ejendomme(fonde, "brancher")["ejendomme"]["fordeling"]
+    assert [(g["navn"], g["dkk"]) for g in seg["grupper"]] == [
+        ("Residential", 400.0), (data.SEGMENT_OEVRIGE, pytest.approx(50.0))]
+    assert seg["uden_segment"] == ["Bland"]
+    assert sum(g["andel"] for g in seg["grupper"]) == pytest.approx(1.0)
+    # regioner: ejendomsandelen af hver fond fordelt som fonden; Bland 60/40 Europa/Nordamerika
+    geo = data.opdel_ejendomme(fonde, "regioner")["ejendomme"]["fordeling"]
+    assert {g["kode"]: g["dkk"] for g in geo["grupper"]} == {
+        "EUROPE": pytest.approx(430.0), "NORTH_AMERICA": pytest.approx(20.0)}
+
+
 def test_opdel_ejendomme_tager_sektoren_fra_alle_fonde_og_giver_resten_egen_base():
     opd = data.opdel_ejendomme(_ejendomsfonde(), "brancher")
     ejd, rest = opd["ejendomme"], opd["resten"]
@@ -701,7 +750,7 @@ def test_opdel_ejendomme_tager_sektoren_fra_alle_fonde_og_giver_resten_egen_base
     assert rest["total_dkk"] == pytest.approx(550.0)
     assert ejd["total_dkk"] + rest["total_dkk"] == pytest.approx(1000.0)
     assert [(g["navn"], g["dkk"]) for g in rest["grupper"]] == [
-        ("Industri", pytest.approx(450.0)), ("Finans", pytest.approx(100.0))]
+        ("Industrials", pytest.approx(450.0)), ("Financials", pytest.approx(100.0))]
     assert sum(g["andel"] for g in rest["grupper"]) == pytest.approx(1.0)
     assert rest["efter_strategi"] == []           # den rene ejendomsfond er helt ude
 
@@ -771,8 +820,8 @@ def test_beholdninger_viser_gics_sektoren_som_industri(monkeypatch):
     monkeypatch.setattr(data, "read_sql", lambda *a, **k: h)
     beh = data._beholdninger("SEED4", date(2026, 6, 30), 0.5)
     r = {x["navn"]: x for x in beh["raekker"]}
-    assert r["FLATPAY"]["industri"] == "Finans" and r["FLATPAY"]["industri_foreloebig"]
-    assert r["Landfolk"]["industri"] == "Forbrugsgoder" and not r["Landfolk"]["industri_foreloebig"]
+    assert r["FLATPAY"]["industri"] == "Financials" and r["FLATPAY"]["industri_foreloebig"]
+    assert r["Landfolk"]["industri"] == "Consumer Discretionary" and not r["Landfolk"]["industri_foreloebig"]
     assert r["Ukendt"]["industri"] is None and not r["Ukendt"]["industri_foreloebig"]
 
 
@@ -792,6 +841,55 @@ def test_stoerste_eksponering_sammenligner_i_dkk_og_udelader_ejendomme():
     assert e["navn"] == "C" and e["dkk"] == 150.0 and e["art"] == "underliggende fond"
     assert e["andel"] == pytest.approx(150.0 / 1000.0)
     assert e["udeladt"] == ["Ejendomme", "Uskaleret"]
+
+
+def _positionsfonde():
+    fonde = [_eksponeringsfond("DKK-fond", "DKK", 500.0, [("A", 100.0), ("C", 30.0)]),
+             _eksponeringsfond("EUR-fond", "EUR", 300.0, [("c", 20.0)], type_="fonde"),
+             _eksponeringsfond("Ejendomme", "DKK", 200.0, [("Hus", 999.0)], type_="ejendomme"),
+             _eksponeringsfond("Uskaleret", "DKK", 40.0, [("Hele fonden", 5000.0)], skaleret=False)]
+    for f in fonde:
+        f["nav_dato"] = date(2026, 6, 30)
+    return fonde
+
+
+def test_stoerste_positioner_laegger_samme_navn_sammen_og_tager_fonde_uden_gennemlysning_med():
+    sp = data.stoerste_positioner(_positionsfonde(), {"DKK": (1.0, None), "EUR": (7.5, None)})
+    linjer = {p["navn"]: p for p in sp["linjer"]}
+    # C i DKK-fonden (30) og c i EUR-fonden (20 EUR = 150 DKK) er én position
+    assert linjer["C"]["dkk"] == pytest.approx(180.0)
+    assert linjer["C"]["fonde"] == ["DKK-fond", "EUR-fond"]
+    # ejendomsfonden og den uskalerede fond indgår med deres NAV, ikke deres beholdninger
+    assert linjer["Ejendomme"]["art"] == "fond" and linjer["Ejendomme"]["dkk"] == 200.0
+    assert linjer["Uskaleret"]["dkk"] == 40.0 and "Hele fonden" not in linjer
+    assert sp["fondslinjer"] == ["Ejendomme", "Uskaleret"]
+    assert [p["navn"] for p in sp["linjer"]] == ["Ejendomme", "C", "A", "Uskaleret"]
+    assert sp["nav_dkk"] == 1040.0
+    assert linjer["A"]["andel"] == pytest.approx(100.0 / 1040.0)
+    assert sp["top_andel"] == pytest.approx(520.0 / 1040.0)
+
+
+def test_stoerste_positioner_begraenser_antallet_og_kraever_dkk():
+    kurser = {"DKK": (1.0, None), "EUR": (7.5, None)}
+    sp = data.stoerste_positioner(_positionsfonde(), kurser, antal=2)
+    assert [p["navn"] for p in sp["linjer"]] == ["Ejendomme", "C"]
+    fonde = _positionsfonde()
+    fonde[0]["n"]["nav_dkk"] = None
+    assert data.stoerste_positioner(fonde, kurser) is None
+
+
+def test_stoerste_eksponering_er_stoerste_gennemlyste_position():
+    kurser = {"DKK": (1.0, None), "EUR": (7.5, None)}
+    e = data.stoerste_eksponering(_positionsfonde(), kurser)
+    # samme sammenlægning som på siden Største positioner; fondslinjerne tæller ikke
+    assert e["navn"] == "C" and e["dkk"] == pytest.approx(180.0) and e["fond"] == "DKK-fond"
+
+
+def test_sektorerne_har_engelske_gics_navne():
+    assert data.SEKTORER["FINANCIALS"] == "Financials"
+    assert data.SEKTORER["REAL_ESTATE"] == "Real Estate"
+    assert data.BRANCHEGRUPPER[4510] == "Software & Services"
+    assert data.SEKTORER["DIVERSIFIED"].startswith("Diversificeret")    # ikke GICS
 
 
 def test_stoerste_eksponering_uden_beholdninger_er_none():
@@ -832,12 +930,37 @@ def test_nav_afstemning_er_none_uden_synlig_forskel_feeder_eller_ejendomme():
 
 def test_benchmark_har_gics_sektorer_der_summerer_til_hundrede():
     bm = data.benchmark()
-    assert set(bm["indeks"]) == {"MSCI ACWI", "MSCI World"}
+    assert set(bm["indeks"]) == {"MSCI ACWI"}
     for vaegte in bm["indeks"].values():
         assert set(vaegte) <= set(data.SEKTORER) - data.UDEN_GICS
         assert sum(vaegte.values()) == pytest.approx(1.0, abs=0.001)
     assert bm["indeks"]["MSCI ACWI"]["INFORMATION_TECHNOLOGY"] == pytest.approx(0.3321)
 
 
+def test_gics_struktur_har_alle_sektorer_og_hver_branchegruppe_en_gang():
+    assert set(data.GICS_STRUKTUR) == set(data.SEKTORER) - data.UDEN_GICS
+    grupper = [g for gs in data.GICS_STRUKTUR.values() for g in gs]
+    assert sorted(grupper) == sorted(data.BRANCHEGRUPPER) and len(grupper) == 25
+    assert data.GICS_STRUKTUR["FINANCIALS"] == [4010, 4020, 4030]
+
+
 def test_benchmark_uden_fil_er_none(tmp_path):
     assert data.benchmark(tmp_path / "findes_ikke.yaml") is None
+
+
+def test_benchmark_regioner_har_regionskoderne_og_summerer_til_hundrede():
+    bm = data.benchmark()
+    assert set(bm["regioner"]) == set(bm["indeks"])
+    assert bm["regioner"]["MSCI ACWI"]["NORTH_AMERICA"] == pytest.approx(0.6664)
+    for vaegte in bm["regioner"].values():
+        assert set(vaegte) <= set(data.REGIONER)
+        assert sum(vaegte.values()) == pytest.approx(1.0, abs=0.001)
+
+
+def test_benchmark_laeser_regionvaegte(tmp_path):
+    sti = tmp_path / "bm.yaml"
+    sti.write_text("regioner:\n  MSCI ACWI:\n    NORTH_AMERICA: 67.11\n    EUROPE: 20\n"
+                   "    ROW: 12.89\n", encoding="utf-8")
+    bm = data.benchmark(sti)
+    assert bm["indeks"] == {}
+    assert bm["regioner"]["MSCI ACWI"]["NORTH_AMERICA"] == pytest.approx(0.6711)

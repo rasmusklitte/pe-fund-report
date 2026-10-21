@@ -29,18 +29,20 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
     s = _ny_slide(prs, L_SKILLE[0])
     _saet_ph(s, 0, "Porteføljeoversigt")
     slides.tilsagn_paa_tvaers(prs, r)
-    slides.valutafordeling(prs, r)      # springes over uden DKK-kurser for alle fonde
     slides.aendringer_pr_fond(prs, r)
+    slides.valutafordeling(prs, r)      # springes over uden DKK-kurser for alle fonde
     # geografien efter tilsagn vises ikke længere; Geografisk eksponering afløser den
     slides.fordeling(prs, r, "segment", "Porteføljefordeling efter investeringsstrategi")
-    # slides.brancher, branchekort, regioner og regionskort findes stadig, men er ikke med i
-    # decket for tiden; ejendomssiderne nedenfor bygger på samme data
-    slides.branchekort_ejendomme(prs, r)    # ejendomme for sig, resten på sin egen base
+    # slides.brancher og regioner (cirkeldiagrammerne) og branchekort_ejendomme og
+    # regionskort_ejendomme (ejendomme for sig) findes stadig, men er ikke med i decket
+    slides.branchekort(prs, r)          # hele porteføljen, ejendommene som Real Estate
     slides.branchekort_aktivklasser(prs, r)     # Private Equity, Private Credit og ejendomme
-    slides.regionskort_ejendomme(prs, r)    # ejendomme for sig, resten på sin egen base
+    slides.regionskort(prs, r)          # hele porteføljen
     slides.regionskort_aktivklasser(prs, r)     # Private Equity, Private Credit og ejendomme
+    slides.stoerste_positioner(prs, r)  # selskaber, underliggende fonde og ikke-gennemlyste fonde
     slides.gennemlysning(prs, r)        # springes over, hvis fondene har forskellige valutaer
-    slides.vaerdibevaegelser(prs, r)    # springes over, hvis ingen fond har beholdninger
+    # slides.vaerdibevaegelser findes stadig, men er ikke med i decket for tiden; dataene
+    # står i dataudtrækkets fane Værdibevægelser
 
     s = _ny_slide(prs, L_SKILLE[1])
     _saet_ph(s, 0, "Fondsoversigter")
@@ -49,7 +51,10 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
         slides.fondsside(prs, f, r["navn"])
         slides.virksomhedsprofiler(prs, f, r["navn"])   # kun fonde med porteføljeselskaber
 
+    s = _ny_slide(prs, L_SKILLE[2])
+    _saet_ph(s, 0, "Appendiks")
     slides.definitioner(prs, r)
+    slides.gics_oversigt(prs, r)        # GICS-sektorerne og deres branchegrupper
     _ny_slide(prs, L_SLUT)
     slides.sidefod(prs, r["navn"])      # til sidst, så sidetallene er endelige
 

@@ -16,17 +16,39 @@ from .paths import BENCHMARK, FUND_INFO
 
 GP_TOLERANCE = 0.005      # afvigelse mellem cash flows og GP'ens indbetalte kapital, før GP-tallet bruges
 
+
+class Note(str):
+    """En note om ét bestemt tal på fondssiden: felt er nøglen i n (indbetalt, irr, andel,
+    resttilsagn, nav) eller udvikling/beskrivelse. Sliden sætter fodnotemærket ved det tal;
+    som str virker noten alle andre steder som før (Excel, tests)."""
+
+    def __new__(cls, tekst, felt=None):
+        note = super().__new__(cls, tekst)
+        note.felt = felt
+        return note
+
 # Geografi og segment kommer fra rpt.v_fund_master som koder; databasens check constraints
 # på fund.fund lukker kodelisterne, så hver kode har præcis én dansk tekst her. Den
 # geografiske fordeling grupperer på teksten, så to stavemåder ville blive to grupper.
 GEOGRAFIER = {"DENMARK": "Danmark", "NORDICS": "Norden", "EUROPE": "Europa",
               "NORTH_AMERICA": "Nordamerika", "EUROPE_NORTH_AMERICA": "Europa og Nordamerika",
               "GLOBAL": "Global"}
-STRUKTURER = {"FUND_OF_FUNDS": "Fund of funds", "SECONDARY": "Secondary fund of funds"}
-FOKUS = {"BUYOUT": "Buyout", "VENTURE": "Venture", "GROWTH": "Growth",
+STRUKTURER = {"FUND_OF_FUNDS": "Fund of funds", "SECONDARY": "Secondaries"}
+# buyout, venture og growth står samlet som Private equity
+FOKUS = {"BUYOUT": "Private equity", "VENTURE": "Private equity", "GROWTH": "Private equity",
          "JUNIOR_DEBT": "Private credit", "SHIPPING": "Shipping",
          "MULTI_STRATEGY": "Multistrategi", "REAL_ESTATE": "Ejendomme"}
-STOERRELSER = {"SMALL_MID": "Small/mid-cap", "MID_LARGE": "Mid/large-cap"}
+# rækkefølgen, fondene og segmenterne vises i; andre segmenter kommer sidst
+STRATEGI_ORDEN = ["Private equity", "Fund of funds", "Secondaries", "Private credit", "Ejendomme"]
+
+
+def strategi_noegle(f):
+    """Sorteringsnøgle for fondene: efter strategi i STRATEGI_ORDEN, så efter navn."""
+    return _strategi_plads(f.get("segment")), f["fund_name"]
+
+
+def _strategi_plads(segment):
+    return STRATEGI_ORDEN.index(segment) if segment in STRATEGI_ORDEN else len(STRATEGI_ORDEN)
 
 
 SELSKABSFORMER = (" K/S", " A/S", " P/S", ", L.P.", " L.P.", ", SCSp", " SCSp")
@@ -66,20 +88,17 @@ def segment(fund_structure, strategy_focus, size_focus):
 
     Private credit er sin egen aktivklasse og står som "Private credit", også når fonden er
     en fund of funds (Private Debt III LGT); ellers beskrives fund of funds og secondaries ved
-    strukturen, de direkte fonde ved fokus, og buyout-fonde får størrelsesfokus foran
-    ("Small/mid-cap buyout").
+    strukturen og de direkte fonde ved fokus, hvor buyout, venture og growth er Private
+    equity. size_focus indgår ikke længere.
     """
-    struktur, fokus, stoerrelse = _kode(fund_structure), _kode(strategy_focus), _kode(size_focus)
+    struktur, fokus = _kode(fund_structure), _kode(strategy_focus)
     if fokus == "JUNIOR_DEBT":
         return FOKUS[fokus]
     if struktur in STRUKTURER:
         return STRUKTURER[struktur]
     if fokus is None:
         return None
-    tekst = FOKUS.get(fokus, fokus)
-    if fokus == "BUYOUT" and stoerrelse in STOERRELSER:
-        return f"{STOERRELSER[stoerrelse]} buyout"
-    return tekst
+    return FOKUS.get(fokus, fokus)
 
 
 def _f(v):
@@ -113,18 +132,27 @@ def fund_info():
 
 
 def benchmark(sti=BENCHMARK):
-    """MSCI-indeksenes sektorvægte: {dato, indeks: {navn: {sektorkode: andel}}}, eller None.
+    """MSCI-indeksenes vægte: {dato, indeks: {navn: {sektorkode: andel}},
+    regioner: {navn: {regionskode: andel}}}, eller None.
 
-    Andelene er brøker (33,21 % -> 0,3321). Uden filen vises branchesiderne uden benchmark.
+    Andelene er brøker (33,21 % -> 0,3321). Uden filen vises branche- og geografisiderne uden
+    benchmark; uden afsnittet regioner kun geografisiderne.
     """
     try:
         with open(sti, encoding="utf-8") as fh:
             b = yaml.safe_load(fh) or {}
     except FileNotFoundError:
         return None
-    indeks = {navn: {kode: float(v) / 100 for kode, v in (vaegte or {}).items()}
-              for navn, vaegte in (b.get("indeks") or {}).items()}
-    return dict(dato=_dato(b["dato"]) if b.get("dato") else None, indeks=indeks) if indeks else None
+
+    def vaegte(afsnit):
+        return {navn: {kode: float(v) / 100 for kode, v in (vgt or {}).items()}
+                for navn, vgt in (b.get(afsnit) or {}).items()}
+
+    indeks, regioner = vaegte("indeks"), vaegte("regioner")
+    if not indeks and not regioner:
+        return None
+    return dict(dato=_dato(b["dato"]) if b.get("dato") else None, indeks=indeks,
+                regioner=regioner)
 
 
 def investor_navn(investor_code):
@@ -143,6 +171,7 @@ def _investeringer(investor_code):
                COALESCE(u.manager_name, m.name) AS manager_name,
                COALESCE(u.manager_code, m.manager_code) AS manager_code,
                fm.geography_focus, fm.fund_structure, fm.strategy_focus, fm.size_focus,
+               fm.re_sector,
                fm.term_years, fm.extension_years, fm.total_commitments,
                fm.underlying_fund_code, u.fund_name AS underlying_fund_name
         FROM fund.investment x
@@ -379,7 +408,7 @@ def _beholdninger(fund_code, as_of, andel, nav=None):
         grupper.setdefault(navn.lower(), []).append(dict(
             navn=navn, vintage=None if pd.isna(r.vintage) else int(r.vintage),
             sektor=r.segment, closing=None if pd.isna(r.trade_date) else _dato(r.trade_date),
-            # GICS-sektoren på dansk; sektor ovenfor er forvalterens egen betegnelse
+            # GICS-sektoren (engelsk navn); sektor ovenfor er forvalterens egen betegnelse
             industri=SEKTORER.get(_kode(r.industry_code)),
             industri_foreloebig=bool(r.industry_suggested) and not pd.isna(r.industry_suggested),
             instrument=None if pd.isna(r.instrument) else r.instrument,
@@ -457,9 +486,9 @@ def udvikling(f, rapport_perioder):
                       for p, (fra, til) in rapport_perioder.items()}
     for p, u in f["udvikling"].items():
         if u["primo"] and u["primo_dato"] < u["fra"]:
-            f["noter"].append(f"Udviklingen for {PERIODENAVNE[p]} regnes fra NAV pr. "
-                              f"{u['primo_dato']:%d.%m.%Y}, da forvalteren ikke har opgjort "
-                              f"NAV pr. {u['fra']:%d.%m.%Y}.")
+            f["noter"].append(Note(f"Udviklingen for {PERIODENAVNE[p]} regnes fra NAV pr. "
+                                   f"{u['primo_dato']:%d.%m.%Y}, da forvalteren ikke har "
+                                   f"opgjort NAV pr. {u['fra']:%d.%m.%Y}.", "udvikling"))
 
 
 # Park Squares kategorier, som de står i v_portfolio_breakdown
@@ -516,30 +545,39 @@ def _feeder_beholdninger(inv, nav_dato, nav):
                       fakta=fakta)
 
 
-# GICS-sektorer (portfolio.industry) og -branchegrupper (portfolio.industry_group) på dansk.
-# DIVERSIFIED og OTHER er databasens egne koder uden for GICS.
-SEKTORER = {"ENERGY": "Energi", "MATERIALS": "Materialer", "INDUSTRIALS": "Industri",
-            "CONSUMER_DISCRETIONARY": "Forbrugsgoder", "CONSUMER_STAPLES": "Konsumentvarer",
-            "HEALTH_CARE": "Sundhedspleje", "FINANCIALS": "Finans",
-            "INFORMATION_TECHNOLOGY": "Informationsteknologi",
-            "COMMUNICATION_SERVICES": "Kommunikationstjenester", "UTILITIES": "Forsyning",
-            "REAL_ESTATE": "Ejendomme", "DIVERSIFIED": "Diversificeret (fondsandele)",
+# GICS-sektorer (portfolio.industry) og -branchegrupper (portfolio.industry_group) med deres
+# officielle engelske navne, som decket viser dem. DIVERSIFIED og OTHER er databasens egne
+# koder uden for GICS og står på dansk.
+SEKTORER = {"ENERGY": "Energy", "MATERIALS": "Materials", "INDUSTRIALS": "Industrials",
+            "CONSUMER_DISCRETIONARY": "Consumer Discretionary",
+            "CONSUMER_STAPLES": "Consumer Staples", "HEALTH_CARE": "Health Care",
+            "FINANCIALS": "Financials", "INFORMATION_TECHNOLOGY": "Information Technology",
+            "COMMUNICATION_SERVICES": "Communication Services", "UTILITIES": "Utilities",
+            "REAL_ESTATE": "Real Estate", "DIVERSIFIED": "Diversificeret (fondsandele)",
             "OTHER": "Ikke klassificeret af forvalteren"}
 UDEN_GICS = {"DIVERSIFIED", "OTHER", None}      # har ingen branchegrupper
 IKKE_KLASSIFICERET = "Ikke klassificeret"
 IKKE_OPDELT = "Ikke opdelt af forvalteren"      # sektor oplyst, branchegruppe ikke
 BRANCHEGRUPPER = {
-    1010: "Energi", 1510: "Materialer", 2010: "Kapitalgoder", 2020: "Erhvervsservice",
-    2030: "Transport", 2510: "Biler og komponenter",
-    2520: "Varige forbrugsgoder og beklædning", 2530: "Forbrugerservice",
-    2550: "Detailhandel med forbrugsgoder", 3010: "Detailhandel med dagligvarer",
-    3020: "Fødevarer, drikkevarer og tobak", 3030: "Husholdnings- og plejeprodukter",
-    3510: "Sundhedsudstyr og -ydelser", 3520: "Medicinal, bioteknologi og life science",
-    4010: "Banker", 4020: "Finansielle tjenester", 4030: "Forsikring",
-    4510: "Software og it-tjenester", 4520: "It-hardware og -udstyr",
-    4530: "Halvledere og halvlederudstyr", 5010: "Telekommunikation",
-    5020: "Medier og underholdning", 5510: "Forsyning",
-    6010: "Ejendomsinvesteringsselskaber (REITs)", 6020: "Ejendomsadministration og -udvikling"}
+    1010: "Energy", 1510: "Materials", 2010: "Capital Goods",
+    2020: "Commercial & Professional Services", 2030: "Transportation",
+    2510: "Automobiles & Components", 2520: "Consumer Durables & Apparel",
+    2530: "Consumer Services", 2550: "Consumer Discretionary Distribution & Retail",
+    3010: "Consumer Staples Distribution & Retail", 3020: "Food, Beverage & Tobacco",
+    3030: "Household & Personal Products", 3510: "Health Care Equipment & Services",
+    3520: "Pharmaceuticals, Biotechnology & Life Sciences", 4010: "Banks",
+    4020: "Financial Services", 4030: "Insurance", 4510: "Software & Services",
+    4520: "Technology Hardware & Equipment",
+    4530: "Semiconductors & Semiconductor Equipment", 5010: "Telecommunication Services",
+    5020: "Media & Entertainment", 5510: "Utilities", 6010: "Equity REITs",
+    6020: "Real Estate Management & Development"}
+# GICS-hierarkiet: de to første cifre i en branchegruppes kode er sektoren
+_SEKTOR_CIFRE = {10: "ENERGY", 15: "MATERIALS", 20: "INDUSTRIALS", 25: "CONSUMER_DISCRETIONARY",
+                 30: "CONSUMER_STAPLES", 35: "HEALTH_CARE", 40: "FINANCIALS",
+                 45: "INFORMATION_TECHNOLOGY", 50: "COMMUNICATION_SERVICES", 55: "UTILITIES",
+                 60: "REAL_ESTATE"}
+GICS_STRUKTUR = {sektor: [k for k in sorted(BRANCHEGRUPPER) if k // 100 == cifre]
+                 for cifre, sektor in _SEKTOR_CIFRE.items()}
 
 
 def _heltal(v):
@@ -580,7 +618,7 @@ def _under_kode(art, v):
 
 
 def _navne(art, top, under, under_engelsk):
-    """(top, under) på dansk. under er None, hvor niveauet ikke deles (Diversificeret o.l.)."""
+    """(top, under) som decket viser dem. under er None, hvor niveauet ikke deles (Diversificeret o.l.)."""
     if art == "brancher":
         if top in UDEN_GICS:
             return SEKTORER.get(top, top or IKKE_KLASSIFICERET), None
@@ -744,17 +782,18 @@ def fond(inv, as_of, info):
     mod_tilsagn = cf_indbetalt
     if gp_indbetalt and abs(gp_indbetalt - cf_indbetalt) > GP_TOLERANCE * gp_indbetalt:
         mod_tilsagn = gp_indbetalt
-        noter.append(f"Indbetalt kapital følger forvalterens opgørelse "
-                     f"({gp_indbetalt / 1000:,.0f} t{inv.currency}); de modtagne kapitalkald "
-                     f"summerer til {cf_indbetalt / 1000:,.0f} t{inv.currency}."
-                     .replace(",", "."))
+        # forvalterens tal står i nøgletallene; noten siger kun, hvad kaldene summerer til
+        noter.append(Note(f"Indbetalt kapital følger forvalterens opgørelse; de modtagne "
+                          f"kapitalkald summerer til {cf_indbetalt / 1000:,.0f} t{inv.currency}."
+                          .replace(",", "."), "indbetalt"))
 
     est = [(_dato(e["dato"]), float(e["beloeb"])) for e in info.get("estimerede_cashflows", [])
            if _dato(e["dato"]) <= nav_dato]
     if est:
-        noter.append("IRR og historik medregner kapitalkald med skønnet dato, hvor "
-                     "meddelelsen ikke er modtaget: "
-                     + "; ".join(e["note"] for e in info["estimerede_cashflows"]) + ".")
+        noter.append(Note("IRR og historik medregner kapitalkald med skønnet dato, hvor "
+                          "meddelelsen ikke er modtaget: "
+                          + "; ".join(e["note"] for e in info["estimerede_cashflows"]) + ".",
+                          "irr"))
 
     nav_nu = float(nav.nav.iloc[-1])
     irr_flows = [(r.value_date, r.amount) for r in cf.itertuples()
@@ -780,11 +819,8 @@ def fond(inv, as_of, info):
                       f=kode, d=nav_dato)
         fonds_nav = None if fn.empty else _f(fn.value[0])
         if fonds_nav:
+            # Definitioner forklarer ejerandelen for en evergreen-fond, så der er ingen note
             andel = float(nav.nav.iloc[-1]) / fonds_nav
-            mio = f"{fonds_nav / 1e6:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            noter.append(f"Fonden er en evergreen-fond uden fast løbetid. Ejerandelen er "
-                         f"investors andel af fondens NAV ({mio} mio. {inv.currency}), da nye "
-                         "andele udstedes til den aktuelle kurs.")
 
     indbetalt = mod_tilsagn + udligning_betalt
     # hele beløb: rabat og udligningsrente er typisk skæve beløb (82.500), som tusinder
@@ -799,13 +835,15 @@ def fond(inv, as_of, info):
             dele.append(f"udlodningerne {hel(udligning_modtaget)} i modtaget udligningsrente "
                         f"({_datoer(cf[modtaget_udl])})")
         tekst = " og ".join(dele)
-        noter.append(tekst[0].upper() + tekst[1:] + ", som betales ved senere closings ud "
-                     "over tilsagnet. Den indgår ikke i kaldt kapital og resttilsagn.")
+        # hvad udligningsrente er, står i Definitioner; noten giver beløbet og følgen
+        noter.append(Note(tekst[0].upper() + tekst[1:] + "; den indgår ikke i kaldt kapital og "
+                          "resttilsagn.", "indbetalt"))
     kaldt_ = kaldt(mod_tilsagn, _memo(ka, nav_dato, "MM110"))
     if kaldt_ != mod_tilsagn:
-        noter.append(f"Forvalteren har givet {hel(kaldt_ - mod_tilsagn)} i rabat på "
-                     f"kapitalkald: der er kaldt {hel(kaldt_)} af tilsagnet, men indbetalt "
-                     f"{hel(mod_tilsagn)}. Resttilsagnet er regnet af det kaldte beløb.")
+        # den indbetalte kapital står i nøgletallene
+        # at resttilsagnet regnes af det kaldte beløb, står under Resttilsagn i Definitioner
+        noter.append(Note(f"Forvalteren har givet {hel(kaldt_ - mod_tilsagn)} i rabat på "
+                          f"kapitalkald; der er kaldt {hel(kaldt_)}.", "resttilsagn"))
     n = dict(tilsagn=tilsagn, indbetalt=indbetalt, kaldt=kaldt_, rabat=kaldt_ - mod_tilsagn,
              udligning=float(udligning_betalt),
              udloddet=udloddet, nav=nav_nu, recallable=float(recallable),
@@ -832,8 +870,8 @@ def fond(inv, as_of, info):
         # tusindseparatoren laves for sig; .replace(",", ".") på hele sætningen ville også
         # ramme kommaet foran "som"
         beloeb = f"{recallable / 1000:,.0f}".replace(",", ".")
-        noter.append(f"Resttilsagnet indeholder genkaldelige udlodninger på {beloeb} "
-                     f"t{inv.currency}, som forvalteren kan kalde igen.")
+        noter.append(Note(f"Resttilsagnet indeholder genkaldelige udlodninger på {beloeb} "
+                          f"t{inv.currency}.", "resttilsagn"))
 
     if not senere.empty:
         dele = []
@@ -844,9 +882,8 @@ def fond(inv, as_of, info):
                             .replace(",", ".")
                             + f" ({', '.join(f'{d:%d.%m.%Y}' for d in sorted(set(s.value_date)))})")
         if dele:
-            noter.append("Efter NAV-datoen: " + " og ".join(dele) + " – ikke medregnet.")
-    if info.get("status") == "udkast":
-        noter.append("Fondsbeskrivelsen er foreløbig.")
+            noter.append(Note("Efter NAV-datoen: " + " og ".join(dele) + " – ikke medregnet.",
+                              "nav"))
 
     beh = (_beholdninger(kode, nav_dato, andel)
            or _feeder_beholdninger(inv, nav_dato, nav_nu)
@@ -871,6 +908,7 @@ def fond(inv, as_of, info):
         strategi=inv.strategy, vintage=None if pd.isna(inv.vintage_year) else int(inv.vintage_year),
         beskrivelse=info.get("beskrivelse"), geografi=geografi(inv.geography_focus),
         segment=segment(inv.fund_structure, inv.strategy_focus, inv.size_focus),
+        re_sektor=_kode(inv.re_sector),     # ejendomsfondenes segment (RESIDENTIAL, OFFICE ...)
         loebetid="Evergreen" if evergreen else loebetid(inv.term_years, inv.extension_years),
         evergreen=evergreen,
         benchmark=info.get("benchmark"), virksomheder=info.get("virksomheder") or {},
@@ -981,21 +1019,63 @@ def stoerste_eksponering(fonde, kurser):
     uskalerede beholdninger (hele fondens tal) kan ikke sammenlignes og er udeladt; de står i
     "udeladt" sammen med fonde uden beholdninger.
     """
-    kandidater, udeladt = [], []
+    positioner, udeladt = _positionskandidater(fonde, kurser)
+    if not positioner:
+        return None
+    p = positioner[0]
+    nav = sum(x["n"].get("nav_dkk") or 0 for x in fonde)
+    return dict(navn=p["navn"], fond=p["fonde"][0], via=p["via"], dkk=p["dkk"], art=p["art"],
+                andel=p["dkk"] / nav if nav else None, dato=p["dato"], udeladt=udeladt)
+
+
+def _positionskandidater(fonde, kurser):
+    """Beholdningslinjerne på tværs af fondene som investors andel i DKK, størst først.
+
+    Samme navn (uden hensyn til store og små bogstaver) i flere fonde lægges sammen til én
+    position. Returnerer (positioner, udeladte fonde): ejendomme, uskalerede beholdninger og
+    fonde uden beholdninger eller kurs kan ikke sammenlignes og er udeladt.
+    """
+    positioner, udeladt = {}, []
     for f in fonde:
         b = f.get("beholdninger")
         kurs = (kurser.get(f["valuta"]) or (None,))[0]
         if not b or b["type"] == "ejendomme" or not b["skaleret"] or kurs is None:
             udeladt.append(f["fund_name"])
             continue
-        kandidater += [(r["dagsvaerdi"] * kurs, r, f, b) for r in b["raekker"]]
-    if not kandidater:
+        art = "underliggende fond" if b["type"] == "fonde" else "porteføljeselskab"
+        for r in b["raekker"]:
+            p = positioner.setdefault(r["navn"].casefold(), dict(
+                navn=r["navn"], art=art, fonde=[], via=b.get("via"), dkk=0.0, dato=b["dato"]))
+            p["dkk"] += r["dagsvaerdi"] * kurs
+            if f["fund_name"] not in p["fonde"]:
+                p["fonde"].append(f["fund_name"])
+            p["dato"] = max(p["dato"], b["dato"])
+    return sorted(positioner.values(), key=lambda p: -p["dkk"]), udeladt
+
+
+POSITIONER_ANTAL = 15
+
+
+def stoerste_positioner(fonde, kurser, antal=POSITIONER_ANTAL):
+    """Porteføljens største positioner i DKK som andel af investors samlede NAV, eller None.
+
+    Positionerne er beholdningslinjerne som i stoerste_eksponering() (investors andel af
+    dagsværdien, feederne gennemlyst, samme navn i flere fonde lagt sammen). En fond uden
+    sammenlignelige beholdninger - ejendomsfondene, uskalerede beholdninger og fonde uden
+    beholdninger - indgår som én position med sin NAV (art "fond"). None uden DKK-tal.
+    """
+    if not fonde or any(f["n"].get("nav_dkk") is None for f in fonde):
         return None
-    dkk, r, f, b = max(kandidater, key=lambda x: x[0])
-    nav = sum(x["n"].get("nav_dkk") or 0 for x in fonde)
-    return dict(navn=r["navn"], fond=f["fund_name"], via=b.get("via"), dkk=dkk,
-                art="underliggende fond" if b["type"] == "fonde" else "porteføljeselskab",
-                andel=dkk / nav if nav else None, dato=b["dato"], udeladt=udeladt)
+    positioner, udeladt = _positionskandidater(fonde, kurser)
+    fondslinjer = [f for f in fonde if f["fund_name"] in udeladt]
+    positioner += [dict(navn=f["fund_name"], art="fond", fonde=[f["fund_name"]], via=None,
+                        dkk=f["n"]["nav_dkk"], dato=f["nav_dato"]) for f in fondslinjer]
+    positioner.sort(key=lambda p: -p["dkk"])
+    nav = sum(f["n"]["nav_dkk"] for f in fonde)
+    linjer = [p | {"andel": p["dkk"] / nav if nav else None} for p in positioner[:antal]]
+    top = sum(p["dkk"] for p in linjer)
+    return dict(linjer=linjer, nav_dkk=nav, top_dkk=top, top_andel=top / nav if nav else None,
+                fondslinjer=[f["fund_name"] for f in fondslinjer])
 
 
 def datotjek(fonde, rapport_dato):
@@ -1125,7 +1205,10 @@ def fordeling(fonde, noegle):
         grupper.setdefault(f[noegle] or "Ikke oplyst", []).append(f)
     resultat = [dict(navn=navn, fonde=g, sum=(s := _gruppesum(g)), andel=andel(s["tilsagn_dkk"]))
                 for navn, g in grupper.items()]
-    resultat.sort(key=lambda g: -(g["sum"]["tilsagn_dkk"] or 0))
+    if noegle == "segment":
+        resultat.sort(key=lambda g: _strategi_plads(g["navn"]))
+    else:
+        resultat.sort(key=lambda g: -(g["sum"]["tilsagn_dkk"] or 0))
     return dict(total=total | {"andel": andel(i_alt)}, grupper=resultat,
                 andele={f["fund_name"]: andel(f["n"].get("tilsagn_dkk")) for f in fonde})
 
@@ -1197,7 +1280,7 @@ EJENDOMSSEKTOR = "REAL_ESTATE"
 
 
 def ejendomsandel(f):
-    """Den del af fondens NAV, der ligger i GICS-sektoren Ejendomme (0 uden branchefordeling)."""
+    """Den del af fondens NAV, der ligger i GICS-sektoren Real Estate (0 uden branchefordeling)."""
     b = f.get("brancher")
     return sum(x["andel"] for x in b["linjer"] if x["top_kode"] == EJENDOMSSEKTOR) if b else 0.0
 
@@ -1205,7 +1288,7 @@ def ejendomsandel(f):
 def opdel_ejendomme(fonde, art):
     """Investors NAV delt i ejendomme og resten, hver med sin egen base for andelene.
 
-    Ejendomme er sektoren Ejendomme på tværs af alle fonde: ejendomsfondene helt og
+    Ejendomme er GICS-sektoren Real Estate på tværs af alle fonde: ejendomsfondene helt og
     ejendomsandelen af de øvrige. {ejendomme: {total_dkk, andel (af hele NAV), fonde: [{navn,
     dkk, andel (af ejendommene)}]}, resten: eksponering(...) af NAV uden ejendomme}. I
     brancherne fjernes sektoren og fondens øvrige sektorer skaleres op; i regionerne antages
@@ -1246,10 +1329,46 @@ def _uden_ejendomme(fonde, art):
     if i_alt <= 0:
         return None, resten
     total = sum(f["n"]["nav_dkk"] for f in fonde)
-    return dict(total_dkk=i_alt, andel=i_alt / total if total else None,
+    # ejendomsandelen af hver fond som sin egen "fond", til ejendommenes fordeling
+    ejd_fonde = [f | {"n": f["n"] | {"nav_dkk": andele[f["fund_name"]] * f["n"]["nav_dkk"]}}
+                 for f in fonde if andele[f["fund_name"]] > 0]
+    return dict(total_dkk=i_alt, andel=i_alt / total if total else None, art=art,
                 fonde=[dict(navn=n, dkk=dkk, andel=dkk / i_alt) for n, dkk in ejendomme],
                 # fonde, der kun delvis er ejendomme; deres andel nævnes i noten
-                blandede=[n for n, _ in ejendomme if andele[n] < 1 - 1e-9]), resten
+                blandede=[n for n, _ in ejendomme if andele[n] < 1 - 1e-9],
+                # i brancherne fordelt på ejendomssegment, i geografien som fondenes eksponering
+                fordeling=(ejendomssegmenter(ejd_fonde) if art == "brancher"
+                           else eksponering(ejd_fonde, art))), resten
+
+
+# Ejendomsfondenes segment (fund.fund.re_sector, lukket af CK_fund_re_sector), på engelsk
+# som GICS-navnene
+EJENDOMSSEGMENTER = {"RESIDENTIAL": "Residential", "OFFICE": "Office", "LOGISTICS": "Logistics",
+                     "RETAIL": "Retail", "HOTEL": "Hotel", "HEALTHCARE": "Healthcare",
+                     "MIXED": "Mixed"}
+SEGMENT_OEVRIGE = "Øvrige"     # ejendomsandelen af en fond uden ejendomssegment
+
+
+def ejendomssegmenter(ejd_fonde):
+    """Ejendommene fordelt på fondenes ejendomssegment (re_sector i rpt.v_fund_master).
+
+    ejd_fonde er fondene med ejendomsandelen af deres NAV som nav_dkk. En fond uden segment
+    (fx en buyout-fond med lidt ejendomme) står under SEGMENT_OEVRIGE, sidst.
+    {total_dkk, grupper: [{kode, navn, dkk, andel, fonde}], uden_segment: [fondsnavne]}.
+    """
+    total = sum(f["n"]["nav_dkk"] for f in ejd_fonde)
+    grupper = {}
+    for f in ejd_fonde:
+        kode = f.get("re_sektor")
+        g = grupper.setdefault(kode, dict(kode=kode, navn=EJENDOMSSEGMENTER.get(
+            kode, kode) if kode else SEGMENT_OEVRIGE, dkk=0.0, fonde=[]))
+        g["dkk"] += f["n"]["nav_dkk"]
+        g["fonde"].append(f["fund_name"])
+    resultat = sorted(grupper.values(), key=lambda g: (g["kode"] is None, -g["dkk"]))
+    for g in resultat:
+        g["andel"] = g["dkk"] / total if total else None
+    return dict(total_dkk=total, grupper=resultat,
+                uden_segment=[f["fund_name"] for f in ejd_fonde if not f.get("re_sektor")])
 
 
 PRIVATE_EQUITY, PRIVATE_CREDIT = "Private Equity", "Private Credit"
@@ -1334,6 +1453,28 @@ def omregn_udvikling_til_dkk(fonde, kurs):
                      ultimo_dkk=ultimo, valuta_dkk=ultimo - primo - kald + udlodning - vaerdi,
                      naevner_dkk=primo + (sum(a * (u["til"] - d).days / dage for d, a, _ in dkk)
                                           if dage else 0))
+
+
+def fortegnsafvigelser(fonde):
+    """[(fund_name, periode, årsag)], hvor den viste værdiændring og afkastet har modsat fortegn.
+
+    Værdiændringen vises i DKK med valutakursændringen, afkastet er Modified Dietz i fondens
+    valuta. årsag er "valuta", når værdiændringen i fondens valuta har samme fortegn som
+    afkastet (valutakursen vender den), ellers "dietz" (en lille eller negativ kapitalbase,
+    fx efter store udlodninger). Uden DKK-beløb eller med et nul springes perioden over.
+    """
+    ud = []
+    for f in fonde:
+        for p, u in f["udvikling"].items():
+            vist = (None if u.get("vaerdi_dkk") is None
+                    else u["vaerdi_dkk"] + u["valuta_dkk"])
+            afkast = u.get("afkast")
+            if not vist or not afkast or (vist > 0) == (afkast > 0):
+                continue
+            ud.append((f["fund_name"], p,
+                       "valuta" if u["vaerdi"] and (u["vaerdi"] > 0) == (afkast > 0)
+                       else "dietz"))
+    return ud
 
 
 def portefoelje_udvikling(fonde):
@@ -1513,10 +1654,11 @@ def investor_rapport(investor_code, as_of=None):
              if f is not None]
     if not fonde:
         raise ValueError(f"Ingen NAV-data for '{investor_code}' pr. {as_of}")
+    fonde.sort(key=strategi_noegle)     # alle slides og Excel viser fondene i denne rækkefølge
     rapport_dato = max(f["nav_dato"] for f in fonde)
     for f in fonde:
         if f["nav_dato"] < rapport_dato:
-            f["noter"].insert(0, f"Seneste NAV er pr. {f['nav_dato']:%d.%m.%Y}.")
+            f["noter"].insert(0, Note(f"Seneste NAV er pr. {f['nav_dato']:%d.%m.%Y}.", "nav"))
     kurser = {v: _dkk_kurs(v, rapport_dato) for v in sorted({f["valuta"] for f in fonde})}
     omregn_til_dkk(fonde, kurser)
     total_dkk = dkk_total(fonde)
@@ -1553,7 +1695,9 @@ def investor_rapport(investor_code, as_of=None):
                               for art in ("brancher", "regioner")},
                 gennemlysning=gennemlysning(fonde),
                 stoerste_eksponering=stoerste_eksponering(fonde, kurser),
+                stoerste_positioner=stoerste_positioner(fonde, kurser),
                 perioder=rapport_perioder, udvikling=portefoelje_udvikling(fonde),
+                fortegnsafvigelser=fortegnsafvigelser(fonde),
                 vaerdibevaegelser=vaerdibevaegelser(fonde, kurser),
                 datotjek=datotjek(fonde, rapport_dato),
                 valuta=fonde[0]["valuta"] if len({f["valuta"] for f in fonde}) == 1 else None,

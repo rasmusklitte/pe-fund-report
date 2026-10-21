@@ -18,7 +18,8 @@ from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
 from . import style
-from .data import EJENDOMSSEKTOR, IKKE_KLASSIFICERET, NAV_SYNLIG, UDEN_GICS
+from .data import (BRANCHEGRUPPER, GICS_STRUKTUR, IKKE_KLASSIFICERET,
+                   NAV_SYNLIG, REGIONER, SEGMENT_OEVRIGE, SEKTORER)
 from .data import uden_selskabsform as _uden_selskabsform
 from .deck import BROED_FONT, L_TEKST, _fjern_tomme_ph, _ny_slide, _saet_ph
 
@@ -299,8 +300,11 @@ def _historik_graf(slide, x, y, w, h, historik):
     return diagram
 
 
-def _beholdningstabel(s, y, beh, f, investor_navn):
-    """Tabel over underliggende fonde eller porteføljeselskaber. Returnerer y under tabellen."""
+def _beholdningstabel(s, y, beh, f, investor_navn, maerker=None):
+    """Tabel over underliggende fonde eller porteføljeselskaber. Returnerer y under tabellen.
+
+    maerker er {kolonnenavn: fodnotemærke}, fx ved Branche og Dagsværdi."""
+    maerker = maerker or {}
     hvem = f"{investor_navn}s andel" if beh["skaleret"] else "hele fonden"
     r_ = beh["raekker"]
     sum_ = lambda k: sum(r[k] or 0 for r in r_)
@@ -329,6 +333,7 @@ def _beholdningstabel(s, y, beh, f, investor_navn):
                     + tal(r) for r in r_]
         raekker.append(["I alt", "", ""] + total)
         bredder, just = [3.2, 1.9, 0.9, 1.1, 1.1, 1.1, 1.1, 0.9], [V, V, C, H, H, H, H, H]
+    raekker[0] = [k + maerker.get(k, "") for k in raekker[0]]
     raekke_h = 0.185 if len(raekker) > 8 else 0.215
     _tekst(s, X0, y, X1 - X0, 0.22, f"{titel} – {hvem} (t{f['valuta']})", 10.5, fed=True,
            farve=SAGE)
@@ -342,9 +347,7 @@ def _industrinote(beh):
     if beh["type"] != "selskaber":
         return ""
     foreloebige = sum(1 for r in beh["raekker"] if r.get("industri_foreloebig"))
-    return (" Branche er selskabets GICS-sektor."
-            + (f" Branchen er en foreløbig klassifikation for {foreloebige} "
-               f"{'selskab' if foreloebige == 1 else 'selskaber'}." if foreloebige else ""))
+    return ("Branche er selskabets GICS-sektor.")
 
 
 def _navnote(f):
@@ -358,8 +361,7 @@ def _navnote(f):
     tekst = ""
     if a:
         retning = "lavere" if a["forskel"] < 0 else "højere"
-        tekst = (f" NAV ({tusind(a['nav'])}) er {tusind(abs(a['forskel']))} {v} {retning} end "
-                 f"dagsværdien i alt ({tusind(a['dagsvaerdi'])})")
+        tekst = f"NAV er {tusind(abs(a['forskel']))} {v} {retning} end dagsværdien i alt"
         if a["ejerandel"] is not None:
             graense = max(NAV_SYNLIG, 0.02 * abs(a["forskel"]))
             dele = []
@@ -382,17 +384,20 @@ def _navnote(f):
     if any(r["udloddet"] for r in beh["raekker"]):
         tekst += (" Total værdi er dagsværdi plus positionernes udlodninger og kan ikke "
                   "sammenlignes direkte med NAV.")
-    return tekst
+    return tekst.strip()
 
 
 def _beholdningskilde(beh, f):
+    """Kilden til beholdningstabellen; branche og NAV-afstemning har deres egne fodnoter."""
     if not beh["skaleret"]:
-        return (f"Porteføljeselskaber pr. {beh['dato']:%d.%m.%Y} er hele fondens tal fra "
-                "forvalterens rapport; ejerandelen kan ikke beregnes, da fondens samlede "
-                "tilsagn ikke er oplyst." + _industrinote(beh))
-    return (f"Fondens beholdninger pr. {beh['dato']:%d.%m.%Y} ganget med ejerandelen. "
-            "Kostpris er tilsagn × indbetalt andel, hvor forvalteren ikke oplyser den; "
-            "TVPI og IRR pr. fond er forvalterens egne." + _industrinote(beh) + _navnote(f))
+        dato = f" pr. {beh['dato']:%d.%m.%Y}" if beh["dato"] != f["nav_dato"] else ""
+        return (f"Porteføljeselskaberne{dato} er fra forvalterens rapport; ejerandelen kan ikke "
+                "beregnes, da fondens samlede tilsagn ikke er oplyst.")
+    return ((f"Beholdningerne er pr. {beh['dato']:%d.%m.%Y}. "
+             if beh["dato"] != f["nav_dato"] else "")
+            + "Kostpris er tilsagn × indbetalt andel, hvor forvalteren ikke oplyser den"
+            + ("; TVPI og IRR pr. fond er forvalterens egne." if beh["type"] == "fonde"
+               else "."))
 
 
 GL_TOP = 10               # positioner i feedertabellen; resten samles i "Øvrige"
@@ -491,9 +496,8 @@ def _gennemlysningsblok(s, y, beh, f, investor_navn, bund=Y_NOTER):
 
 def _gennemlysningskilde(beh, f, investor_navn):
     via = _uden_selskabsform(beh["via"])
-    tekst = (f"{f['fund_name']} investerer i {via}. Tabellen viser positionerne i {via} pr. "
-             f"{beh['dato']:%d.%m.%Y}, med {investor_navn}s NAV i {f['fund_name']} fordelt "
-             "efter dagsværdi, så i alt svarer til NAV.")
+    tekst = (f"Positionerne er pr. {beh['dato']:%d.%m.%Y}." if beh["dato"] != f["nav_dato"]
+             else "")
     if beh["type"] != "fonde":
         tekst += " Trancher i samme selskab er lagt sammen; multiple er (dagsværdi + udloddet) / kostpris."
     blokke = [b for b, _ in _feederfordeling(beh, f)]
@@ -517,7 +521,7 @@ def _gennemlysningskilde(beh, f, investor_navn):
     if kredit:
         tekst += (f" {via} har trukket {million(kredit)} mio. {f['valuta']} på sin "
                   "kreditfacilitet; den gearing er ikke vist som ekstra eksponering.")
-    return tekst
+    return tekst.strip()
 
 
 BRO_X = 7.55              # værdibroens venstre kant på fondssiden
@@ -604,14 +608,14 @@ def _ejendomsblok(s, y, beh, f, investor_navn, bund=Y_NOTER):
 
 def _ejendomskilde(beh, f, investor_navn):
     skala = _ejendomsskala(beh, f)
-    andel = (f", ganget med {investor_navn}s andel af fondens NAV ({pct(skala, 2)})" if skala
-             else ", hele fonden")
+    andel = "" if skala else ", hele fonden"
     fakta = beh.get("fakta") or {}
     gaeld = ("Gæld er fondens aktiver i alt fratrukket NAV." if fakta.get("TOTAL_ASSETS")
              else "Gæld m.m. er fondens NAV fratrukket ejendommenes værdi (GAV).")
     grundlag = "; ".join(f"{r['navn']} {r['sektor'].lower()}" for r in beh["raekker"]
                          if r["sektor"])
-    return (f"Ejendommene og gælden er forvalterens værdier pr. {beh['dato']:%d.%m.%Y}{andel}. "
+    dato = f" pr. {beh['dato']:%d.%m.%Y}" if beh["dato"] != f["nav_dato"] else ""
+    return (f"Ejendommene og gælden er forvalterens værdier{dato}{andel}. "
             + gaeld
             + (f" Værdigrundlag: {grundlag}." if grundlag
                else " Forvalteren oplyser ikke værdien pr. ejendom."))
@@ -631,8 +635,13 @@ def fondsside(prs, f, investor_navn):
 
     # øverste halvdel: beskrivelse + tre nøgletalsblokke adskilt af lodrette streger
     kol = [(X0, 3.25), (4.22, 2.45), (6.98, 1.95), (9.24, X1 - 9.24)]
-    _tekst(s, kol[0][0], Y_TOP, kol[0][1], 0.22, "Kort beskrivelse af fonden", 10.5,
-           fed=True, farve=SAGE)
+    # mærkerne sættes, før noternes længde bestemmer, hvor indholdet skal slutte
+    fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger.")
+    forankrede = {"andel", "indbetalt", "resttilsagn", "nav", "irr", "beskrivelse"}
+    m = lambda felt: fod.maerker(x for x in f["noter"] if getattr(x, "felt", None) == felt)
+    beskrivelse_m = m("beskrivelse")
+    _tekst(s, kol[0][0], Y_TOP, kol[0][1], 0.22, f"Kort beskrivelse af fonden{beskrivelse_m}",
+           10.5, fed=True, farve=SAGE)
     _streg(s, kol[0][0], Y_TOP + 0.25, kol[0][0] + kol[0][1], Y_TOP + 0.25)
     _tekst(s, kol[0][0], Y_TOP + 0.34, kol[0][1], Y_BUND - Y_TOP - 0.34,
            f["beskrivelse"] or IKKE_OPLYST, 9.5)
@@ -648,34 +657,39 @@ def fondsside(prs, f, investor_navn):
         ("Vintage", f["vintage"] or IKKE_OPLYST)], bredder=(1, 1.45))
     _blok(s, *kol[2], f"{investor_navn}s tilsagn", [
         ("Tilsagn", tusind(n["tilsagn"])),
-        ("Ejerandel", pct(n["andel"], 2)),
-        ("Indbetalt kapital", tusind(n["indbetalt"])),
+        ("Ejerandel" + m("andel"), pct(n["andel"], 2)),
+        ("Indbetalt kapital" + m("indbetalt"), tusind(n["indbetalt"])),
         ("PICC", pct(n["picc"])),
-        ("Resttilsagn", tusind(n["resttilsagn"]))])
-    _blok(s, *kol[3], "Nøgletal", [
-        ("Udlodninger", tusind(n["udloddet"])),
-        ("NAV", tusind(n["nav"])),
-        ("DPI", gange(n["dpi"])),
-        ("TVPI", gange(n["tvpi"])),
-        ("IRR", pct(n["irr"]))])
-
-    # noterne først, så deres længde bestemmer, hvor indholdet skal slutte
-    beh = f["beholdninger"]
-    if beh and beh.get("via"):
-        kilde = _gennemlysningskilde(beh, f, investor_navn)
-    elif beh and beh["type"] == "ejendomme":
-        kilde = _ejendomskilde(beh, f, investor_navn)
-    elif beh:
-        kilde = _beholdningskilde(beh, f)
-    else:
-        kilde = "Forvalteren oplyser ikke fondens porteføljeselskaber."
-    noter = [kilde] + f["noter"]
+        ("Resttilsagn" + m("resttilsagn"), tusind(n["resttilsagn"]))])
+    gp_m = ""
     if n["gp_irr"] is not None or n["gp_tvpi"] is not None:
         gp = [t for t in (f"TVPI {gange(n['gp_tvpi'])}" if n["gp_tvpi"] is not None else None,
-                          f"IRR {pct(n['gp_irr'] / 100)}" if n["gp_irr"] is not None else None) if t]
-        noter.append("Forvalterens egne nøgletal: " + ", ".join(gp) + ".")
-    notetekst = "Kilde: Forvalterrapporter og egne beregninger. " + " ".join(noter)
-    noter_y = _noter_y(notetekst)
+                          f"IRR {pct(n['gp_irr'] / 100)}" if n["gp_irr"] is not None else None)
+              if t]
+        gp_m =fod.maerke("Forvalterens egne nøgletal: " + ", ".join(gp) + ".")
+    _blok(s, *kol[3], f"Nøgletal{gp_m}", [
+        ("Udlodninger", tusind(n["udloddet"])),
+        ("NAV" + m("nav"), tusind(n["nav"])),
+        ("DPI", gange(n["dpi"])),
+        ("TVPI", gange(n["tvpi"])),
+        ("IRR" + m("irr"), pct(n["irr"]))])
+
+    beh = f["beholdninger"]
+    tabel_m = {}
+    if beh and beh.get("via"):
+        fod.generel(_gennemlysningskilde(beh, f, investor_navn))
+    elif beh and beh["type"] == "ejendomme":
+        fod.generel(_ejendomskilde(beh, f, investor_navn))
+    elif beh:
+        fod.generel(_beholdningskilde(beh, f))
+        tabel_m = {"Branche": fod.maerke(_industrinote(beh)),
+                   "Dagsværdi": fod.maerke(_navnote(f)) if beh["skaleret"] else ""}
+    else:
+        fod.generel("Forvalteren oplyser ikke fondens porteføljeselskaber.")
+    # resten står som generelle noter; en afvigende dato (fx primo for udviklingen) skal altid
+    # stå i noterne, også hvor tallet, den gælder, ikke vises
+    fod.generel([x for x in f["noter"] if getattr(x, "felt", None) not in forankrede])
+    noter_y = _noter_y(fod.tekst())
     bund = noter_y - 0.05
 
     # nederste halvdel: beholdninger, hvor de findes; historik og værdibro, hvor der er plads
@@ -689,12 +703,12 @@ def fondsside(prs, f, investor_navn):
         _ejendomsblok(s, y, beh, f, investor_navn, bund=bund)
         y = bund
     elif beh:
-        y = _beholdningstabel(s, y, beh, f, investor_navn)
+        y = _beholdningstabel(s, y, beh, f, investor_navn, tabel_m)
     # en tabel over underliggende fonde står alene; graf og værdibro kun ved selskaber og fonde
     # uden beholdninger, og kun hvor der er plads
     if bund - y >= 1.5 and not (beh and beh["type"] == "fonde"):
         _historik_og_bro(s, y, f, bund=bund)
-    _tekst(s, X0, noter_y, X1 - X0, 0.5, notetekst, 7, kursiv=True)
+    fod.tegn(s)
     return s
 
 
@@ -703,9 +717,55 @@ NOTE_LINJE = 0.118        # linjehøjde ved 7 pt
 NOTE_BUND = 6.28          # noterne skal slutte over Petersen & Partners-linjen og sidefoden
 
 
-def _noter_y(tekst):
-    """Hvor noterne skal starte: Y_NOTER, eller højere, hvis de ellers løber ned i logoet."""
-    return min(Y_NOTER, NOTE_BUND - ceil(len(tekst) / NOTE_TEGN) * NOTE_LINJE)
+def _noter_y(tekst, y=Y_NOTER):
+    """Hvor noterne skal starte: y, eller højere, hvis de ellers løber ned i logoet."""
+    return min(y, NOTE_BUND - ceil(len(tekst) / NOTE_TEGN) * NOTE_LINJE)
+
+
+SUPERSKRIFT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+class Fodnoter:
+    """Noterne nederst på én slide: generelle noter og nummererede fodnoter.
+
+    En note om en bestemt kolonne, række, kasse eller et tal får et fodnotemærke dér
+    (maerke() giver »¹«, og noten står som »¹ …«); en note om hele sliden (kilde, kurser,
+    datoer) er generel og står uden nummer først. Numrene følger den rækkefølge, mærkerne
+    sættes i, og samme tekst får samme nummer.
+    """
+
+    def __init__(self, kilde=None):
+        self.generelle = []
+        self.numre = {}
+        self.generel(kilde)
+
+    def maerke(self, tekst):
+        """Mærket til tekst (»¹«), eller "" uden tekst."""
+        if not tekst:
+            return ""
+        return str(self.numre.setdefault(tekst, len(self.numre) + 1)).translate(SUPERSKRIFT)
+
+    def maerker(self, tekster):
+        """Mærkerne til flere noter efter hinanden (»¹²«)."""
+        return "".join(self.maerke(t) for t in tekster)
+
+    def generel(self, *tekster):
+        for t in tekster:
+            if isinstance(t, (list, tuple)):
+                self.generel(*t)
+            elif t and t not in self.generelle:
+                self.generelle.append(t)
+
+    def tekst(self):
+        nummererede = [f"{str(nr).translate(SUPERSKRIFT)} {t}"
+                       for t, nr in sorted(self.numre.items(), key=lambda x: x[1])]
+        return " ".join(self.generelle + nummererede)
+
+    def tegn(self, s, y=Y_NOTER):
+        """Noterne ved y, eller højere, hvis de ellers løber ned i logoet."""
+        tekst = self.tekst()
+        if tekst:
+            _tekst(s, X0, _noter_y(tekst, y), X1 - X0, 0.5, tekst, 7, kursiv=True)
 
 
 KORT_FAST = 1.84          # alt på et virksomhedskort undtagen beskrivelsen (tommer)
@@ -726,11 +786,12 @@ def _kort_hoejde(beskrivelser):
     return KORT_FAST + max(0.22, KORT_LINJE * linjer)
 
 
-def _profilkort(s, x, y, w, h, r, info, valuta):
+def _profilkort(s, x, y, w, h, r, info, valuta, ejer_m=""):
     """Ét kort: navn, industri (GICS-sektor), closing, søjler for investering og dagsværdi, og valgfri tekst.
 
     Søjlerne har deres egen skala pr. kort. Fælles skala ville gøre alle andre kort ulæselige,
-    når ét selskab er mange gange større end resten; TVPI under kortet giver forholdet.
+    når ét selskab er mange gange større end resten; TVPI under kortet giver forholdet. ejer_m
+    er fodnotemærket efter ejerandelen.
     """
     _bjaelke(s, x, y, w, h, CREAM)
     indryk = 0.10
@@ -746,7 +807,7 @@ def _profilkort(s, x, y, w, h, r, info, valuta):
     if info.get("stemmer") is not None:
         ejer.append(f"stemmer {_andel(info['stemmer'])}")
     if ejer:
-        _tekst(s, x + indryk, y + 0.52, tw, 0.16, ", ".join(ejer), 7.5, fed=True)
+        _tekst(s, x + indryk, y + 0.52, tw, 0.16, ", ".join(ejer) + ejer_m, 7.5, fed=True)
 
     if info.get("beskrivelse"):
         _tekst(s, x + indryk, y + 0.70, tw, h - KORT_FAST, info["beskrivelse"], 7.5)
@@ -783,9 +844,17 @@ def virksomhedsprofiler(prs, f, investor_navn, maks_pr_slide=KORT_KOL * 2):
         _titel(s, f"Porteføljeselskaber{suffiks}")
         _fjern_tomme_ph(s)
         _logo(s, f["logo"])
+        fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger.")
+        beloeb_m = fod.maerke(
+            "Beløbene er ikke investors andel. Hvert kort har sin egen søjleskala, så "
+            "søjlehøjder kan ikke sammenlignes på tværs af kortene - det er TVPI, der viser "
+            "forholdet.")
+        ejer_m = fod.maerke("Ejerandel og stemmeandel er oplyst af forvalteren." if any(
+            (info.get(r["navn"]) or {}).get(k) is not None for r in side
+            for k in ("ejerandel", "stemmer")) else None)
         _tekst(s, X0, Y_UNDERTITEL, X1 - X0, 0.22,
                f"{f['fund_name']}  ·  {investor_navn}  ·  pr. {beh['dato']:%d.%m.%Y}  ·  "
-               f"hele fonden, beløb i mio. {f['valuta']}", 9.5)
+               f"hele fonden, beløb i mio. {f['valuta']}{beloeb_m}", 9.5)
 
         kort_w = (X1 - X0 - KORT_LUFT * (KORT_KOL - 1)) / KORT_KOL
         n_raekker = ceil(len(side) / KORT_KOL)
@@ -796,14 +865,8 @@ def virksomhedsprofiler(prs, f, investor_navn, maks_pr_slide=KORT_KOL * 2):
         for i, r in enumerate(side):
             _profilkort(s, X0 + (i % KORT_KOL) * (kort_w + KORT_LUFT),
                         Y_TOP + (i // KORT_KOL) * (kort_h + KORT_LUFT), kort_w, kort_h, r,
-                        info.get(r["navn"]) or {}, f["valuta"])
-
-        noter = ["Kilde: Forvalterrapporter og egne beregninger.",
-                 ("Beløbene er hele fondens investering og dagsværdi, ikke investors andel. "
-                  "Hvert kort har sin egen søjleskala, så søjlehøjder kan ikke sammenlignes "
-                  "på tværs af kortene - det er TVPI, der viser forholdet."),
-                 "Ejerandel og stemmeandel er oplyst af forvalteren."]
-        _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+                        info.get(r["navn"]) or {}, f["valuta"], ejer_m)
+        fod.tegn(s)
         lavede.append(s)
     return lavede
 
@@ -884,9 +947,9 @@ def _kolonnehoved(s, kol, hoved_h):
         _streg(s, x + ind_v, y_streg, x + b - ind_h, y_streg)
 
 
-def _fondscelle(s, r, f, kol, i, y, raekke_h):
+def _fondscelle(s, r, f, kol, i, y, raekke_h, maerke=""):
     """Rækkens faste kolonner: fond, forvalterlogo og de af type, vintage, løbetid og valuta,
-    som kol har (fundet ved kolonnenavnet)."""
+    som kol har (fundet ved kolonnenavnet). maerke er fodnotemærker efter fondsnavnet."""
     if i % 2 == 1:
         _bjaelke(s, X0 - 0.05, y, X1 - X0 + 0.1, raekke_h, CREAM)
     if i:
@@ -898,7 +961,7 @@ def _fondscelle(s, r, f, kol, i, y, raekke_h):
     afvigende = _foraeldede(r).get(f["fund_name"])
     _tekst(s, _lt_x(0, kol), y + 0.20, kol[0][1] - 0.1,
            raekke_h - (0.46 if afvigende else 0.26),
-           f["fund_name"] + _datomarkering(r, f["fund_name"]), 9,
+           f["fund_name"] + _datomarkering(r, f["fund_name"]) + maerke, 9,
            anker=MSO_ANCHOR.MIDDLE)
     if afvigende:
         _tekst(s, _lt_x(0, kol), y + raekke_h - 0.26, kol[0][1], 0.16,
@@ -941,6 +1004,16 @@ def kaldt_netto(n):
     """
     kaldt = n.get("kaldt")
     return (n["indbetalt"] if kaldt is None else kaldt or 0) - (n.get("recallable") or 0)
+
+
+def _resttilsagnsnoter(f):
+    """Noterne til en fonds resttilsagn i tabellerne på tværs af fonde: rabat og genkaldelige
+    udlodninger, med fondens beløb. Hvad begreberne betyder, står i Definitioner."""
+    n, v = f["n"], f["valuta"]
+    return ([f"Forvalteren har givet {style._dk(n['rabat'], 0)} {v} i rabat på kapitalkald."]
+            if (n.get("rabat") or 0) > 0 else []) + \
+        ([f"Resttilsagnet indeholder genkaldelige udlodninger på "
+          f"{tusind(n['recallable'])} t{v}."] if (n.get("recallable") or 0) else [])
 
 
 def _rabatnote(fonde):
@@ -1025,11 +1098,13 @@ def lange_tilsagn(prs, r):
     if _rabatnote(fonde):
         noter.append(_rabatnote(fonde))
     noter += _datonoter(r)
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+    fod = Fodnoter()
+    fod.generel(noter)
+    fod.tegn(s)
     return s
 
 
-# Kolonnerne i Tilsagn på tværs af fonde: Lange tilsagn med tal i stedet for vandfaldet
+# Kolonnerne i Investeringer (tilsagn på tværs af fonde): Lange tilsagn med tal i stedet for vandfaldet
 # (valutaen står på linjen over kolonnenavnet, som på fordelingssiderne)
 TPT_KOL = [("Fond", 2.57, V), ("Forvalter", 1.20, C), ("Type", 0.95, C), ("Vintage", 0.58, C),
            ("Valuta", 0.45, C), ("Tilsagn", 0.73, C), ("PICC", 0.58, C),
@@ -1038,8 +1113,9 @@ TPT_KOL = [("Fond", 2.57, V), ("Forvalter", 1.20, C), ("Type", 0.95, C), ("Vinta
 TPT_VALUTA, TPT_TILSAGN, TPT_PICC, TPT_REST_DKK, TPT_NAV_DKK, TPT_TVPI = 4, 5, 6, 7, 8, 9
 
 
-def _kursnote(r, beloeb="Resttilsagn og NAV"):
-    """Kilden til DKK-omregningen, med kurserne for de fremmede valutaer."""
+def _kursnote(r):
+    """Kurserne for de fremmede valutaer. Kilden (Danmarks Nationalbank) og at beløbene er i
+    DKK, står allerede på sliden."""
     kurser = {v: k for v, k in (r.get("kurser") or {}).items() if v != "DKK" and k}
     if not kurser:
         return None
@@ -1047,20 +1123,30 @@ def _kursnote(r, beloeb="Resttilsagn og NAV"):
     for v, (kurs, dato) in sorted(kurser.items()):
         dele.append(f"{v} {style._dk(kurs, 4)}"
                     + (f" pr. {dato:%d.%m.%Y}" if dato != r["as_of"] else ""))
-    return (f"{beloeb} er omregnet til DKK med Danmarks Nationalbanks kurs pr. "
-            f"{r['as_of']:%d.%m.%Y} (DKK pr. enhed: {'; '.join(dele)}).")
+    return f"Kurser pr. {r['as_of']:%d.%m.%Y} (DKK pr. enhed): {'; '.join(dele)}."
 
 
 def tilsagn_paa_tvaers(prs, r):
     """Som Lange tilsagn, men med tilsagn, PICC, resttilsagn i DKK og NAV i DKK som tal."""
-    s = _oversigtsslide(prs, r, "Tilsagn på tværs af fonde",
+    s = _oversigtsslide(prs, r, "Investeringer",
                         enhed="beløb i tusinde; tilsagn i fondens valuta, "
                               "resttilsagn og NAV i DKK")
     fonde, t, td = r["fonde"], r["total"], r.get("total_dkk")
     n_raekker = len(fonde) + bool(t or td)
     hoved_h = 0.44                                   # to linjer: valuta over kolonnenavn
-    raekke_h = min(0.95, (Y_NOTER - Y_TOP - hoved_h - 0.1) / max(n_raekker, 1))
-    _kolonnehoved(s, TPT_KOL, hoved_h)
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    hoved_m = {}
+    kurs_m = fod.maerke(_kursnote(r))
+    hoved_m |= {TPT_REST_DKK: kurs_m, TPT_NAV_DKK: kurs_m}
+    # rækkernes mærker sættes, før noternes længde bestemmer rækkehøjden
+    fond_m = {f["fund_name"]: (fod.maerker(_fondsnoter(f, "indbetalt")),
+                               fod.maerker(_resttilsagnsnoter(f))) for f in fonde}
+    i_alt_m = "" if t or not td else fod.maerke(
+        "Fondene har forskellige valutaer, så i alt-rækken har kun beløbene i DKK og TVPI.")
+    fod.generel(_datonoter(r))
+    raekke_h = min(0.95, (_noter_y(fod.tekst()) - Y_TOP - hoved_h - 0.1) / max(n_raekker, 1))
+    _kolonnehoved(s, [(navn + hoved_m.get(j, ""), b, just)
+                      for j, (navn, b, just) in enumerate(TPT_KOL)], hoved_h)
 
     maks_tvpi = max([f["n"]["tvpi"] or 0 for f in fonde] + [1])
     maks_irr = max([abs(f["n"]["irr"] or 0) for f in fonde] + [0.01])
@@ -1072,9 +1158,10 @@ def tilsagn_paa_tvaers(prs, r):
     y = Y_TOP + hoved_h
     for i, f in enumerate(fonde):
         n = f["n"]
-        _fondscelle(s, r, f, TPT_KOL, i, y, raekke_h)
+        _fondscelle(s, r, f, TPT_KOL, i, y, raekke_h, fond_m[f["fund_name"]][0])
         for j, tekst in ((TPT_TILSAGN, tusind(n["tilsagn"])), (TPT_PICC, pct(n.get("picc"))),
-                         (TPT_REST_DKK, tusind(n.get("resttilsagn_dkk"))),
+                         (TPT_REST_DKK, tusind(n.get("resttilsagn_dkk"))
+                          + fond_m[f["fund_name"]][1]),
                          (TPT_NAV_DKK, tusind(n.get("nav_dkk")))):
             tal(j, y, tekst)
         _tvpi_irr_soejler(s, TPT_KOL, TPT_TVPI, y, raekke_h, n, maks_tvpi, maks_irr,
@@ -1084,8 +1171,8 @@ def tilsagn_paa_tvaers(prs, r):
     if t or td:
         # DKK-beløbene kan altid lægges sammen; resten kun når fondene har samme valuta
         _bjaelke(s, X0 - 0.05, y, X1 - X0 + 0.1, raekke_h, SAGE_LYS)
-        _tekst(s, _lt_x(0, TPT_KOL), y, TPT_KOL[0][1], raekke_h, "I alt", 9, fed=True,
-               anker=MSO_ANCHOR.MIDDLE)
+        _tekst(s, _lt_x(0, TPT_KOL), y, TPT_KOL[0][1], raekke_h, "I alt" + i_alt_m, 9,
+               fed=True, anker=MSO_ANCHOR.MIDDLE)
         celler = [(TPT_VALUTA, r["valuta"] or "")]
         if t:
             celler += [(TPT_TILSAGN, tusind(t["tilsagn"])), (TPT_PICC, pct(t["picc"])),
@@ -1100,38 +1187,29 @@ def tilsagn_paa_tvaers(prs, r):
         for j, tekst in celler:
             tal(j, y, tekst, fed=True)
 
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.",
-             "PICC er indbetalt kapital i forhold til tilsagnet."]
-    kursnote = _kursnote(r)
-    if kursnote:
-        noter.append(kursnote)
-    if td and not t:
-        noter.append("Fondene har forskellige valutaer, så i alt-rækken viser beløbene i DKK "
-                     "og TVPI beregnet som (udloddet + NAV) / indbetalt, alt omregnet til DKK; "
-                     "tilsagn, PICC og IRR vises ikke.")
-    if any((f["n"].get("recallable") or 0) for f in fonde):
-        noter.append("Resttilsagnet indeholder genkaldelige udlodninger, som forvalteren kan "
-                     "kalde igen.")
-    if _rabatnote(fonde):
-        noter.append(_rabatnote(fonde))
-    noter += _datonoter(r)
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+    fod.tegn(s)
     return s
 
 
 def portefoeljeoversigt(prs, r):
     """Én række pr. fond med nøgletal og en samlet række for porteføljen."""
     s = _oversigtsslide(prs, r, "Porteføljeoversigt")
+    t = r["total"]
+    fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger.")
+    irr_m = ""
+    if not t:
+        fod.generel("Fondene har forskellige valutaer, så der vises ingen samlet række.")
     raekker = [["Fond", "Strategi", "Vintage", "Løbetid", "Valuta", "Tilsagn", "Indbetalt",
-                "PICC", "Udloddet", "NAV", "DPI", "TVPI", "IRR"]]
+                "PICC", "Udloddet", "NAV", "DPI", "TVPI", f"IRR{irr_m}"]]
     for f in r["fonde"]:
         n = f["n"]
+        indbetalt_m = fod.maerker(_fondsnoter(f, "indbetalt"))
         raekker.append([f["fund_name"] + _datomarkering(r, f["fund_name"]),
                         f["segment"] or IKKE_OPLYST, f["vintage"] or IKKE_OPLYST,
-                        f["loebetid"] or IKKE_OPLYST, f["valuta"], tusind(n["tilsagn"]), tusind(n["indbetalt"]), pct(n["picc"]),
+                        f["loebetid"] or IKKE_OPLYST, f["valuta"], tusind(n["tilsagn"]),
+                        tusind(n["indbetalt"]) + indbetalt_m, pct(n["picc"]),
                         tusind(n["udloddet"]), tusind(n["nav"]), gange(n["dpi"]),
                         gange(n["tvpi"]), pct(n["irr"])])
-    t = r["total"]
     if t:
         raekker.append(["I alt", "", "", "", r["valuta"], tusind(t["tilsagn"]),
                         tusind(t["indbetalt"]), pct(t["picc"]), tusind(t["udloddet"]),
@@ -1140,13 +1218,8 @@ def portefoeljeoversigt(prs, r):
            bredder=[2.65, 1.6, 0.7, 0.95, 0.65, 0.88, 0.88, 0.75, 0.88, 0.88, 0.65, 0.65, 0.7],
            just=[V, V, C, C, C, H, H, H, H, H, H, H, H], raekke_h=_raekke_h(len(raekker)), pt=9,
            hoved=True, total=bool(t), zebra=True)
-    noter = ["Kilde: Forvalterrapporter og egne beregninger.",
-             "IRR er beregnet på investors cash flows og NAV; samlet IRR er poolet over alle fonde."
-             if t else "Fondene har forskellige valutaer, så der vises ingen samlet række."]
-    noter += _datonoter(r)
-    noter += [f"{f['fund_name']}: {n_}" for f in r["fonde"] for n_ in f["noter"]
-              if n_.startswith("Indbetalt kapital")]
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+    fod.generel(_datonoter(r))
+    fod.tegn(s)
     return s
 
 
@@ -1183,6 +1256,59 @@ def _fakta_flise(slide, x, y, w, h, tal, label):
     _tekst(slide, x, y + h * 0.60, w, h * 0.35, label, 8, just=C)
 
 
+POSITIONSTYPE = {"porteføljeselskab": "Porteføljeselskab",
+                  "underliggende fond": "Underliggende fond", "fond": "Fond (ikke gennemlyst)"}
+
+
+def stoerste_positioner(prs, r):
+    """Porteføljens største positioner i DKK på tværs af fondene, med andel af investors NAV.
+
+    Data fra data.stoerste_positioner(): selskaber og underliggende fonde som investors andel
+    af dagsværdien, og fonde uden sammenlignelige beholdninger som én linje med deres NAV.
+    None uden DKK-tal.
+    """
+    sp = r.get("stoerste_positioner")
+    if not sp or not sp["linjer"]:
+        return None
+    s = _oversigtsslide(prs, r, "Største positioner", enhed="investors andel, beløb i tusinde DKK")
+
+    def via(p):
+        if len(p["fonde"]) > 2:
+            return f"{len(p['fonde'])} fonde"
+        return ", ".join(_kort_fondsnavn(f) + _datomarkering(r, f) for f in p["fonde"])
+
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    pos_m = fod.maerke("Positionerne er fra forvalternes beholdningsoversigter; samme position "
+                       "i flere fonde er lagt sammen.")
+    andel_m = fod.maerke("Beholdningerne summerer ikke til NAV, da fondene også har likvider, "
+                         "hensat carried interest og andre poster.")
+    fond_m = fod.maerke("Fonden har ingen beholdninger, der kan gennemlyses på samme måde, og "
+                        "indgår med sin NAV som én position (lys bjælke)."
+                        if sp["fondslinjer"] else None)
+    linjer = sp["linjer"]
+    raekker = [["", f"Position{pos_m}", "Type", "Via fond", "tDKK", f"Andel af NAV{andel_m}", ""]]
+    raekker += [[str(i), p["navn"], POSITIONSTYPE[p["art"]] + (fond_m if p["art"] == "fond"
+                                                               else ""),
+                 "–" if p["art"] == "fond" else via(p), tusind(p["dkk"]), pct(p["andel"]), ""]
+                for i, p in enumerate(linjer, 1)]
+    raekker.append(["", f"De {len(linjer)} største i alt", "", "", tusind(sp["top_dkk"]),
+                    pct(sp["top_andel"]), ""])
+    bredder = [0.3, 3.05, 1.45, 2.6, 0.9, 0.95, 1.13]
+    raekke_h = _raekke_h(len(raekker), maks=0.27)
+    _tabel(s, X0, Y_TOP, X1 - X0, raekker, bredder=bredder, just=[H, V, V, V, H, H, V],
+           raekke_h=raekke_h, pt=8.5, hoved=True, total=True, zebra=True)
+    # bjælkerne i sidste kolonne, skaleret til den største position
+    bx = X0 + (X1 - X0) * sum(bredder[:-1]) / sum(bredder) + 0.08
+    bw = (X1 - X0) * bredder[-1] / sum(bredder) - 0.16
+    maks = max(p["dkk"] for p in linjer) or 1
+    for i, p in enumerate(linjer, 1):
+        _bjaelke(s, bx, Y_TOP + i * raekke_h + raekke_h * 0.3, bw * max(p["dkk"], 0) / maks,
+                 raekke_h * 0.4, SAGE_LYS if p["art"] == "fond" else SAGE)
+
+    _afslut_noter(s, r, fod, Y_NOTER)
+    return s
+
+
 def gennemlysning(prs, r):
     """Hvad porteføljen reelt ejer: fondenes beholdninger samlet og rangeret efter dagsværdi."""
     g = r["gennemlysning"]
@@ -1199,9 +1325,16 @@ def gennemlysning(prs, r):
     top = g["linjer"][:10]
     oevrige = g["linjer"][10:]
     y = Y_TOP + flise_h + 0.30
+    fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger. Fondenes beholdninger pr. "
+                   f"{g['dato']:%d.%m.%Y} ganget med ejerandelen.")
+    sum_m = fod.maerke(
+        f"Summen af beholdningerne ({tusind(g['dagsvaerdi'])} t{r['valuta']}) afviger fra "
+        f"fondenes samlede NAV ({tusind(g['nav'])} t{r['valuta']}), fordi likvider, "
+        "omkostninger og carried interest på fondsniveau ikke indgår i forvalternes "
+        "beholdningsoversigter.")
     _tekst(s, X0, y, X1 - X0, 0.22,
-           f"Største eksponeringer – {r['navn']}s andel (t{r['valuta']})", 10.5, fed=True,
-           farve=SAGE)
+           f"Største eksponeringer – {r['navn']}s andel (t{r['valuta']}){sum_m}", 10.5,
+           fed=True, farve=SAGE)
     y += 0.28
 
     # søjlediagram til venstre som rigtigt diagram, så tallene kan redigeres i PowerPoint
@@ -1232,7 +1365,9 @@ def gennemlysning(prs, r):
 
     # tabellen til højre gentager de samme ti linjer med kostpris og TVPI
     tab_x = X0 + graf_w + 0.16
-    raekker = [["Eksponering", "Via", "Kostpris", "Dagsværdi", "TVPI"]]
+    via_m = fod.maerke("Linjerne blander underliggende fonde og porteføljeselskaber; kolonnen "
+                       "»Via« viser hvilken fond eksponeringen kommer fra.")
+    raekker = [["Eksponering", f"Via{via_m}", "Kostpris", "Dagsværdi", "TVPI"]]
     raekker += [[x["navn"], _kort_fondsnavn(x["fond"]), tusind(x["kostpris"]),
                  tusind(x["dagsvaerdi"]), gange(x["tvpi"])] for x in top]
     if oevrige:
@@ -1243,19 +1378,11 @@ def gennemlysning(prs, r):
            just=[V, V, H, H, H], raekke_h=raekke_h, pt=7.5, hoved=True, total=bool(oevrige),
            zebra=True)
 
-    noter = [("Kilde: Forvalterrapporter og egne beregninger. Fondenes beholdninger pr. "
-              f"{g['dato']:%d.%m.%Y} ganget med ejerandelen."),
-             ("Linjerne blander underliggende fonde og porteføljeselskaber; kolonnen »Via« "
-              "viser hvilken fond eksponeringen kommer fra."),
-             (f"Summen af beholdningerne ({tusind(g['dagsvaerdi'])} t{r['valuta']}) afviger fra "
-              f"fondenes samlede NAV ({tusind(g['nav'])} t{r['valuta']}), fordi likvider, "
-              "omkostninger og carried interest på fondsniveau ikke indgår i "
-              "forvalternes beholdningsoversigter.")]
     if g["uden_beholdninger"]:
-        noter.append("Forvalteren oplyser ikke beholdninger for: "
-                     + ", ".join(g["uden_beholdninger"]) + ".")
-    noter += _datonoter(r)
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+        fod.generel("Forvalteren oplyser ikke beholdninger for: "
+                    + ", ".join(g["uden_beholdninger"]) + ".")
+    fod.generel(_datonoter(r))
+    fod.tegn(s)
     return s
 
 
@@ -1301,9 +1428,24 @@ def fordeling(prs, r, noegle, titel):
                 gange(x["tvpi"]), pct(andel)]
 
     t = fd["total"]
-    # valutaen står over kolonnenavnet; beløbene er i tusinde, som undertitlen siger
-    hoved = ["", "Valuta", "Tilsagn", "DKK\nTilsagn", "DKK\nNAV", "DKK\nResttilsagn", "TVPI",
-             "Andel af\ntilsagn"]
+
+    def fodnoter():
+        """Hver side får sine egne noter; mærkerne sættes i kolonnehovedets rækkefølge."""
+        fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+        tilsagn_m = fod.maerke(
+            "Tilsagn i fondens valuta vises på i alt-rækkerne kun, hvor fondene har samme valuta."
+            if t["valuta"] is None or any(g["sum"]["valuta"] is None for g in fd["grupper"])
+            else None)
+        kurs_m = fod.maerke(_kursnote(r))
+        tvpi_m = andel_m = ""
+        if any("foreløbig" in x for f in r["fonde"] for x in f.get("noter", [])):
+            fod.generel(f"{VISTE_NAVNE[noegle]} er en foreløbig klassifikation.")
+        fod.generel(_datonoter(r))
+        # valutaen står over kolonnenavnet; beløbene er i tusinde, som undertitlen siger
+        hoved = ["", "Valuta", f"Tilsagn{tilsagn_m}", f"DKK\nTilsagn{kurs_m}",
+                 f"DKK\nNAV{kurs_m}", f"DKK\nResttilsagn{kurs_m}", f"TVPI{tvpi_m}",
+                 f"Andel af\ntilsagn{andel_m}"]
+        return fod, hoved
     blokke = [[(linje("I alt", t["valuta"], t, t["andel"]), "total")]]
     for g in fd["grupper"]:
         blokke.append(
@@ -1317,31 +1459,18 @@ def fordeling(prs, r, noegle, titel):
     sider = _del_paa_sider(blokke, plads)
     raekke_h = _raekke_h(max(len(x) for x in sider) + 2, mindst=FORD_MIN_H)
 
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.",
-             "Andel er tilsagnet i DKK i forhold til porteføljens samlede tilsagn i DKK."]
-    noter.append("TVPI på i alt-rækkerne er (udloddet + NAV) / indbetalt, alt omregnet til DKK "
-                 "med kursen på rapportdatoen.")
-    if t["valuta"] is None or any(g["sum"]["valuta"] is None for g in fd["grupper"]):
-        noter.append("Tilsagn i fondens valuta vises på i alt-rækkerne kun, hvor fondene har "
-                     "samme valuta.")
-    kursnote = _kursnote(r, "Fondenes beløb")
-    if kursnote:
-        noter.append(kursnote)
-    if any("foreløbig" in x for f in r["fonde"] for x in f["noter"]):
-        noter.append("Geografi og investeringsstrategi er en foreløbig klassifikation.")
-    noter += _datonoter(r)
-
     lavede = []
     for nr, side in enumerate(sider):
         s = _oversigtsslide(prs, r, titel if nr == 0 else f"{titel} (fortsat)",
                             enhed="beløb i tusinde; tilsagn i fondens valuta, øvrige beløb i DKK")
+        fod, hoved = fodnoter()
         raekker = [hoved] + [celler for celler, _ in side]
         _tabel(s, X0, Y_TOP, X1 - X0, raekker,
                bredder=[3.3, 0.65, 1.0, 1.1, 1.1, 1.25, 0.75, 0.95],
                just=[V, C, H, H, H, H, H, H], raekke_h=raekke_h, pt=8.5, hoved=True,
                grupper=[i for i, (_, art) in enumerate(side, 1) if art == "gruppe"],
                totaler=[i for i, (_, art) in enumerate(side, 1) if art == "total"])
-        _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+        fod.tegn(s)
         lavede.append(s)
     return lavede
 
@@ -1365,10 +1494,7 @@ GEO_FARVER = {"EUROPE": [SAGE, _rgb("#AEB39C"), SAGE_MID, _rgb(style.GRID), OLIV
               "NORTH_AMERICA": [TERRA, TAUPE, _rgb(style.PPIM_BROWN)],
               "ROW": [ROED, _rgb(style.PPIM_RED_LIGHT), _rgb(style.PPIM_TAUPE)]}
 # PowerPoint ombryder etiketterne ved en fast bredde og deler lange navne midt i ordet
-BR_ETIKET_ORDDELING = {"Informationsteknologi": "Informations-\nteknologi",
-                       "Konsumentvarer": "Konsument-\nvarer",
-                       "Kommunikationstjenester": "Kommunikations-\ntjenester",
-                       "Diversificeret (fondsandele)": "Diversificeret\n(fondsandele)",
+BR_ETIKET_ORDDELING = {"Diversificeret (fondsandele)": "Diversificeret\n(fondsandele)",
                        "Øvrige Europa og ikke opdelt": "Øvrige Europa\nog ikke opdelt",
                        "Storbritannien og Irland": "Storbritannien\nog Irland",
                        "Nordamerika, ikke opdelt": "Nordamerika,\nikke opdelt",
@@ -1378,49 +1504,49 @@ BR_ETIKET_ORDDELING = {"Informationsteknologi": "Informations-\nteknologi",
                        "Mellemøsten og Afrika": "Mellemøsten\nog Afrika",
                        "Global, ikke opdelt": "Global,\nikke opdelt"}
 BR_UDEN_GICS = _rgb("#A6A6A0")   # Diversificeret og Ikke klassificeret, når de får egen skive
-BR_OEVRIGE = _rgb("#CFCFC9")
+BR_OEVRIGE = _rgb("#CFCFC9")    # kun »Øvrige« og »Øvrige fonde«
+# én fast farve pr. GICS-sektor på alle slides og i alle dele, så samme farve altid er samme
+# sektor; gråt er forbeholdt »Øvrige« og det, der ikke er GICS
+SEKTOR_FARVER = {"FINANCIALS": TAUPE, "INDUSTRIALS": TERRA, "HEALTH_CARE": SAGE_LYS,
+                 "INFORMATION_TECHNOLOGY": _rgb(style.PPIM_BROWN),
+                 "CONSUMER_DISCRETIONARY": OLIVEN, "CONSUMER_STAPLES": _rgb(style.PPIM_RED_LIGHT),
+                 "COMMUNICATION_SERVICES": SAGE, "MATERIALS": ROED, "UTILITIES": SAGE_MID,
+                 "ENERGY": _rgb(style.PPIM_BEIGE),
+                 # husfarverne er brugt af sektorerne og regionerne; en dæmpet skifer skiller
+                 # ejendommene tydeligt fra Information Technologys brune
+                 "REAL_ESTATE": _rgb("#5F6B73")}
 
 
 def _skiver(poster):
     """Skiverne i cirkeldiagrammet: (navn, dkk, andel, farve), og farven pr. post.
 
     poster er [(navn, dkk, andel, farve)] i tabellens rækkefølge. Poster under BR_MIN samles
-    i én grå skive »Øvrige« (en enkelt lille post står under sit eget navn).
+    i én grå skive »Øvrige« (en enkelt lille post står under sit eget navn i sin egen farve).
     """
     skiver, farver, oevrige = [], {}, []
     for navn, dkk, andel, farve in poster:
         if (andel or 0) < BR_MIN:
-            oevrige.append((navn, dkk, andel))
+            oevrige.append((navn, dkk, andel, farve))
             continue
         skiver.append((navn, dkk, andel, farve))
         farver[navn] = farve
-    if oevrige:
-        navn = oevrige[0][0] if len(oevrige) == 1 else "Øvrige"
-        skiver.append((navn, sum(x[1] for x in oevrige), sum(x[2] or 0 for x in oevrige),
+    if len(oevrige) == 1:
+        # en enkelt lille post står under sit eget navn og i sin egen farve; gråt er kun »Øvrige«
+        navn, dkk, andel, farve = oevrige[0]
+        skiver.append((navn, dkk, andel, farve))
+        farver[navn] = farve
+    elif oevrige:
+        skiver.append(("Øvrige", sum(x[1] for x in oevrige), sum(x[2] or 0 for x in oevrige),
                        BR_OEVRIGE))
         farver |= {x[0]: BR_OEVRIGE for x in oevrige}
     return skiver, farver, [x[0] for x in oevrige]
 
 
-def _brancheskiver(sektorer, faste=None):
-    """Én skive pr. sektor i BR_FARVER-rækkefølge; de uklassificerede i gråt.
-
-    faste er {sektor: farve} fra en anden side, så samme sektor får samme farve; de øvrige
-    sektorer får de farver, der ikke er brugt.
-    """
-    faste = {n: f for n, f in (faste or {}).items() if f not in (BR_OEVRIGE, BR_UDEN_GICS)}
-    ledige = [f for f in BR_FARVER if f not in faste.values()] or BR_FARVER
-    poster, i = [], 0
-    for s in sektorer:
-        if s["kode"] in UDEN_GICS:
-            farve = BR_UDEN_GICS
-        elif s["navn"] in faste:
-            farve = faste[s["navn"]]
-        else:
-            farve = ledige[i % len(ledige)]
-            i += 1 if (s["andel"] or 0) >= BR_MIN else 0
-        poster.append((s["navn"], s["dkk"], s["andel"], farve))
-    return _skiver(poster)
+def _brancheskiver(sektorer):
+    """Én skive pr. sektor i sektorens faste farve (SEKTOR_FARVER); det, der ikke er GICS, i
+    gråt."""
+    return _skiver([(s["navn"], s["dkk"], s["andel"], SEKTOR_FARVER.get(s["kode"], BR_UDEN_GICS))
+                    for s in sektorer])
 
 
 def _geoskiver(regioner):
@@ -1519,12 +1645,14 @@ def _eksponeringsnoter(r, b, fordeling, fordelingen, klassifikationen):
     return noter
 
 
-def _afslut_noter(s, r, noter, y=BR_NOTER):
-    kursnote = _kursnote(r, "Fondenes NAV")
-    if kursnote:
-        noter.append(kursnote)
-    noter += _datonoter(r)
-    _tekst(s, X0, y, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+def _afslut_noter(s, r, fod, y=BR_NOTER):
+    """Kursnoten og datonoterne som generelle noter, og noterne ved y. fod er Fodnoter eller en
+    liste af generelle noter."""
+    if not isinstance(fod, Fodnoter):
+        noter, fod = fod, Fodnoter()
+        fod.generel(noter)
+    fod.generel(_kursnote(r), _datonoter(r))
+    fod.tegn(s, y)
 
 
 def _diversificeret_noter(b):
@@ -1567,14 +1695,20 @@ def brancher(prs, r):
     return s
 
 
-def _benchmarknote(r):
-    """Kilden til benchmarkkolonnerne, når der er et benchmark."""
-    bm = r.get("benchmark")
-    if not bm:
+def _benchmarknote(r, art="brancher"):
+    """Kilden til benchmarket, når der er et: sektorvægtene på branchesiderne, regionvægtene
+    på geografisiderne."""
+    bm = r.get("benchmark") or {}
+    indeks = bm.get("indeks" if art == "brancher" else "regioner")
+    if not indeks:
         return []
     dato = f" pr. {bm['dato']:%d.%m.%Y}" if bm.get("dato") else ""
-    return [f"Benchmark er sektorvægtene i {_navne(list(bm['indeks']))}{dato} (MSCI); "
-            f"diversificerede fondsandele har ingen sektor i indeksene."]
+    # indeksets navn står ved båndet, så noten nævner det kun, hvor der er flere
+    navn = f" i {_navne(list(indeks))}" if len(indeks) > 1 else ""
+    if art == "brancher":
+        return [f"Sektorvægtene{navn}{dato}; diversificerede fondsandele har ingen sektor i "
+                "indekset."]
+    return [f"Regionvægtene{navn}{dato}."]
 
 
 # lyse farver får sort tekst i branchekortet; de mørke får hvid
@@ -1586,17 +1720,18 @@ KORT_MINDST = 0.03        # mindste areal i et kort (andel af fladen), så kasse
 
 
 def _gulv(vaerdier, mindst=KORT_MINDST):
-    """Værdierne med de mindste løftet til mindst x summen, og om nogen blev løftet.
+    """Værdierne med de mindste løftet til mindst x summen, og indeksene på de løftede.
 
-    Kun arealet ændres; kasserne viser stadig de faktiske tal, og noten siger det.
+    Kun arealet ændres; kasserne viser stadig de faktiske tal, og deres fodnote siger det
+    (GULVNOTE).
     """
     gulv = mindst * sum(vaerdier)
-    return [max(v, gulv) if v > 0 else v for v in vaerdier], any(0 < v < gulv for v in vaerdier)
+    return ([max(v, gulv) if v > 0 else v for v in vaerdier],
+            {i for i, v in enumerate(vaerdier) if 0 < v < gulv})
 
 
-def _gulvnote(loeftet):
-    return (["De mindste kasser er gjort større, så de kan bære en etiket; tallene i dem er de "
-             "faktiske."] if loeftet else [])
+GULVNOTE = ""
+GULV_PLADS = "\u2063"     # pladsholder for gulvmærket, mens etiketten prøves af i kassen
 
 
 def _treemap(vaerdier, x, y, w, h):
@@ -1638,20 +1773,27 @@ def _treemap(vaerdier, x, y, w, h):
     return kasser
 
 
-def _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra=None):
+def _kortkasse(s, kasse, navn, dkk, andel, farve, fod=None, maerke="", loeftet=False):
     """Én kasse i branche- og geografikortet: navn, beløb og andel, så stort som kassen tillader.
 
-    ekstra er en linje mere (fx benchmarkvægten), som kun vises i de store kasser. En høj, smal
-    kasse får navn og procent på tværs (lodret). Returnerer, om navnet kom med.
+    maerke er fodnotemærker efter navnet (fx »Øvrige«). loeftet: kassen er forstørret (_gulv)
+    og får GULVNOTE. En høj, smal kasse får navn og procent på tværs (lodret). Er der kun
+    plads til procenten, får kassen én kort fodnote i fod med navn og beløb (og at den er
+    forstørret). Returnerer, om navnet kom med.
     """
+    fod = fod if fod is not None else Fodnoter()
+    # gulvmærket sættes først, når det vides, om navnet kommer med; indtil da en pladsholder
+    maerke += GULV_PLADS if loeftet else ""
     kx, ky, kw, kh = kasse
     f = _bjaelke(s, kx, ky, kw, kh, farve)
     f.line.fill.solid()
     f.line.color.rgb, f.line.width = HVID, Pt(2)          # hvide mellemrum mellem kasserne
     tekstfarve = SORT if farve in KORT_LYSE else HVID
     ind = 0.08 if min(kw, kh) >= 0.45 else 0.03     # små kasser: mindre luft, mere plads til tekst
+    vist = navn + maerke
     # et navn, der er bredere end kassen, deles som i cirkeldiagrammet i stedet for midt i ordet
-    passer = lambda pt: len(navn) * pt * 0.0085 <= kw - 2 * ind
+    passer = lambda pt: len(vist) * pt * 0.0085 <= kw - 2 * ind
+    delt = BR_ETIKET_ORDDELING.get(navn, navn) + maerke
 
     def har_plads(linjer, bredde=kw, hoejde=kh):
         # et navn, der stadig ombrydes, fylder flere linjer; ellers løber procenten ud af kassen
@@ -1663,16 +1805,13 @@ def _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra=None):
         return brugt <= hoejde - 2 * ind + 0.05 and ord_ <= bredde - 2 * ind + 0.02
 
     store = mellem = None
+    uden = False
     if kw >= 1.5 and kh >= 0.85:
-        store = [(navn if passer(13) else BR_ETIKET_ORDDELING.get(navn, navn), 13, True),
+        store = [(vist if passer(13) else delt, 13, True),
                  (f"{tusind(dkk)} tDKK", 10.5, False), (pct(andel), 10.5, True)]
-        if ekstra:
-            store.append((ekstra, 8.5, False))
     if kw >= 0.95 and kh >= 0.6:
-        mellem = [(navn if passer(9.5) else BR_ETIKET_ORDDELING.get(navn, navn), 9.5, True),
+        mellem = [(vist if passer(9.5) else delt, 9.5, True),
                   (f"{tusind(dkk)} tDKK", 8.5, False), (pct(andel), 8.5, True)]
-        if ekstra and kh >= 0.85:
-            mellem.append((ekstra, 7.5, False))
     if store and har_plads(store):
         linjer = store
     elif mellem and har_plads(mellem):
@@ -1682,15 +1821,26 @@ def _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra=None):
     else:
         # en lille kasse skal stadig sige, hvad den er: navn og procent så småt som nødvendigt,
         # og på tværs, hvis kassen er høj og smal
-        smaa = [[(navn, 8, True), (pct(andel), 8, True)], [(f"{navn} {pct(andel)}", 8, True)],
-                [(navn, 7, True), (pct(andel), 7, True)], [(f"{navn} {pct(andel)}", 7, True)],
-                [(f"{navn} {pct(andel)}", 6, True)]]
+        smaa = [[(vist, 8, True), (pct(andel), 8, True)], [(f"{vist} {pct(andel)}", 8, True)],
+                [(vist, 7, True), (pct(andel), 7, True)], [(f"{vist} {pct(andel)}", 7, True)],
+                [(f"{vist} {pct(andel)}", 6, True)]]
         linjer = next((x for x in smaa if har_plads(x)), None)
         if linjer is None and kh > kw:
-            linjer = next((x for x in smaa if har_plads(x, kh, kw)), None)
+            # på tværs helst navn og procent på hver sin linje; én linje kun med god margen, da
+            # en drejet etiket, der lige akkurat ombrydes, sender procenten ud for sig selv
+            linjer = (next((x for x in smaa if len(x) == 2 and har_plads(x, kh, kw)), None)
+                      or next((x for x in smaa if len(x) == 1 and har_plads(x, kh * 0.85, kw)),
+                              None))
             if linjer:
-                return _lodret_etiket(s, kasse, ind, linjer, tekstfarve)
-        linjer = linjer or [(pct(andel), 7, True)]
+                return _lodret_etiket(s, kasse, ind, _med_gulvmaerke(linjer, fod), tekstfarve)
+        if linjer is None:
+            # kun procenten: én fodnote siger, hvilken kasse det er
+            uden_m = fod.maerke(f"{navn}, {tusind(dkk)} tDKK"
+                                + ("" if loeftet else "") + ".")
+            linjer = [(f"{uden_m}{maerke.replace(GULV_PLADS, '')} {pct(andel)}".lstrip(), 7,
+                       True)]
+            uden = True
+    linjer = _med_gulvmaerke(linjer, fod)
     tf = _tekst(s, kx + ind, ky + ind, max(kw - 2 * ind, 0.1), max(kh - 2 * ind, 0.1),
                 linjer[0][0], linjer[0][1], fed=linjer[0][2], farve=tekstfarve)
     for tekst, pt, fed in linjer[1:]:
@@ -1699,7 +1849,15 @@ def _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra=None):
         run.text = tekst
         run.font.name, run.font.size, run.font.bold = BROED_FONT, Pt(pt), fed
         run.font.color.rgb = tekstfarve
-    return len(linjer) > 1 or linjer[0][0] != pct(andel)
+    return not uden
+
+
+def _med_gulvmaerke(linjer, fod):
+    """Linjerne med gulvmærkets pladsholder skiftet ud med mærket til GULVNOTE."""
+    if not any(GULV_PLADS in t for t, _, _ in linjer):
+        return linjer
+    m = fod.maerke(GULVNOTE)
+    return [(t.replace(GULV_PLADS, m), pt, fed) for t, pt, fed in linjer]
 
 
 def _lodret_etiket(s, kasse, ind, linjer, farve):
@@ -1718,56 +1876,177 @@ def _lodret_etiket(s, kasse, ind, linjer, farve):
     return True
 
 
-def _branchekasser(s, b, x, y, w, h, bm_navn=None, bm=None, faste=None):
+def _branchekasser(s, b, x, y, w, h, fod=None, base="NAV", del_navn=None):
     """Sektorerne i b som kasser i fladen (x, y, w, h).
 
-    Returnerer (navnene i »Øvrige«, om små kasser blev gjort større).
-
-    bm er {sektorkode: vægt} for indekset bm_navn, vist i de store kasser; »Øvrige« får de
-    samlede sektorers sum. faste giver sektorerne samme farver som på en anden side.
+    Returnerer (navnene i »Øvrige«, om små kasser blev gjort større). fod (Fodnoter) får
+    noterne til »Øvrige« (sektorerne under BR_MIN af base, i delen del_navn), til
+    Diversificeret og til de løftede kasser, med mærket i kassen.
     """
-    bm = bm or {}
-    skiver, _, smaa = _brancheskiver(b["grupper"], faste)
+    fod = fod if fod is not None else Fodnoter()
+    skiver, _, smaa = _brancheskiver(b["grupper"])
     vaerdier, loeftet = _gulv([max(dkk, 0.0) for _, dkk, _, _ in skiver])
     kasser = _treemap(vaerdier, x, y, w, h)
     kode = {g["navn"]: g["kode"] for g in b["grupper"]}
-    for kasse, (navn, dkk, andel, farve) in zip(kasser, skiver):
-        koder = [kode[n] for n in smaa] if navn not in kode else [kode[navn]]
-        vaegt = sum(bm[k] for k in koder if k in bm) if any(k in bm for k in koder) else None
-        ekstra = f"{bm_navn} {pct(vaegt)}" if bm_navn and vaegt is not None else None
-        _kortkasse(s, kasse, navn, dkk, andel, farve, ekstra)
+    diversificeret = dict(zip([g["navn"] for g in b["grupper"] if g["kode"] == "DIVERSIFIED"],
+                              _diversificeret_noter(b)))
+    for i, (kasse, (navn, dkk, andel, farve)) in enumerate(zip(kasser, skiver)):
+        note = None
+        if navn == "Øvrige" and len(smaa) > 1:
+            # én note til »Øvrige«, med forklaringen af Diversificeret, hvis den ligger i den
+            note = " ".join([f"»Øvrige«{f' i {del_navn}' if del_navn else ''} samler "
+                             f"{_navne(smaa)}, hver under {pct(BR_MIN, 0)} af {base}."]
+                            + [diversificeret[n] for n in smaa if n in diversificeret])
+        elif kode.get(navn) == "DIVERSIFIED":
+            note = diversificeret.get(navn)
+        _kortkasse(s, kasse, navn, dkk, andel, farve, fod, fod.maerke(note), i in loeftet)
     return smaa, loeftet
 
 
-def branchekort(prs, r):
-    """Branchefordelingen som kort over hele sliden: én kasse pr. sektor, arealet er andelen.
+# ---------- benchmarkbåndene under kortene ----------
 
-    Kasserne har cirkeldiagrammets farver og samme »Øvrige« for sektorer under BR_MIN, så de
-    to sider kan læses sammen. Hver kasse viser sektor, beløb i tDKK og andel af NAV. None
-    uden DKK-tal for alle fonde.
+BM_BAAND_H = 0.17         # højden af ét indeks' bånd (tommer)
+BM_RAEKKE_LUFT = 0.05     # mellem båndene
+BM_ETIKET_H = 0.14        # over det første og under det sidste bånd: etiketter til smalle stykker
+BM_TOP_LUFT = 0.08        # mellem kortet og båndene
+BM_NAVN_W = 0.85          # indeksets navn til venstre for båndet
+BM_PT = 7
+BM_NOTER_LINJE = 0.12    # noterne rykker en linje op på sider, der i forvejen er fulde
+
+
+def _bm_hoejde(raekker):
+    """Hvad båndene fylder under kortet; 0 uden benchmark."""
+    if not raekker:
+        return 0.0
+    n = len(raekker)
+    return BM_TOP_LUFT + 2 * BM_ETIKET_H + n * BM_BAAND_H + (n - 1) * BM_RAEKKE_LUFT
+
+
+def _bm_tekstbredde(tekst, pt=BM_PT):
+    return len(tekst) * pt * 0.0085 + 0.06
+
+
+def _benchmarkbaand(s, y, raekker, maerke=""):
+    """Ét 100 %-bånd pr. indeks under kortet, fra y: stykkerne i kategoriernes farver, så de
+    kan sammenlignes med kasserne over dem.
+
+    raekker er [(indeksnavn, [(navn, vægt, farve)])]; maerke står efter indeksets navn. Et
+    stykke viser navn og vægt, eller kun
+    vægten, når navnet ikke er plads til; er heller ikke den plads, står vægten over det første
+    bånd eller under det sidste.
+    """
+    x, w = X0 + BM_NAVN_W, X1 - X0 - BM_NAVN_W
+    by = y + BM_TOP_LUFT + BM_ETIKET_H
+    for i, (indeks, stykker) in enumerate(raekker):
+        _tekst(s, X0, by, BM_NAVN_W - 0.05, BM_BAAND_H, indeks + maerke, 7.5, fed=True,
+               anker=MSO_ANCHOR.MIDDLE)
+        total = sum(v for _, v, _ in stykker) or 1.0
+        sx = x
+        for navn, vaegt, farve in stykker:
+            sw = w * vaegt / total
+            f = _bjaelke(s, sx, by, sw, BM_BAAND_H, farve)
+            f.line.fill.solid()
+            f.line.color.rgb, f.line.width = HVID, Pt(1)
+            tekstfarve = SORT if farve in KORT_LYSE else HVID
+            etiket = next((t for t in (f"{navn} {pct(vaegt)}", pct(vaegt))
+                           if _bm_tekstbredde(t) <= sw), None)
+            if etiket:
+                _tekst(s, sx, by, sw, BM_BAAND_H, etiket, BM_PT, fed=True, farve=tekstfarve,
+                       just=C, anker=MSO_ANCHOR.MIDDLE)
+            elif i in (0, len(raekker) - 1):
+                # udenfor: over det første bånd, under det sidste
+                over = i == 0
+                ly = by - BM_ETIKET_H if over else by + BM_BAAND_H
+                lw = _bm_tekstbredde(pct(vaegt), 6.5)
+                _tekst(s, sx + sw / 2 - lw / 2, ly, lw, BM_ETIKET_H, pct(vaegt), 6.5,
+                       just=C, anker=MSO_ANCHOR.BOTTOM if over else MSO_ANCHOR.TOP)
+            sx += sw
+        by += BM_BAAND_H + BM_RAEKKE_LUFT
+
+
+def _viste_sektorer(fordelinger):
+    """Sektorkoderne, der har egen kasse i mindst én af fordelingerne (ikke i »Øvrige«)."""
+    viste = set()
+    for b in fordelinger:
+        _, farver, _ = _brancheskiver(b["grupper"])
+        viste |= {g["kode"] for g in b["grupper"]
+                  if farver.get(g["navn"], BR_OEVRIGE) != BR_OEVRIGE}
+    return viste
+
+
+def _bm_sektorer(r):
+    """Båndene til branchekortene: [(indeks, [(sektor, vægt, farve)])], største først.
+
+    Alle branchekort viser det samme bånd, så indeksets tal er ens på tværs af sliderne:
+    indekset, som det er, og sektorer uden egen kasse i hele porteføljens kort samlet i
+    »Øvrige« sidst, som i det kort.
+    """
+    viste = _viste_sektorer([r["brancher"]]) if r.get("brancher") else set()
+    raekker = []
+    for indeks, vaegte in ((r.get("benchmark") or {}).get("indeks") or {}).items():
+        egne = [k for k in vaegte if k in viste]
+        andre = [k for k in vaegte if k not in viste]
+        if len(andre) == 1:              # én sektor alene står under sit eget navn, som i kortet
+            egne, andre = egne + andre, []
+        stykker = sorted(((SEKTORER.get(k, k), vaegte[k], SEKTOR_FARVER.get(k, BR_UDEN_GICS))
+                          for k in egne), key=lambda x: -x[1])
+        if andre:
+            stykker.append(("Øvrige", sum(vaegte[k] for k in andre), BR_OEVRIGE))
+        if stykker:
+            raekker.append((indeks, stykker))
+    return raekker
+
+
+def _bm_regioner(r):
+    """Båndene til geografikortet: [(indeks, [(region, vægt, farve)])] i regionernes farver."""
+    return [(indeks, sorted(((REGIONER.get(k, k), v, (GEO_FARVER.get(k) or [BR_UDEN_GICS])[0])
+                             for k, v in vaegte.items()), key=lambda x: -x[1]))
+            for indeks, vaegte in ((r.get("benchmark") or {}).get("regioner") or {}).items()
+            if vaegte]
+
+
+def _bm_maerke(fod, noter):
+    """Ét mærke ved indeksets navn til benchmarkets kilde og forklaringen af båndene."""
+    return fod.maerke(" ".join(noter))
+
+
+def _bm_baandnote(raekker, art, hele=True):
+    """hele: sliden er hele porteføljens kort; ellers er båndet det samme som dér."""
+    if not raekker:
+        return []
+    if art == "brancher" and not hele:
+        return ["»Øvrige« er sektorerne uden egen kasse."]
+    if art == "brancher":
+        return ["Farverne er kassernes; »Øvrige« er sektorerne uden egen kasse."]
+    return [""]
+
+
+def branchekort(prs, r):
+    """Branchefordelingen for hele porteføljen, ejendommene medregnet som sektoren Real Estate:
+    én kasse pr. sektor over hele sliden, arealet er andelen.
+
+    Kasserne har sektorernes faste farver og »Øvrige« for sektorer under BR_MIN. Hver kasse
+    viser sektor, beløb i tDKK og andel af NAV. None uden DKK-tal for alle fonde.
     """
     b = r.get("brancher")
     if not b:
         return None
-    s = _oversigtsslide(prs, r, "Branchefordeling – overblik",
+    s = _oversigtsslide(prs, r, "Branchefordeling – hele porteføljen",
                         enhed="investors NAV, beløb i tusinde DKK")
-    # det første indeks (ACWI) som sammenligning i kassen
-    indeks = (r.get("benchmark") or {}).get("indeks") or {}
-    bm_navn, bm = next(iter(indeks.items()), (None, {}))
-    smaa, loeftet = _branchekasser(s, b, X0, Y_TOP, X1 - X0, BR_NOTER - 0.1 - Y_TOP, bm_navn,
-                                   bm)
-
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Kassernes "
-             "areal er sektorens andel af investors NAV, fordelt som på siden Branchefordeling; "
-             "sektorerne følger GICS."]
-    if len(smaa) > 1:
-        noter.append(f"»Øvrige« samler {_navne([n.lower() for n in smaa])}, hver under "
-                     f"{pct(BR_MIN, 0)} af NAV.")
-    noter += _gulvnote(loeftet)
-    noter += _diversificeret_noter(b)
-    noter += _eksponeringsnoter(r, b, "branchefordeling", "Branchefordelingen", "Branchen")
-    noter += _benchmarknote(r)
-    _afslut_noter(s, r, noter)
+    raekker = _bm_sektorer(r)
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
+                   "Kassernes areal er sektorens andel, fordelt efter "
+                   "forvalterens branchefordeling eller beholdningernes dagsværdi, med "
+                   "feederfondene gennemlyst; sektorerne følger GICS, og ejendommene indgår som "
+                   "Real Estate.")
+    # noterne fylder en linje mere end på geografisiden (Øvrige, Diversificeret, benchmark)
+    h = EJD_NOTER - 0.1 - Y_TOP - _bm_hoejde(raekker)
+    _branchekasser(s, b, X0, Y_TOP, X1 - X0, h, fod)
+    if raekker:
+        _benchmarkbaand(s, Y_TOP + h, raekker, _bm_maerke(
+            fod, _benchmarknote(r) + _bm_baandnote(raekker, "brancher")))
+    fod.generel(_eksponeringsnoter(r, b, "branchefordeling", "Branchefordelingen", "Branchen"))
+    _afslut_noter(s, r, fod, EJD_NOTER)
     return s
 
 
@@ -1786,59 +2065,60 @@ def _regionsramme(s, kasse):
 
 
 def regionskort(prs, r):
-    """Geografien som kort over hele sliden: én kasse pr. region i cirkeldiagrammets farve.
-    None uden DKK-tal for alle fonde.
+    """Geografien for hele porteføljen, ejendommene medregnet: én kasse pr. region i regionens
+    farve over hele sliden. None uden DKK-tal for alle fonde.
     """
     b = _kun_regioner(r.get("regioner"))
     if not b:
         return None
-    s = _oversigtsslide(prs, r, "Geografisk eksponering – overblik",
+    s = _oversigtsslide(prs, r, "Geografisk eksponering – hele porteføljen",
                         enhed="investors NAV, beløb i tusinde DKK")
-    oevrige_noter, for_smaa, loeftet = _regionskasser(s, b, X0, Y_TOP, X1 - X0,
-                                                      BR_NOTER - 0.1 - Y_TOP)
-
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Kassernes "
-             "areal er regionens andel af investors NAV, fordelt som på siden Geografisk "
-             "eksponering."]
-    noter += _regionsnoter(oevrige_noter, for_smaa)
-    noter += _gulvnote(loeftet)
-    noter += _eksponeringsnoter(r, b, "geografisk fordeling", "Den geografiske fordeling",
-                                "Geografien")
-    _afslut_noter(s, r, noter)
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
+                   "Kassernes areal er regionens andel, fordelt efter "
+                   "forvalterens geografiske fordeling eller beholdningernes dagsværdi, med "
+                   "feederfondene gennemlyst.")
+    raekker = _bm_regioner(r)
+    h = BR_NOTER - 0.1 - Y_TOP - _bm_hoejde(raekker)
+    oevrige_noter, _ = _regionskasser(s, b, X0, Y_TOP, X1 - X0, h, fod)
+    if raekker:
+        _benchmarkbaand(s, Y_TOP + h, raekker, _bm_maerke(
+            fod, _benchmarknote(r, "regioner") + _bm_baandnote(raekker, "regioner")))
+    fod.generel(_regionsnoter(oevrige_noter),
+                _eksponeringsnoter(r, b, "geografisk fordeling", "Den geografiske fordeling",
+                                   "Geografien"))
+    _afslut_noter(s, r, fod)
     return s
 
 
-def _regionsnoter(oevrige_noter, for_smaa):
+def _regionsnoter(oevrige_noter):
     noter = []
-    if for_smaa:
-        noter.append(f"{_navne(for_smaa)} har ikke plads til sit navn i kortet.")
     if oevrige_noter:
         noter.append("; ".join(oevrige_noter) + f", hver under {pct(BR_MIN, 0)} af NAV.")
     return noter
 
 
-def _regionskasser(s, b, x, y, w, h):
+def _regionskasser(s, b, x, y, w, h, fod=None):
     """Regionerne i b som kasser i fladen (x, y, w, h), hver delt i sine delregioner.
 
-    Returnerer (»Øvrige«-noterne, regionerne, der er for små til tekst, om små kasser blev
-    gjort større).
+    Returnerer (»Øvrige«-noterne, om små kasser blev gjort større); fod (Fodnoter) får
+    noterne til de løftede kasser og kasserne uden plads til navnet (_kortkasse).
     """
+    fod = fod if fod is not None else Fodnoter()
     regioner_ = [g for g in b["grupper"] if g["dkk"] > 0]
     vaerdier, loeftet = _gulv([g["dkk"] for g in regioner_])
     kasser = _treemap(vaerdier, x, y, w, h)
-    oevrige_noter, for_smaa = [], []
-    for kasse, g in zip(kasser, regioner_):
+    oevrige_noter = []
+    for i, (kasse, g) in enumerate(zip(kasser, regioner_)):
         familie = GEO_FARVER.get(g["kode"]) or [BR_UDEN_GICS]
         kx, ky, kw, kh = kasse
         if not g["under"] or kw < 1.2 or kh < 0.9:
-            if not _kortkasse(s, kasse, g["navn"], g["dkk"], g["andel"], familie[0]):
-                # plads til procenten, men ikke navnet: noten siger, hvad kassen er
-                for_smaa.append(f"{g['navn']} ({tusind(g['dkk'])} tDKK, {pct(g['andel'])})")
+            _kortkasse(s, kasse, g["navn"], g["dkk"], g["andel"], familie[0], fod,
+                       loeftet=i in loeftet)
             _regionsramme(s, kasse)
             continue
         # båndet øverst: kun regionens navn. Regionens beløb står allerede fordelt i
         # delregionerne under det; stod det også i båndet, ville sliden tælle det to gange og
-        # summere til 200 %. Regionernes totaler står på siden Geografisk eksponering.
+        # summere til 200 %.
         baand = _bjaelke(s, kx, ky, kw, GEO_HOVED_H, GEO_HOVED)
         baand.line.fill.background()
         _tekst(s, kx + 0.08, ky, kw - 0.16, GEO_HOVED_H, g["navn"], 10, fed=True, farve=HVID,
@@ -1857,18 +2137,25 @@ def _regionskasser(s, b, x, y, w, h):
                                      f"{_navne([u['navn'] for u in smaa])}")
         poster = [p for p in poster if p[1] > 0]
         vaerdier, indre_loeftet = _gulv([p[1] for p in poster])
-        loeftet |= indre_loeftet
         indre = _treemap(vaerdier, kx, ky + GEO_HOVED_H, kw, kh - GEO_HOVED_H)
-        for k, (navn, dkk, andel, farve) in zip(indre, poster):
-            _kortkasse(s, k, navn, dkk, andel, farve)
+        for j, (k, (navn, dkk, andel, farve)) in enumerate(zip(indre, poster)):
+            _kortkasse(s, k, navn, dkk, andel, farve, fod, loeftet=j in indre_loeftet)
+        loeftet = loeftet | {(i, j) for j in indre_loeftet}
         _regionsramme(s, kasse)
-    return oevrige_noter, for_smaa, loeftet
+    return oevrige_noter, loeftet
 
 
 # ---------- overblikkene med ejendommene for sig ----------
 
-EJD_FARVER = [_rgb(style.PPIM_BROWN), TAUPE, _rgb(style.PPIM_TAUPE), _rgb(style.PPIM_BEIGE)]
-EJD_MIN_W = 2.4           # ejendomsdelens mindste bredde (tommer), så fondsnavnene kan stå
+# ejendomssegmenterne i Real Estate-farvens familie (skifer), hvert med sin faste nuance, som
+# delregionerne i deres regions familie; uden segment er »Øvrige« i samme lysegrå som andre
+# »Øvrige«
+EJD_SEGMENT_FARVER = {"RESIDENTIAL": _rgb("#4B565E"), "OFFICE": _rgb("#7F8B93"),
+                      "LOGISTICS": _rgb("#3C464D"), "RETAIL": _rgb("#9AA4AA"),
+                      "HOTEL": _rgb("#66727A"), "HEALTHCARE": _rgb("#B8C0C5"),
+                      "MIXED": _rgb("#CDD3D6")}
+KORT_LYSE |= {EJD_SEGMENT_FARVER[k] for k in ("RETAIL", "HEALTHCARE", "MIXED")}
+EJD_MIN_W = 2.4           # ejendomsdelens mindste bredde (tommer), så navnene kan stå
 EJD_LUFT = 0.15           # mellemrum mellem de to dele
 EJD_NOTER = BR_NOTER - 0.12   # en linje mere til noterne: delene skal også forklares
 
@@ -1899,17 +2186,21 @@ def _delbredder(andele, w, mindst):
         faste |= for_smalle
 
 
-def _delt_flade(s, dele, ejd, noter_y=EJD_NOTER):
+def _delt_flade(s, dele, ejd, noter_y=EJD_NOTER, fod=None):
     """Fladen delt i delene fra venstre og ejendommene til højre, hver med sit bånd og sine
     kasser.
 
     dele er [(navn, total_dkk, andel af hele NAV, tegn)], hvor tegn(x, y, w, h) tegner delens
-    kasser; ejd er ejendomsdelen fra data (None uden ejendomme), vist pr. fond. Bredderne
-    følger andelene, med EJD_MIN_W som mindste bredde. En kasse for smal til tekst tegnes og
-    nævnes i noten. Returnerer (ejendomsnoterne, om små ejendomskasser blev gjort større,
-    [hvad tegn returnerer pr. del]).
+    kasser; ejd er ejendomsdelen fra data (None uden ejendomme), vist pr. ejendomssegment eller
+    region (_ejendomskasser). Bredderne
+    følger andelene, med EJD_MIN_W som mindste bredde. Ejendommenes noter (_ejendomsnoter) får
+    deres mærke i Ejendomme-båndet; fod (Fodnoter) får også kassernes noter. Returnerer
+    (ejendomsdelens øvrige noter, om små ejendomskasser blev gjort større, [hvad tegn
+    returnerer pr. del]).
     """
-    alle = list(dele) + ([("Ejendomme", ejd["total_dkk"], ejd["andel"], None)] if ejd else [])
+    fod = fod if fod is not None else Fodnoter()
+    alle = list(dele) + ([("Ejendomme" + fod.maerker(_ejendomsnoter(ejd)), ejd["total_dkk"],
+                           ejd["andel"], None)] if ejd else [])
     w = X1 - X0 - EJD_LUFT * (len(alle) - 1)
     h = noter_y - 0.1 - Y_TOP
     ky, kh = Y_TOP + GEO_HOVED_H, h - GEO_HOVED_H
@@ -1920,54 +2211,83 @@ def _delt_flade(s, dele, ejd, noter_y=EJD_NOTER):
         if tegn is not None:
             resultater.append(tegn(x, ky, bw, kh))
         else:
-            ejd_noter, loeftet = _ejendomskasser(s, ejd, x, ky, bw, kh)
+            ejd_noter, loeftet = _ejendomskasser(s, ejd, x, ky, bw, kh, fod)
         x += bw + EJD_LUFT
     return ejd_noter, loeftet, resultater
 
 
-def _ejendomskasser(s, ejd, x, y, w, h):
-    """Ejendommene pr. fond som kasser i fladen. Returnerer (noterne, om små kasser blev
-    gjort større)."""
-    skiver, _, smaa = _skiver([(f["navn"], f["dkk"], f["andel"], EJD_FARVER[i % len(EJD_FARVER)])
-                               for i, f in enumerate(ejd["fonde"])])
-    kasser = []
+def _ejendomskasser(s, ejd, x, y, w, h, fod):
+    """Ejendommene som kasser i fladen: i brancherne pr. ejendomssegment, i geografien pr.
+    region i regionernes farver, som de andre dele. Returnerer (de øvrige noter, om små kasser
+    blev gjort større); _ejendomsnoter står ved båndet (_delt_flade), og geografiens
+    kildenoter (_eksponeringsnoter) tilføjer siden selv."""
+    ford = ejd["fordeling"]
+    if ejd["art"] == "regioner":
+        oevrige_noter, loeftet = _regionskasser(s, _kun_regioner(ford), x, y, w, h, fod)
+        return _paa_delens_base(_regionsnoter(oevrige_noter), "Ejendomme"), loeftet
+    skiver, _, smaa = _skiver([(g["navn"], g["dkk"], g["andel"],
+                                EJD_SEGMENT_FARVER.get(g["kode"], BR_OEVRIGE))
+                               for g in ford["grupper"]])
     vaerdier, loeftet = _gulv([k[1] for k in skiver])
-    for kasse, (navn, dkk, andel, farve) in zip(_treemap(vaerdier, x, y, w, h), skiver):
-        navn = "Øvrige fonde" if navn == "Øvrige" else navn
-        for_lille = not _kortkasse(s, kasse, navn, dkk, andel, farve)
-        kasser.append((navn, dkk, andel, for_lille))
+    for i, (kasse, (navn, dkk, andel, farve)) in enumerate(zip(_treemap(vaerdier, x, y, w, h),
+                                                               skiver)):
+        note = _ejendomsoevrige_note(ejd, smaa) if navn == SEGMENT_OEVRIGE else None
+        _kortkasse(s, kasse, navn, dkk, andel, farve, fod, fod.maerke(note), i in loeftet)
     _regionsramme(s, (x, y, w, h))
-    return _ejendomsnoter(ejd, smaa if len(smaa) > 1 else [], kasser), loeftet
+    return [], loeftet
 
 
-def _ejendomsopdelt(s, opd, tegn_resten):
+def _ejendomsoevrige_note(ejd, smaa):
+    """Noten til »Øvrige« i ejendomsdelen: fondene uden ejendomssegment, der ikke kan
+    klassificeres, og de små segmenter, der er lagt til."""
+    uden, blandede = ejd["fordeling"]["uden_segment"], ejd["blandede"]
+    dele = []
+    if uden:
+        hvad = "ejendomsandelen af " if set(uden) <= set(blandede) else ""
+        dele.append(f"{hvad}{_navne(uden)}, som ikke kan klassificeres efter ejendomssegment")
+    andre = [n for n in smaa if n != SEGMENT_OEVRIGE]
+    if len(andre) > 1 or (andre and uden):
+        dele.append(f"{_navne(andre)}, hver under {pct(BR_MIN, 0)} af ejendomsdelen")
+    return ("»Øvrige« i ejendomsdelen er " + " samt ".join(dele) + ".") if dele else None
+
+
+def _ejendomsopdelt(s, opd, tegn_resten, fod=None, noter_y=EJD_NOTER):
     """Fladen delt i de alternative investeringer (til venstre) og ejendomme (til højre).
     Returnerer (ejendomsnoterne, om små ejendomskasser blev gjort større, hvad tegn_resten
     returnerer)."""
     ejd, rest = opd["ejendomme"], opd["resten"]
     ejd_noter, loeftet, (resultat,) = _delt_flade(
         s, [("Alternative investeringer", rest["total_dkk"], 1 - ejd["andel"], tegn_resten)],
-        ejd)
+        ejd, noter_y=noter_y, fod=fod)
     return ejd_noter, loeftet, resultat
 
 
-def _ejendomsnoter(ejd, smaa_fonde, kasser):
-    """Hvad ejendomsdelen består af, og de ejendomskasser, der er for små til tekst."""
+def _ejendomsnoter(ejd):
+    """Hvad ejendomsdelen består af, og hvordan den er fordelt."""
     blandede = ejd["blandede"]
-    noter = ["Procenterne i kasserne er af delens NAV, i båndene af investors samlede NAV. "
-             "Ejendomme er GICS-sektoren Ejendomme på tværs af fondene"]
-    if blandede and not set(blandede) <= set(smaa_fonde):
+    uden = ejd["fordeling"]["uden_segment"] if ejd["art"] == "brancher" else []
+    noter = ["Procenterne i kasserne er andel af NAV. "
+             "Ejendomme er GICS-sektoren Real Estate på tværs af fondene"]
+    if blandede and not set(blandede) <= set(uden):
         noter[0] += f", herunder ejendomsandelen af {_navne(blandede)}"
+    if ejd["art"] == "brancher":
+        # »Øvrige« har sin egen note i kassen (_ejendomsoevrige_note)
+        noter[0] += ", fordelt efter fondenes ejendomssegment"
     noter[0] += "."
-    for navn, dkk, andel, for_lille in kasser:
-        tal = f"({tusind(dkk)} tDKK, {pct(andel)} af ejendommene)"
-        if navn == "Øvrige fonde":
-            hvad = "ejendomsandelen af " if set(smaa_fonde) <= set(blandede) else ""
-            noter.append(f"»Øvrige fonde« {tal} er {hvad}{_navne(smaa_fonde)}"
-                         + ("; kassen har ikke plads til navnet." if for_lille else "."))
-        elif for_lille:
-            noter.append(f"{navn} {tal} har ikke plads til sit navn i kortet.")
+    if ejd["art"] == "regioner" and blandede:
+        noter.append("Ejendomsandelen af en blandet fond antages at ligge geografisk som resten "
+                     "af fonden.")
     return noter
+
+
+def _ejendomsgeografinoter(r, ejd):
+    """Kildenoterne for ejendommenes geografi (forvalterens fordeling, fokus osv.)."""
+    if not ejd or ejd["art"] != "regioner":
+        return []
+    return _paa_delens_base(_eksponeringsnoter(r, _kun_regioner(ejd["fordeling"]),
+                                               "geografisk fordeling",
+                                               "Den geografiske fordeling", "Geografien"),
+                            "Ejendomme")
 
 
 def _paa_restens_base(noter):
@@ -1985,32 +2305,21 @@ def branchekort_ejendomme(prs, r):
     rest = opd["resten"]
     s = _oversigtsslide(prs, r, "Branchefordeling – ejendomme for sig",
                         enhed="investors NAV, beløb i tusinde DKK")
-    # indekset uden ejendomme, så det sammenlignes på samme base som resten
-    bm_info = r.get("benchmark") or {}
-    bm_navn, bm = next(iter((bm_info.get("indeks") or {}).items()), (None, {}))
-    uden = 1 - bm.get(EJENDOMSSEKTOR, 0.0)
-    bm = {k: v / uden for k, v in bm.items() if k != EJENDOMSSEKTOR} if uden > 0 else {}
-    # sektorerne beholder deres farver fra Branchefordeling
-    faste = _brancheskiver(r["brancher"]["grupper"])[1] if r.get("brancher") else None
-    ejd_noter, ejd_loeftet, (smaa, loeftet) = _ejendomsopdelt(s, opd, lambda x, y, w, h: _branchekasser(
-        s, rest, x, y, w, h, bm_navn, bm, faste))
-
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
-             "NAV er fordelt efter forvalterens branchefordeling eller beholdningernes dagsværdi, "
-             "med feederfondene gennemlyst; sektorerne følger GICS."]
-    noter += ejd_noter
-    if len(smaa) > 1:
-        noter.append(f"»Øvrige« samler {_navne([n.lower() for n in smaa])}, hver under "
-                     f"{pct(BR_MIN, 0)} af de alternative investeringer.")
-    noter += _gulvnote(ejd_loeftet or loeftet)
-    noter += _diversificeret_noter(rest)
-    noter += _paa_restens_base(_eksponeringsnoter(r, rest, "branchefordeling",
-                                                  "Branchefordelingen", "Branchen"))
-    if bm_navn:
-        dato = f" pr. {bm_info['dato']:%d.%m.%Y}" if bm_info.get("dato") else ""
-        noter.append(f"{bm_navn} er sektorvægtene{dato} (MSCI) uden sektoren Ejendomme, skaleret "
-                     "op til 100 %.")
-    _afslut_noter(s, r, noter, EJD_NOTER)
+    raekker = _bm_sektorer(r)
+    bund = EJD_NOTER - _bm_hoejde(raekker)
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
+                   "Fordelt efter forvalterens branchefordeling eller "
+                   "beholdningernes dagsværdi, med feederfondene gennemlyst; sektorerne følger "
+                   "GICS.")
+    ejd_noter, _, _ = _ejendomsopdelt(s, opd, lambda x, y, w, h: _branchekasser(
+        s, rest, x, y, w, h, fod, base="de alternative investeringer"), fod, noter_y=bund)
+    if raekker:
+        _benchmarkbaand(s, bund - 0.1, raekker,
+                        _bm_maerke(fod, _benchmarknote(r)
+                                   + _bm_baandnote(raekker, "brancher", hele=False)))
+    fod.generel(ejd_noter, _paa_restens_base(_eksponeringsnoter(
+        r, rest, "branchefordeling", "Branchefordelingen", "Branchen")))
+    _afslut_noter(s, r, fod, EJD_NOTER)
     return s
 
 
@@ -2024,21 +2333,17 @@ def regionskort_ejendomme(prs, r):
     rest = _kun_regioner(opd["resten"])
     s = _oversigtsslide(prs, r, "Geografisk eksponering – ejendomme for sig",
                         enhed="investors NAV, beløb i tusinde DKK")
-    ejd_noter, ejd_loeftet, (oevrige_noter, for_smaa, loeftet) = _ejendomsopdelt(
-        s, opd, lambda x, y, w, h: _regionskasser(s, rest, x, y, w, h))
-
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
-             "NAV er fordelt efter forvalterens geografiske fordeling eller beholdningernes "
-             "dagsværdi, med feederfondene gennemlyst."]
-    noter += ejd_noter
-    if opd["ejendomme"]["blandede"]:
-        noter.append("Ejendomsandelen af en blandet fond antages at ligge geografisk som resten "
-                     "af fonden.")
-    noter += _gulvnote(ejd_loeftet or loeftet)
-    noter += _paa_restens_base(_regionsnoter(oevrige_noter, for_smaa)
-                               + _eksponeringsnoter(r, rest, "geografisk fordeling",
-                                                    "Den geografiske fordeling", "Geografien"))
-    _afslut_noter(s, r, noter, EJD_NOTER)
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
+                   "Fordelt efter forvalterens geografiske fordeling eller "
+                   "beholdningernes dagsværdi, med feederfondene gennemlyst.")
+    ejd_noter, _, (oevrige_noter, _) = _ejendomsopdelt(
+        s, opd, lambda x, y, w, h: _regionskasser(s, rest, x, y, w, h, fod), fod)
+    fod.generel(ejd_noter,
+                _paa_restens_base(_regionsnoter(oevrige_noter)
+                                  + _eksponeringsnoter(r, rest, "geografisk fordeling",
+                                                       "Den geografiske fordeling", "Geografien")),
+                _ejendomsgeografinoter(r, opd["ejendomme"]))
+    _afslut_noter(s, r, fod, EJD_NOTER)
     return s
 
 
@@ -2046,11 +2351,7 @@ def regionskort_ejendomme(prs, r):
 AKTIVKLASSE_NOTE = ("Private Credit er fondene med private credit som strategi, Private Equity "
                     "de øvrige fonde, begge uden deres ejendomsandel.")
 AK_NOTER = EJD_NOTER - 0.12   # endnu en linje til noterne: tre dele skal forklares
-DELENS_BASE = "Procenterne i kasserne er af delens NAV, i båndene af investors samlede NAV."
-
-
-def _uden_gentagelser(noter):
-    return list(dict.fromkeys(noter))
+DELENS_BASE = "Procenterne i kasserne er andel af NAV."
 
 
 def _paa_delens_base(noter, navn):
@@ -2067,40 +2368,35 @@ def branchekort_aktivklasser(prs, r):
     s = _oversigtsslide(prs, r, "Branchefordeling pr. aktivklasse",
                         enhed="investors NAV, beløb i tusinde DKK; Private Equity, Private "
                               "Credit og ejendomme")
-    # indekset uden ejendomme, så det sammenlignes på samme base som delene
-    bm_info = r.get("benchmark") or {}
-    bm_navn, bm = next(iter((bm_info.get("indeks") or {}).items()), (None, {}))
-    uden = 1 - bm.get(EJENDOMSSEKTOR, 0.0)
-    bm = {k: v / uden for k, v in bm.items() if k != EJENDOMSSEKTOR} if uden > 0 else {}
-    # sektorerne beholder deres farver fra Branchefordeling
-    faste = _brancheskiver(r["brancher"]["grupper"])[1] if r.get("brancher") else None
+    raekker = _bm_sektorer(r)
+    # med båndene fylder noterne en linje mere (båndenes kilde)
+    noter_y = AK_NOTER - (BM_NOTER_LINJE if raekker else 0)
+    bund = noter_y - _bm_hoejde(raekker)
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
+                   "Fordelt efter forvalterens branchefordeling eller "
+                   "beholdningernes dagsværdi, med feederfondene gennemlyst; sektorerne følger "
+                   "GICS.")
+    if not opd["ejendomme"]:
+        fod.generel(DELENS_BASE)
+    del_m = fod.maerke(AKTIVKLASSE_NOTE)
 
-    def tegner(b):
-        return lambda x, y, w, h: _branchekasser(s, b, x, y, w, h, bm_navn, bm, faste)
+    def tegner(d):
+        return lambda x, y, w, h: _branchekasser(s, d["fordeling"], x, y, w, h, fod,
+                                                 base="delen", del_navn=d["navn"])
 
-    ejd_noter, loeftet, resultater = _delt_flade(
-        s, [(d["navn"], d["total_dkk"], d["andel"], tegner(d["fordeling"])) for d in opd["dele"]],
-        opd["ejendomme"], noter_y=AK_NOTER)
-
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
-             "NAV er fordelt efter forvalterens branchefordeling eller beholdningernes dagsværdi, "
-             "med feederfondene gennemlyst; sektorerne følger GICS.", AKTIVKLASSE_NOTE]
-    noter += ejd_noter or [DELENS_BASE]
-    for d, (smaa, del_loeftet) in zip(opd["dele"], resultater):
-        loeftet |= del_loeftet
-        if len(smaa) > 1:
-            noter.append(f"»Øvrige« i {d['navn']} samler {_navne([n.lower() for n in smaa])}, "
-                         f"hver under {pct(BR_MIN, 0)} af delen.")
-    noter += _gulvnote(loeftet)
+    ejd_noter, _, _ = _delt_flade(
+        s, [(d["navn"] + del_m, d["total_dkk"], d["andel"], tegner(d)) for d in opd["dele"]],
+        opd["ejendomme"], noter_y=bund, fod=fod)
+    if raekker:
+        _benchmarkbaand(s, bund - 0.1, raekker,
+                        _bm_maerke(fod, _benchmarknote(r)
+                                   + _bm_baandnote(raekker, "brancher", hele=False)))
+    fod.generel(ejd_noter)
     for d in opd["dele"]:
-        noter += _diversificeret_noter(d["fordeling"])
-        noter += _paa_delens_base(_eksponeringsnoter(r, d["fordeling"], "branchefordeling",
-                                                     "Branchefordelingen", "Branchen"), d["navn"])
-    if bm_navn:
-        dato = f" pr. {bm_info['dato']:%d.%m.%Y}" if bm_info.get("dato") else ""
-        noter.append(f"{bm_navn} er sektorvægtene{dato} (MSCI) uden sektoren Ejendomme, skaleret "
-                     "op til 100 %.")
-    _afslut_noter(s, r, _uden_gentagelser(noter), AK_NOTER)
+        fod.generel(_paa_delens_base(_eksponeringsnoter(r, d["fordeling"], "branchefordeling",
+                                                        "Branchefordelingen", "Branchen"),
+                                     d["navn"]))
+    _afslut_noter(s, r, fod, noter_y)
     return s
 
 
@@ -2115,28 +2411,35 @@ def regionskort_aktivklasser(prs, r):
                               "Credit og ejendomme")
     dele = [d | {"fordeling": _kun_regioner(d["fordeling"])} for d in opd["dele"]]
 
+    raekker = _bm_regioner(r)
+    # med båndene fylder noterne en linje mere (båndenes kilde)
+    noter_y = AK_NOTER - (BM_NOTER_LINJE if raekker else 0)
+    bund = noter_y - _bm_hoejde(raekker)
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
+                   "Fordelt efter forvalterens geografiske fordeling eller "
+                   "beholdningernes dagsværdi, med feederfondene gennemlyst.")
+    if not opd["ejendomme"]:
+        fod.generel(DELENS_BASE)
+    del_m = fod.maerke(AKTIVKLASSE_NOTE)
+
     def tegner(b):
-        return lambda x, y, w, h: _regionskasser(s, b, x, y, w, h)
+        return lambda x, y, w, h: _regionskasser(s, b, x, y, w, h, fod)
 
-    ejd_noter, loeftet, resultater = _delt_flade(
-        s, [(d["navn"], d["total_dkk"], d["andel"], tegner(d["fordeling"])) for d in dele],
-        opd["ejendomme"], noter_y=AK_NOTER)
-
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
-             "NAV er fordelt efter forvalterens geografiske fordeling eller beholdningernes "
-             "dagsværdi, med feederfondene gennemlyst.", AKTIVKLASSE_NOTE]
-    noter += ejd_noter or [DELENS_BASE]
-    if opd["ejendomme"] and opd["ejendomme"]["blandede"]:
-        noter.append("Ejendomsandelen af en blandet fond antages at ligge geografisk som resten "
-                     "af fonden.")
-    for d, (oevrige_noter, for_smaa, del_loeftet) in zip(dele, resultater):
-        loeftet |= del_loeftet
-        noter += _paa_delens_base(_regionsnoter(oevrige_noter, for_smaa)
-                                  + _eksponeringsnoter(r, d["fordeling"], "geografisk fordeling",
-                                                       "Den geografiske fordeling", "Geografien"),
-                                  d["navn"])
-    noter += _gulvnote(loeftet)
-    _afslut_noter(s, r, _uden_gentagelser(noter), AK_NOTER)
+    ejd_noter, _, resultater = _delt_flade(
+        s, [(d["navn"] + del_m, d["total_dkk"], d["andel"], tegner(d["fordeling"]))
+            for d in dele], opd["ejendomme"], noter_y=bund, fod=fod)
+    if raekker:
+        _benchmarkbaand(s, bund - 0.1, raekker, _bm_maerke(
+            fod, _benchmarknote(r, "regioner") + _bm_baandnote(raekker, "regioner")))
+    fod.generel(ejd_noter)
+    for d, (oevrige_noter, _) in zip(dele, resultater):
+        fod.generel(_paa_delens_base(_regionsnoter(oevrige_noter)
+                                     + _eksponeringsnoter(r, d["fordeling"],
+                                                          "geografisk fordeling",
+                                                          "Den geografiske fordeling",
+                                                          "Geografien"), d["navn"]))
+    fod.generel(_ejendomsgeografinoter(r, opd["ejendomme"]))
+    _afslut_noter(s, r, fod, noter_y)
     return s
 
 
@@ -2165,9 +2468,12 @@ def regioner(prs, r):
                         enhed="investors NAV, beløb i tusinde DKK")
     skiver, farver, smaa = _geoskiver(b["grupper"])
 
-    linjer = [(["", g["navn"], tusind(g["dkk"]), pct(g["andel"])], "gruppe",
-               farver.get(g["navn"])) for g in b["grupper"]]
-    _fordelingstabel(s, b, "Region", linjer, skiver)
+    indeks = (r.get("benchmark") or {}).get("regioner") or {}
+    linjer = [(["", g["navn"], tusind(g["dkk"]), pct(g["andel"])]
+               + [pct(v[g["kode"]]) if g["kode"] in v else IKKE_OPLYST for v in indeks.values()],
+               "gruppe", farver.get(g["navn"])) for g in b["grupper"]]
+    _fordelingstabel(s, b, "Region", linjer, skiver,
+                     ekstra=[(navn, pct(sum(v.values()))) for navn, v in indeks.items()])
 
     noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. Investors "
              "NAV er fordelt efter forvalterens geografiske fordeling eller beholdningernes "
@@ -2177,6 +2483,7 @@ def regioner(prs, r):
     if len(smaa) > 1:
         noter.append(f"Diagrammet samler regionerne under {pct(BR_MIN, 0)} (grå i tabellen) "
                      "i »Øvrige«.")
+    noter += _benchmarknote(r, "regioner")
     _afslut_noter(s, r, noter)
     return s
 
@@ -2263,10 +2570,8 @@ def _ring(s, x, y, side, poster, serie):
 
 
 def _forbindelser(s, midter):
-    """Linjer mellem ringene, fra kant til kant: NAV og resttilsagn op til eksponeringen, og
-    et »+« mellem NAV og resttilsagn, da eksponeringen er summen af dem."""
+    """Linjer mellem ringene, fra kant til kant: NAV og resttilsagn op til eksponeringen."""
     ring = VF_GRAF * (1 - 2 * VF_KANT) / 2 + VF_STREG_LUFT
-    plus = 0.26                                  # plustegnets cirkel (tommer)
 
     def linje(a, b, luft_a, luft_b):
         """Linjen fra a mod b, startende luft_a fra a og sluttende luft_b før b."""
@@ -2279,20 +2584,6 @@ def _forbindelser(s, midter):
     nav, rest, eks = midter["nav"], midter["resttilsagn"], midter["eksponering"]
     linje(nav, eks, ring, ring)
     linje(rest, eks, ring, ring)
-    # basen er delt i to, med plustegnet i midten
-    midt = ((nav[0] + rest[0]) / 2, nav[1])
-    linje(nav, midt, ring, plus / 2 + VF_STREG_LUFT)
-    linje(midt, rest, plus / 2 + VF_STREG_LUFT, ring)
-    cirkel = s.shapes.add_shape(MSO_SHAPE.OVAL, Inches(midt[0] - plus / 2),
-                                Inches(midt[1] - plus / 2), Inches(plus), Inches(plus))
-    cirkel.fill.solid()
-    cirkel.fill.fore_color.rgb = SAGE_MID
-    cirkel.line.fill.background()
-    cirkel.shadow.inherit = False
-    tf = cirkel.text_frame
-    tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
-    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-    _skriv(tf, "+", 13, fed=True, farve=HVID, just=C)
 
 
 def valutafordeling(prs, r):
@@ -2301,8 +2592,14 @@ def valutafordeling(prs, r):
     vf = r.get("valutafordeling")
     if not vf:
         return None
-    s = _oversigtsslide(prs, r, "Valutafordeling", enhed="beløb i tusinde DKK")
+    s = _oversigtsslide(prs, r, "Eksponering", enhed="beløb i tusinde DKK")
     farver = _valutafarver(vf)
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    fod.generel(_kursnote(r))
+    hul_m = {"eksponering": fod.maerke(
+                 "Hver fond indgår med hele sit beløb i fondens valuta; valutaen i fondenes "
+                 "underliggende investeringer er ikke opgjort."),
+             }
     mx, bund = (X0 + X1) / 2, Y_NOTER - 0.1 - VF_GRAF / 2
     midter = {"eksponering": (mx, Y_TOP + VF_GRAF / 2),
               "nav": (mx - VF_BASIS / 2, bund), "resttilsagn": (mx + VF_BASIS / 2, bund)}
@@ -2319,27 +2616,18 @@ def valutafordeling(prs, r):
         # i hullet: målets navn, eventuelt hvad det består af, og totalen
         i_alt = tusind(sum(x["dkk"] for x in poster))
         hul_w = VF_GRAF * (1 - 2 * VF_KANT) * VF_HUL / 100 * 0.92
-        _tekst(s, mx - hul_w / 2, my - 0.32, hul_w, 0.3, navn, 12, fed=True, farve=SAGE,
-               just=C, anker=MSO_ANCHOR.BOTTOM)
+        _tekst(s, mx - hul_w / 2, my - 0.32, hul_w, 0.3, navn + hul_m.get(maal, ""), 12,
+               fed=True, farve=SAGE, just=C, anker=MSO_ANCHOR.BOTTOM)
         if under:
             _tekst(s, mx - hul_w / 2, my - 0.03, hul_w, 0.2, under, 8, farve=SAGE, just=C)
         _tekst(s, mx - hul_w / 2, my + (0.15 if under else -0.01), hul_w, 0.22,
                f"{i_alt} tDKK", 9.5, just=C)
 
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.",
-             "Eksponering er NAV plus resttilsagn. Hver fond indgår med hele sit beløb i "
-             "fondens valuta; valutaen i fondenes underliggende investeringer er ikke opgjort."]
     if uden_etiket:
-        noter.append(f"{_navne(sorted(uden_etiket))} er under {pct(BR_ETIKET, 0)} og har ingen "
-                     "etiket i ringene.")
-    kursnote = _kursnote(r, "NAV og resttilsagn")
-    if kursnote:
-        noter.append(kursnote)
-    if any((f["n"].get("recallable") or 0) for f in r["fonde"]):
-        noter.append("Resttilsagnet indeholder genkaldelige udlodninger, som forvalteren kan "
-                     "kalde igen.")
-    noter += _datonoter(r)
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+        fod.generel(f"{_navne(sorted(uden_etiket))} er under {pct(BR_ETIKET, 0)} og har ingen "
+                    "etiket i ringene.")
+    fod.generel(_datonoter(r))
+    fod.tegn(s)
     return s
 
 
@@ -2363,10 +2651,21 @@ def _periodetitel(r, p):
     return f"År til dato ({til.year})"
 
 
-def _udviklingsnoter(r):
-    """Fondenes noter om afvigende primodato, som de står på fondssiderne."""
-    return [f"{f['fund_name']}: {n_}" for f in r["fonde"] for n_ in f["noter"]
-            if n_.startswith("Udviklingen")]
+def _fondsnoter(f, felt):
+    """Fondens noter om ét tal (data.Note.felt), til sider på tværs af fondene; mærket står i
+    fondens række, så noten nævner ikke fonden."""
+    return [n_ for n_ in f.get("noter", []) if getattr(n_, "felt", None) == felt]
+
+
+def _udviklingsnoter(f):
+    """Fondens noter om afvigende primodato, som de står på fondssiden."""
+    return _fondsnoter(f, "udvikling")
+
+
+# hvordan valutakursændringen er regnet (Definitioner siger kun, hvad den er)
+UDV_VALUTA = ("Valutakursændringen er forskellen, når NAV primo er omregnet med kursen på "
+              "primodatoen, cash flows med kursen på betalingsdagen og værdiændring og NAV "
+              "ultimo med kursen på rapportdatoen.")
 
 
 def _nav_bro(slide, x, y, w, h, trin, gulv, loft, maks_bredde=None):
@@ -2450,8 +2749,21 @@ def udvikling(prs, r):
     s = _oversigtsslide(prs, r, "Udvikling i kvartalet og året", enhed="beløb i tusinde DKK")
 
     bro_b = 6.25
-    blok_h = (Y_NOTER - Y_TOP - 0.1) / len(perioder)
-    broer = [_bro_trin(ud[p]) for p in perioder]
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    # i læserækkefølge: afkastet i overskriften, så broens trin fra venstre, så højre side;
+    # alle mærker sættes, før noternes længde bestemmer, hvor indholdet skal slutte
+    maerker = {"NAV primo": fod.maerke(
+                   "Søjlerne for NAV primo og ultimo er afkortet, så ændringerne kan ses; "
+                   + ("begge broer har samme skala." if len(perioder) > 1
+                      else "aksen starter ikke ved 0.")),
+               "Valutakurs": fod.maerke(UDV_VALUTA)}
+    pr_fond_m = fod.maerke("Værdiændringen pr. fond indeholder fondens valutakursændring.")
+    fond_m = {f["fund_name"]: fod.maerker(_udviklingsnoter(f)) for f in r["fonde"]}
+    fod.generel(_datonoter(r))
+    noter_y = _noter_y(fod.tekst())
+    blok_h = (noter_y - Y_TOP - 0.1) / len(perioder)
+    broer = [[(label + maerker.get(label, ""), *rest) for label, *rest in _bro_trin(ud[p])]
+             for p in perioder]
     gulv, loft = _akse(broer)
     for i, (p, trin) in enumerate(zip(perioder, broer)):
         u, y = ud[p], Y_TOP + i * blok_h
@@ -2464,7 +2776,8 @@ def udvikling(prs, r):
     # højre side: værdiændring inkl. valuta pr. fond, en kolonne pr. periode
     hx = X0 + bro_b + 0.45
     hw = X1 - hx
-    _tekst(s, hx, Y_TOP, hw, 0.22, "Værdiændring pr. fond", 10.5, fed=True, farve=SAGE)
+    _tekst(s, hx, Y_TOP, hw, 0.22, "Værdiændring pr. fond" + pr_fond_m, 10.5, fed=True,
+           farve=SAGE)
     _streg(s, hx, Y_TOP + 0.27, X1, Y_TOP + 0.27)
     navn_b, tal_b = 1.45, 0.50
     kol_b = (hw - navn_b) / len(perioder)
@@ -2478,8 +2791,8 @@ def udvikling(prs, r):
     neg, pos = max([-v for v in alle] + [0]), max(alle + [0])
     zone_b = kol_b - tal_b - 0.08
     skala = zone_b / (neg + pos) if neg + pos else 0
-    fonde = sorted(r["fonde"], key=lambda f: -bidrag[perioder[0]][f["fund_name"]])
-    raekke_h = min(0.42, (Y_NOTER - y - 0.1) / (len(fonde) + 1))
+    fonde = r["fonde"]                  # i strategiorden som på de øvrige slides
+    raekke_h = min(0.42, (noter_y - y - 0.1) / (len(fonde) + 1))
     for i, f in enumerate(fonde + [None]):
         ry = y + i * raekke_h
         if f is None:
@@ -2487,7 +2800,8 @@ def udvikling(prs, r):
         elif i % 2 == 1:
             _bjaelke(s, hx - 0.05, ry, hw + 0.05, raekke_h, CREAM)
         navn = ("I alt" if f is None
-                else _uden_selskabsform(f["fund_name"]) + _datomarkering(r, f["fund_name"]))
+                else _uden_selskabsform(f["fund_name"]) + _datomarkering(r, f["fund_name"])
+                + fond_m[f["fund_name"]])
         _tekst(s, hx, ry, navn_b - 0.08, raekke_h, navn, 7.5, fed=f is None,
                anker=MSO_ANCHOR.MIDDLE)
         for j, p in enumerate(perioder):
@@ -2502,20 +2816,27 @@ def udvikling(prs, r):
         nul = _nullinje(hx + navn_b + j * kol_b + 0.04, zone_b, neg, pos)
         _streg(s, nul, y, nul, y + len(fonde) * raekke_h, farve=STREG, pt=0.5)
 
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.",
-             "Værdiændringen er ændringen i NAV, når kapitalkald og udlodninger er trukket ud, "
-             "efter omkostninger og carried interest; pr. fond er valutakursændringen "
-             "medregnet. Afkastet er værdi- og valutakursændringen i forhold til NAV primo "
-             "plus de dagvægtede cash flows (Modified Dietz).",
-             "NAV primo er omregnet med kursen på primodatoen, cash flows med kursen på "
-             "betalingsdagen, værdiændring og NAV ultimo med kursen på rapportdatoen; "
-             "valutakursændringen er forskellen.",
-             "Søjlerne for NAV primo og ultimo er afkortet, så ændringerne kan ses; "
-             + ("begge broer har samme skala." if len(perioder) > 1 else "aksen starter ikke "
-                "ved 0.")]
-    noter += _udviklingsnoter(r) + _datonoter(r)
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+    fod.tegn(s)
     return s
+
+
+def _fortegnsnote(r, fund_name, p):
+    """Noten til et afkast med modsat fortegn af værdiændringen, eller None (fortegnsafvigelser)."""
+    aarsag = next((a for fond, periode, a in r.get("fortegnsafvigelser") or []
+                   if fond == fund_name and periode == p), None)
+    if aarsag is None:
+        return None
+    f = next(f for f in r["fonde"] if f["fund_name"] == fund_name)
+    # mærket står i fondens række og periodens kolonne, så noten nævner ingen af dem
+    v = f["valuta"]
+    if aarsag == "valuta":
+        faldt = f["udvikling"][p]["afkast"] < 0
+        return (f"Fondens værdi {'faldt' if faldt else 'steg'} i {v}, men {v} "
+                f"{'steg' if faldt else 'faldt'} over for DKK, så værdiændringen i DKK og "
+                "afkastet har modsat fortegn.")
+    return ("Afkastet har modsat fortegn af værdiændringen, fordi Modified Dietz-afkastets "
+            "kapitalbase (NAV primo plus de dagvægtede cash flows) er negativ efter store "
+            "udlodninger i perioden.")
 
 
 def aendringer_pr_fond(prs, r):
@@ -2526,19 +2847,28 @@ def aendringer_pr_fond(prs, r):
         return None
     s = _oversigtsslide(prs, r, "Ændringer pr. fond",
                         enhed="beløb i tusinde DKK; afkast i fondens valuta")
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    vaerdi_m = fod.maerke(
+        "Værdiændringen indeholder valutakursændringen for fonde i fremmed valuta, så i "
+        "alt-rækken svarer til broerne på siden »Udvikling i kvartalet og året«.")
+    afkast_m = fod.maerke("I alt-rækkens afkast er beregnet i DKK.")
+    tvpi_m = fod.maerke(f"TVPI-ændringen er for {PERIODER_TEKST[perioder[-1]]}. TVPI falder, når "
+                        "fonden kalder kapital, mens den står over 1x, også uden værditab.")
     hoved = ["Fond", "Valuta"]
     for _ in perioder:
-        hoved += ["Kapital-\nkald", "Udlod-\nninger", "Værdi-\nændring", "Afkast"]
-    hoved += ["NAV", "TVPI", "TVPI-\nændring"]
+        hoved += ["Kapital-\nkald", "Udlod-\nninger", f"Værdi-\nændring{vaerdi_m}",
+                  f"Afkast{afkast_m}"]
+    hoved += ["NAV", "TVPI", f"TVPI-\nændring{tvpi_m}"]
     raekker = [hoved]
     for f in r["fonde"]:
-        raekke = [_uden_selskabsform(f["fund_name"]) + _datomarkering(r, f["fund_name"]),
-                  f["valuta"]]
+        raekke = [_uden_selskabsform(f["fund_name"]) + _datomarkering(r, f["fund_name"])
+                  + fod.maerker(_udviklingsnoter(f)), f["valuta"]]
         for p in perioder:
             u = f["udvikling"][p]
             vaerdi = None if u.get("vaerdi_dkk") is None else u["vaerdi_dkk"] + u["valuta_dkk"]
             raekke += [tusind(u.get("kald_dkk")), tusind(u.get("udlodning_dkk")),
-                       aendring(vaerdi), pct(u["afkast"])]
+                       aendring(vaerdi),
+                       pct(u["afkast"]) + fod.maerke(_fortegnsnote(r, f["fund_name"], p))]
         raekke += [tusind(f["n"].get("nav_dkk")), gange(f["n"]["tvpi"]),
                    aendring(f["udvikling"][perioder[-1]]["tvpi_aendring"], gange)]
         raekker.append(raekke)
@@ -2563,20 +2893,18 @@ def aendringer_pr_fond(prs, r):
                farve=SAGE, just=C)
         _streg(s, x_kol(fra) + 0.06, Y_TOP + 0.24, x_kol(til_) - 0.06, Y_TOP + 0.24)
     tab_y = Y_TOP + 0.32
-    raekke_h = max(0.24, min(0.40, (Y_NOTER - tab_y - 0.15) / len(raekker)))
+    # noterne kendes, før tabellen tegnes, så tabellen kan slutte over dem
+    fod.generel(_datonoter(r))
+    noter_y = _noter_y(fod.tekst())
+    raekke_h = max(0.22, min(0.40, (noter_y - tab_y - 0.1) / len(raekker)))
     _tabel(s, X0, tab_y, w, raekker, bredder=bredder, just=just, raekke_h=raekke_h, pt=8.5,
            hoved=True, total=True, zebra=True)
-
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.",
-             "Beløbene er omregnet til DKK; værdiændringen indeholder valutakursændringen for "
-             "fonde i fremmed valuta, så i alt-rækken svarer til broerne på siden »Udvikling i "
-             "kvartalet og året«.",
-             "Afkastet pr. fond er Modified Dietz i fondens valuta; i alt-rækkens afkast og "
-             "TVPI er beregnet i DKK.",
-             f"TVPI-ændringen er for {PERIODER_TEKST[perioder[-1]]}. TVPI falder, når fonden "
-             "kalder kapital, mens den står over 1x, også uden værditab."]
-    noter += _udviklingsnoter(r) + _datonoter(r)
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+    # lodrette streger mellem kvartalet, året og stillingen pr. dato, fra gruppeoverskriften
+    # til tabellens bund
+    for _, fra, _ in grupper:
+        _streg(s, x_kol(fra), Y_TOP, x_kol(fra), tab_y + len(raekker) * raekke_h, farve=SAGE,
+               pt=1.25)
+    fod.tegn(s)
     return s
 
 
@@ -2660,7 +2988,9 @@ def vaerdibevaegelser(prs, r):
         noter.append("Forvalteren oplyser ikke beholdninger for: "
                      + ", ".join(vb["uden_beholdninger"]) + ".")
     noter += _datonoter(r)
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+    fod = Fodnoter()
+    fod.generel(noter)
+    fod.tegn(s)
     return s
 
 
@@ -2757,6 +3087,97 @@ def definitioner(prs, r):
     return s
 
 
+# ---------- GICS-oversigt i appendiks ----------
+
+# hvad hver GICS-sektor dækker, kort og på dansk; navnene står på engelsk som i resten af
+# rapporten
+GICS_BESKRIVELSER = {
+    "ENERGY": "Olie, gas og kul: efterforskning, produktion, raffinering og transport samt "
+              "udstyr og services til energisektoren.",
+    "MATERIALS": "Kemikalier, byggematerialer, emballage, metaller og minedrift samt papir- og "
+                 "skovprodukter.",
+    "INDUSTRIALS": "Kapitalgoder som maskiner, byggeri og forsvar, erhvervsservice samt "
+                   "transport og logistik.",
+    "CONSUMER_DISCRETIONARY": "Varer og tjenester, forbrugerne kan udskyde: biler, holdbare "
+                              "forbrugsgoder og tøj, hoteller, restauranter og uddannelse "
+                              "samt detailhandel.",
+    "CONSUMER_STAPLES": "Daglige fornødenheder: fødevarer, drikkevarer og tobak, husholdnings- "
+                        "og plejeprodukter samt dagligvarehandel.",
+    "HEALTH_CARE": "Sundhedsudstyr og -ydelser samt lægemidler, bioteknologi og "
+                   "life science-værktøjer.",
+    "FINANCIALS": "Banker, øvrige finansielle tjenester som betalinger, kapitalforvaltning og "
+                  "børser samt forsikring.",
+    "INFORMATION_TECHNOLOGY": "Software og IT-services, hardware og elektronisk udstyr samt "
+                              "halvledere.",
+    "COMMUNICATION_SERVICES": "Telekommunikation samt medier, underholdning og interaktive "
+                              "medier som søgemaskiner og sociale netværk.",
+    "UTILITIES": "Forsyning af el, gas og vand samt vedvarende og uafhængig elproduktion.",
+    "REAL_ESTATE": "Ejendomsselskaber og REITs samt ejendomsadministration og -udvikling.",
+}
+GICS_KOL = 3
+GICS_TEGN = 62            # tegn pr. linje i beskrivelsen ved 7,5 pt i en tredjedel af bredden
+GICS_LINJE = 0.125        # linjehøjde ved 7,5 pt
+GICS_NAVN_H = 0.22        # sektornavnet
+GICS_LUFT = 0.14          # mellem to sektorer i samme spalte
+
+
+def _gics_hoejde(kode):
+    """Højden af én sektor: navn, beskrivelse og én linje pr. branchegruppe."""
+    return (GICS_NAVN_H + ceil(len(GICS_BESKRIVELSER[kode]) / GICS_TEGN) * GICS_LINJE
+            + len(GICS_STRUKTUR[kode]) * GICS_LINJE + 0.06)
+
+
+def _gics_spalter(koder, n=GICS_KOL):
+    """Sektorerne i GICS-rækkefølge delt i n spalter, så den højeste spalte bliver lavest."""
+    if n == 1 or len(koder) <= 1:
+        return [koder]
+    bedst = None
+    for i in range(1, len(koder)):
+        resten = _gics_spalter(koder[i:], n - 1)
+        spalter = [koder[:i]] + resten
+        hoejde = max(sum(_gics_hoejde(k) + GICS_LUFT for k in sp) for sp in spalter)
+        if bedst is None or hoejde < bedst[0]:
+            bedst = (hoejde, spalter)
+    return bedst[1]
+
+
+def gics_oversigt(prs, r):
+    """Appendiks: GICS-sektorerne med en kort beskrivelse og deres branchegrupper, i
+    sektorernes faste farver."""
+    s = _ny_slide(prs, L_TEKST)
+    _titel(s, "GICS-sektorer og branchegrupper")
+    _fjern_tomme_ph(s)
+    _tekst(s, X0, Y_UNDERTITEL, X1 - X0, 0.22,
+           f"{r['navn']}  ·  branchefordelingen i rapporten følger Global Industry "
+           "Classification Standard", 9.5)
+    luft_mellem = 0.30
+    spalte_b = (X1 - X0 - luft_mellem * (GICS_KOL - 1)) / GICS_KOL
+    for nr, spalte in enumerate(_gics_spalter(list(GICS_STRUKTUR))):
+        x = X0 + nr * (spalte_b + luft_mellem)
+        y = Y_TOP
+        for kode in spalte:
+            h = _gics_hoejde(kode)
+            _bjaelke(s, x, y + 0.03, 0.07, h - 0.06, SEKTOR_FARVER.get(kode, BR_UDEN_GICS))
+            tx, tw = x + 0.15, spalte_b - 0.15
+            _tekst(s, tx, y, tw, GICS_NAVN_H, SEKTORER[kode], 9.5, fed=True, farve=SAGE)
+            by = y + GICS_NAVN_H
+            bh = ceil(len(GICS_BESKRIVELSER[kode]) / GICS_TEGN) * GICS_LINJE
+            _tekst(s, tx, by, tw, bh, GICS_BESKRIVELSER[kode], 7.5)
+            gy = by + bh + 0.03
+            for gruppe in GICS_STRUKTUR[kode]:
+                _tekst(s, tx, gy, tw, GICS_LINJE, f"·  {BRANCHEGRUPPER[gruppe]}", 7.5,
+                       farve=SAGE)
+                gy += GICS_LINJE
+            y += h + GICS_LUFT
+    fod = Fodnoter("Kilde: MSCI og S&P Dow Jones Indices, Global Industry Classification "
+                   "Standard (GICS). Rapporten fordeler på sektorer; branchegrupperne er "
+                   "sektorernes underkategorier. »Diversificeret (fondsandele)« og »Ikke "
+                   "klassificeret« er rapportens egne grupper uden for GICS. Farverne er "
+                   "sektorernes farver i rapportens branchefordeling.")
+    fod.tegn(s)
+    return s
+
+
 # ---------- executive summary ----------
 
 SAM_FLISE_H = 0.80        # højden af nøgletalsfliserne øverst
@@ -2766,8 +3187,12 @@ SAM_LINJE = 0.17          # linjehøjde ved 9,5 pt
 SAM_MAKS_GRUPPER = 5      # flere grupper end det samles i "Øvrige"
 
 
-def _hoejdepunkter(r):
-    """Korte sætninger om porteføljen til executive summary; DKK-sætningerne kun med DKK-tal."""
+def _hoejdepunkter(r, fod=None):
+    """Korte sætninger om porteføljen til executive summary; DKK-sætningerne kun med DKK-tal.
+
+    fod (Fodnoter) får noterne om den største eksponering og fordelingerne, med mærket i
+    sætningen."""
+    fod = fod or Fodnoter()
     sm, fd = r["sammendrag"], r["fordelinger"]
     v = sm["vintage"]
     vintage = "" if not v else (f" med vintage {v[0]}" if v[0] == v[1]
@@ -2785,8 +3210,12 @@ def _hoejdepunkter(r):
             "kapital."]
     e = r.get("stoerste_eksponering")
     if e:
-        punkter.append(f"Største enkelteksponering er {e['navn']} ({e['art']} via {e['fond']}) "
-                       f"med {tusind(e['dkk'])} tDKK, svarende til {pct(e['andel'])} af NAV.")
+        m = fod.maerke("Eksponeringen er opgjort på forvalternes beholdningsoversigter"
+                       + (f"; {_navne(e['udeladt'])} indgår ikke, da der ikke er "
+                          "sammenlignelige beholdninger" if e["udeladt"] else "") + ".")
+        punkter.append(f"Største enkelteksponering er {e['navn']} ({e['art']} via "
+                       f"{e['fond']}) med {tusind(e['dkk'])} tDKK, svarende til "
+                       f"{pct(e['andel'])} af NAV{m}.")
     u = (r.get("udvikling") or {}).get("kvartal")
     if u:
         nav = u["ultimo"] - u["primo"]
@@ -2799,9 +3228,11 @@ def _hoejdepunkter(r):
     dele = []
     for noegle, (grupper, maal) in _sammendragsfordelinger(r).items():
         k = VISTE_NAVNE[noegle].lower()
-        if grupper and grupper[0]["andel"] is not None:
-            dele.append(f"største {k} er {grupper[0]['navn']} med {pct(grupper[0]['andel'])} "
-                        f"af {maal}")
+        # segmenterne står i strategiorden, ikke efter størrelse
+        med_andel = [g for g in grupper if g["andel"] is not None]
+        if med_andel:
+            g = max(med_andel, key=lambda g: g["andel"])
+            dele.append(f"største {k} er {g['navn']} med {pct(g['andel'])} af {maal}")
     if dele:
         tekst = "; ".join(dele)
         punkter.append(tekst[0].upper() + tekst[1:] + ".")
@@ -2814,6 +3245,10 @@ def _hoejdepunkter(r):
 # segment er dataens ord for fondens strategi (buyout, venture, private credit …); på
 # sliderne hedder det investeringsstrategi, eller strategi, hvor der er smalt
 VISTE_NAVNE = {"geografi": "Geografi", "segment": "Investeringsstrategi"}
+# hvad fordelingerne på executive summary er målt på, efter geografiens mål
+SAM_FORDELINGSNOTE = {
+    "NAV": "Geografien er fordelt efter fondenes underliggende investeringer.",
+    "tilsagnet": "Geografien er fondenes geografiske fokus."}
 
 
 def _sammendragsfordelinger(r):
@@ -2866,6 +3301,9 @@ def sammendrag(prs, r):
     s = _oversigtsslide(prs, r, "Executive summary", enhed="beløb i tusinde DKK")
     sm = r["sammendrag"]
 
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    dkk = fod.maerke("Porteføljens nøgletal er beregnet på beløbene i DKK; med flere valutaer "
+                     "vises IRR kun pr. fond.")
     fliser = [(sm["antal_fonde"], "fonde i porteføljen"),
               (tusind(sm["tilsagn_dkk"]), "tilsagn, tDKK"),
               # otte fliser er for smalle til nøgletallet på samme linje som labelen
@@ -2874,7 +3312,7 @@ def sammendrag(prs, r):
               (tusind(sm["udloddet_dkk"]), f"udloddet, tDKK\nDPI {gange(sm['dpi'])}"),
               (tusind(sm["nav_dkk"]), "NAV, tDKK"),
               (tusind(sm.get("eksponering_dkk")), "eksponering, tDKK\nresttilsagn + NAV"),
-              (gange(sm["tvpi"]), "TVPI")]
+              (gange(sm["tvpi"]), f"TVPI{dkk}")]
     luft = 0.14
     flise_b = (X1 - X0 - luft * (len(fliser) - 1)) / len(fliser)
     for i, (tal, label) in enumerate(fliser):
@@ -2884,7 +3322,7 @@ def sammendrag(prs, r):
     _tekst(s, X0, y0, SAM_VENSTRE_B, 0.22, "Højdepunkter", 10.5, fed=True, farve=SAGE)
     _streg(s, X0, y0 + 0.27, X0 + SAM_VENSTRE_B, y0 + 0.27)
     y = y0 + 0.40
-    for punkt in _hoejdepunkter(r):
+    for punkt in _hoejdepunkter(r, fod):
         h = ceil(len(punkt) / SAM_TEGN) * SAM_LINJE
         _tekst(s, X0, y, 0.15, SAM_LINJE, "•", 9.5, farve=SAGE)
         _tekst(s, X0 + 0.18, y, SAM_VENSTRE_B - 0.18, h, punkt, 9.5)
@@ -2892,33 +3330,19 @@ def sammendrag(prs, r):
 
     hx = X0 + SAM_VENSTRE_B + 0.45
     hw = X1 - hx
+    blokke = _sammendragsfordelinger(r)
     _tekst(s, hx, y0, hw, 0.22, "Fordeling", 10.5, fed=True, farve=SAGE)
     _streg(s, hx, y0 + 0.27, X1, y0 + 0.27)
     y = y0 + 0.40
-    blokke = _sammendragsfordelinger(r)
     maks = max([g["andel"] or 0 for grupper, _ in blokke.values() for g in grupper] + [0.01])
     for noegle, (grupper, maal) in blokke.items():
-        overskrift = f"{VISTE_NAVNE[noegle]} – andel af {maal.removesuffix('et')}"
+        overskrift = (f"{VISTE_NAVNE[noegle]} – andel af {maal.removesuffix('et')}"
+                      + (fod.maerke(SAM_FORDELINGSNOTE[maal]) if noegle == "geografi" else ""))
         y = _fordelingsbjaelker(s, hx, y, hw, overskrift, grupper, maks)
         y += 0.12
 
-    noter = ["Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.",
-             "Beløb, PICC, DPI og TVPI for porteføljen er beregnet på beløbene i DKK; IRR er "
-             "pr. fond i fondens valuta."]
-    e = r.get("stoerste_eksponering")
-    if e:
-        noter.append("Største enkelteksponering er investors andel af beholdningens dagsværdi "
-                     "i forvalterens beholdningsoversigt"
-                     + (f"; {_navne(e['udeladt'])} indgår ikke, da der ikke er sammenlignelige "
-                        "beholdninger" if e["udeladt"] else "") + ".")
-    if r.get("regioner"):
-        noter.append("Geografien er investors NAV fordelt efter fondenes underliggende "
-                     "investeringer; investeringsstrategien er efter tilsagn.")
-    kursnote = _kursnote(r, "Fondenes beløb")
-    if kursnote:
-        noter.append(kursnote)
-    noter += _datonoter(r)
-    _tekst(s, X0, Y_NOTER, X1 - X0, 0.5, " ".join(noter), 7, kursiv=True)
+    fod.generel(_kursnote(r), _datonoter(r))
+    fod.tegn(s)
     return s
 
 
