@@ -24,7 +24,7 @@
 #                     stemmer angives som andel (0,58 = 58 %). Vises på virksomhedsprofilerne.
 
 CATACAP3:
-  status: udkast
+  status: ok
   beskrivelse: >-
     CataCap er en dansk kapitalfond med base i København. CataCap III investerer i
     små og mellemstore danske virksomheder, typisk som majoritetsejer, og arbejder med
@@ -49,7 +49,7 @@ CATACAP3:
       stemmer: 1.00
 
 SEED4:
-  status: udkast
+  status: ok
   beskrivelse: >-
     Seed Capital er en dansk venturefond, der investerer i teknologivirksomheder i de
     tidligste faser (pre-seed og seed) og følger op i senere runder. Fond IV har
@@ -67,21 +67,21 @@ SEED4:
   # (dokument 66005 og 66006) og er derfor slettet her.
 
 KAPE20:
-  status: udkast
+  status: ok
   beskrivelse: >-
     K Alternativ Private Equity 2020 er en fund of funds forvaltet af Alternative
     Equity Partners. Fonden har givet tilsagn til syv underliggende kapitalfonde,
     primært buyout-fonde i Europa og Nordamerika samt en secondaries-fond.
 
 KAPE21:
-  status: udkast
+  status: ok
   beskrivelse: >-
     K Alternativ Private Equity 2021 er en fund of funds forvaltet af Alternative
     Equity Partners. Fonden har givet tilsagn til syv underliggende kapitalfonde,
     primært buyout-fonde i Europa og Nordamerika.
 
 KAPE22:
-  status: udkast
+  status: ok
   beskrivelse: >-
     K Alternativ Private Equity 2022 er en fund of funds forvaltet af Alternative
     Equity Partners. Fonden har givet tilsagn
@@ -93,7 +93,7 @@ KAPE22:
 # underliggende fond. Benchmark er hentet fra "Slides vdr. Alternativer".
 
 PPPE2:
-  status: udkast
+  status: ok
   beskrivelse: >-
     Petersen & Partners Private Equity II investerer i Newbury Equity Partners VI,
     en sekundærfond. Newbury køber eksisterende tilsagn af investorer, der ønsker at
@@ -102,7 +102,7 @@ PPPE2:
     eksponering til 26 underliggende fonde og 269 selskaber.
 
 PPPC2:
-  status: udkast
+  status: ok
   beskrivelse: >-
     Petersen & Partners Private Credit II investerer i Park Square Capital Partners V,
     der yder lån til mellemstore virksomheder i Europa og Nordamerika, typisk i
@@ -115,7 +115,7 @@ PPPC2:
 # (master_data_source i rpt.v_fund_master).
 
 PD3LGT:
-  status: udkast
+  status: ok
   beskrivelse: >-
     Private Debt III LGT er en fund of funds forvaltet af Alternative Equity Partners.
     Fonden investerer i LGT Capital Partners' LGT European Private Debt III og III B, der
@@ -128,7 +128,7 @@ PD3LGT:
 
 HOME:
   evergreen: true
-  status: udkast
+  status: ok
   beskrivelse: >-
     Home.Earth er en dansk evergreen-ejendomsfond (K/S), der køber, udvikler og driver bæredygtige
     boliger i hovedstadsområdet. Porteføljen tæller udlejningsejendommene C.F. Møllers Have,
@@ -141,7 +141,7 @@ HOME:
 
 CRED:
   evergreen: true
-  status: udkast
+  status: ok
   beskrivelse: >-
     Commercial Real Estate Denmark er en dansk evergreen-ejendomsfond (P/S) forvaltet af
     Rubik Management. Fonden ejer 27 erhvervsejendomme, primært kontorer i
