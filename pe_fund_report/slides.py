@@ -1515,10 +1515,10 @@ SEKTOR_FARVER = {"FINANCIALS": TAUPE, "INDUSTRIALS": TERRA, "HEALTH_CARE": SAGE_
                  "CONSUMER_DISCRETIONARY": OLIVEN, "CONSUMER_STAPLES": _rgb(style.PPIM_RED_LIGHT),
                  "COMMUNICATION_SERVICES": SAGE, "MATERIALS": ROED, "UTILITIES": SAGE_MID,
                  "ENERGY": _rgb(style.PPIM_BEIGE),
-                 # husfarverne er brugt af sektorerne og regionerne; en dæmpet blomme er den
-                 # eneste lilla, så den ikke forveksles med ejendomssegmenternes skifer
-                 # (EJD_SEGMENT_FARVER) på siden pr. aktivklasse
-                 "REAL_ESTATE": _rgb("#6E5470")}
+                 # husfarverne er brugt af sektorerne og regionerne; en dæmpet petrol skiller
+                 # sig ud fra ejendomssegmenternes blågrå skifer (EJD_SEGMENT_FARVER) på siden
+                 # pr. aktivklasse uden at tage over som en klar farve ville
+                 "REAL_ESTATE": _rgb("#4F7470")}
 
 
 def _skiver(poster):

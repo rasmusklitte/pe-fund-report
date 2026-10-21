@@ -174,8 +174,8 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
 - **One colour per category.** Each GICS sector has a fixed colour in `slides.SEKTOR_FARVER`,
   the same on every slide and in every part (the user's rule: a colour always means the same
   category). Grey is reserved: `BR_OEVRIGE` only for »Øvrige« / »Øvrige fonde«, `BR_UDEN_GICS`
-  for non-GICS rows. Real Estate is a dusty plum, the only purple, so it is not confused with
-  the property-segment slates on *pr. aktivklasse* (the house colours are taken by sectors and
+  for non-GICS rows. Real Estate is a muted teal (#4F7470; the user found plum too loud), so
+  it is not confused with the blue-grey property-segment slates on *pr. aktivklasse* (the house colours are taken by sectors and
   regions), and the property segments are fixed slate shades in `EJD_SEGMENT_FARVER`.
   Regions keep `GEO_FARVER`.
 - **Treemaps with property for itself** (`slides.branchekort_ejendomme` / `regionskort_ejendomme`,
