@@ -65,6 +65,9 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
         xlsx = _gem(excel.skriv(r), outfile.with_name(f"{outfile.stem}_data.xlsx"))
         print(f"gemt: {xlsx}  (data og kildedokumenter)")
     _advar_om_datoer(r["datotjek"])
+    for f in r["fonde"]:
+        for advarsel in f.get("advarsler", []):
+            print(f"ADVARSEL: {f['fund_name']}: {advarsel}")
     _advar_om_klassifikation(r["brancher"], "branchen")
     _advar_om_klassifikation(r["regioner"], "geografien")
     if r["valuta"] is None:

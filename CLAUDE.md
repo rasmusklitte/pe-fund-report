@@ -298,8 +298,15 @@ not use. Non-negotiables:
 - IRR is `data.xirr` (act/365 bisection) over the investor's cash flows with NAV as the final flow;
   the portfolio IRR is pooled over all funds, not averaged. `data.total()` returns `None` when the
   funds are not all in the same currency — the slides then drop the total row.
-- If the GP's own paid-in figure differs from the registered capital calls by more than
-  `GP_TOLERANCE` (0.5 %), the GP figure wins and a note is added.
+- If the GP's own paid-in figure (CA110 ITD **at the NAV date only**; MM110 is called capital,
+  which includes call discounts) differs from the registered capital calls by more than
+  `GP_TOLERANCE` (0.5 %), the GP figure wins and a note is added (`data.gp_vinder`) — unless
+  the gap equals the recallable distributions: some GPs (MIF3) net those out of CA110, while
+  here they count as distributions, so the GP figure would subtract them twice.
+- Cash flows after `as_of` are never read (`fond()` filters them), so a report for an earlier
+  date is reproducible. `data.afstem_mod_forvalteren` compares resttilsagn with MM120 and
+  TVPI with MM160 and adds a build warning (`f["advarsler"]`, printed by `byg()`, not in the
+  deck) when they differ; unreviewed `status: udkast` text is warned about the same way.
 - DKK conversion (*Investeringer*: resttilsagn and NAV in DKK) uses one
   Nationalbanken rate per currency at the report date, read by `data._dkk_kurs()` from
   `dbo.fx_rates_nationalbanken` (latest `rate_date` on or before; DKK has no rows and gets 1).
@@ -335,7 +342,10 @@ Fund master data comes from `rpt.v_fund_master`, joined in `data._investeringer(
   fund's own logo where it has one (PD3LGT: LGT, while its manager is AEP), else the manager's.
 
 `config/fund_info.yaml` holds only what the database does not: `beskrivelse` and
-`estimerede_cashflows` for notices that never arrived. Optional: `benchmark` (shown on
+`estimerede_cashflows` for notices that never arrived. Each estimate names its `investor`
+(cash flows belong to investor × fund; `data.estimerede_cashflows` raises without it), and an
+estimate whose amount now appears among the registered cash flows is dropped with a build
+warning, so a notice that arrives later is never counted twice. Optional: `benchmark` (shown on
 *Lange tilsagn*) and `virksomheder` (per-company description and ownership for the profile
 cards; the key must match `name` in `rpt.v_portfolio_holding` exactly). `status: udkast` marks
 text written by Claude and not yet reviewed, until someone changes it to `ok`; it is for

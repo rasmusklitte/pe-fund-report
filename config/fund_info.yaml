@@ -3,9 +3,18 @@
 # rpt.v_fund_master.
 #
 # status: udkast   -> teksten er skrevet af Claude ud fra almen viden om forvalteren og er
-#                     IKKE gennemgået. Sliden får en fodnote, indtil status ændres til "ok".
+#                     IKKE gennemgået. Kun til intern opfølgning: decket får ingen note, men
+#                     bygningen advarer, indtil status ændres til "ok".
 # estimerede_cashflows -> indbetalinger/udlodninger, der mangler i databasen. LP-fortegn
-#                     (betalt < 0). Bruges kun i IRR-beregningen og i historikgrafen.
+#                     (betalt < 0). Bruges kun i IRR-beregningen og i historikgrafen. Hvert
+#                     skøn skal have investor (investor_code), for cash flows hører til
+#                     investor × fond:
+#                       - investor: MOTORTRAMP
+#                         dato: 2024-06-30
+#                         beloeb: -943382
+#                         note: Draw down 14 (mellem 10.04.2024 og 19.09.2024)
+#                     Når meddelelsen er registreret, udelades skønnet, og bygningen beder
+#                     om at slette det her.
 #
 # Valgfri felter (udelades roligt; sliden viser "n/a" eller springer feltet over):
 # benchmark        -> benchmarkets navn, fx "iShares MSCI ACWI Acc (EUR)". Kun teksten; der
@@ -54,15 +63,8 @@ SEED4:
       beskrivelse: >-
         Opkøbt i 2023. Online platform for high-end ferieudlejning.
       ejerandel: 0.201
-  estimerede_cashflows:
-    # Draw down 14 og 16 er ikke modtaget (docs/pdf-inventory.md). Beløbene følger af
-    # GP'ens "contributed to date"; datoerne er skøn inden for det vindue, de ligger i.
-    - dato: 2024-06-30
-      beloeb: -943382
-      note: Draw down 14 (mellem 10.04.2024 og 19.09.2024)
-    - dato: 2024-11-15
-      beloeb: -2172990
-      note: Draw down 16 (mellem 19.09.2024 og 31.12.2024)
+  # Draw down 14 og 16 stod her som skønnede kapitalkald; de er nu registreret i databasen
+  # (dokument 66005 og 66006) og er derfor slettet her.
 
 KAPE20:
   status: udkast

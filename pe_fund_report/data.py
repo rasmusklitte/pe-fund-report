@@ -164,7 +164,8 @@ def investor_navn(investor_code):
 
 def _investeringer(investor_code):
     return read_sql("""
-        SELECT x.investment_id, f.fund_code, f.name AS fund_name, f.strategy, f.currency,
+        SELECT x.investment_id, i.investor_code, f.fund_code, f.name AS fund_name, f.strategy,
+               f.currency,
                f.vintage_year,
                -- vores feeder-selskaber står med os selv som forvalter; vis den forvalter,
                -- der forvalter den underliggende fond, som pengene reelt ligger i
@@ -213,12 +214,50 @@ def _kapitalkonto(investment_id, as_of):
 
 
 def _gp_indbetalt(ka, nav_dato):
-    """GP'ens akkumulerede indbetalinger: CA110 ITD på NAV-datoen, ellers seneste MM110."""
+    """GP'ens akkumulerede indbetalinger: CA110 ITD på NAV-datoen, ellers None.
+
+    Kun et tal pr. NAV-datoen: et ældre tal mangler de senere kald og ville trække den
+    indbetalte kapital ned. MM110 bruges ikke: det er kaldt kapital, som ved rabat på kald
+    (Petersen & Partners' feedere) er mere end det, investor har betalt.
+    """
     itd = ka[(ka.account_code == "CA110") & (ka.basis == "ITD") & (ka.period_end == nav_dato)]
-    if not itd.empty:
-        return _f(itd.amount.iloc[0])
-    mm = ka[ka.account_code == "MM110"].sort_values("period_end")
-    return _f(mm.amount.iloc[-1]) if not mm.empty else None
+    return _f(itd.amount.iloc[0]) if not itd.empty else None
+
+
+def gp_vinder(cf_indbetalt, gp_indbetalt, genkaldelige):
+    """Skal forvalterens indbetalte kapital bruges frem for summen af kapitalkaldene?
+
+    Kun når de afviger med mere end GP_TOLERANCE, og afvigelsen ikke forklares af de
+    genkaldelige udlodninger: nogle forvaltere (MIF3) trækker dem fra i CA110, mens de her
+    tæller som udlodninger, så GP-tallet ville trække dem fra to gange.
+    """
+    if not gp_indbetalt:
+        return False
+    graense = GP_TOLERANCE * gp_indbetalt
+    return (abs(gp_indbetalt - cf_indbetalt) > graense
+            and abs(gp_indbetalt + genkaldelige - cf_indbetalt) > graense)
+
+
+def estimerede_cashflows(info, investor_code, cf, nav_dato):
+    """(skønnede cash flows til og med nav_dato, advarsler) for én investors andel i fonden.
+
+    Skønnene står i fund_info.yaml under fonden, hver med den investor, kaldet tilhører
+    (cash flows hører til investor × fond). Et skøn, hvis beløb nu findes blandt de
+    registrerede cash flows, er afløst af den rigtige meddelelse og udelades, så kaldet
+    ikke tælles to gange; advarslen beder om at slette det fra filen.
+    """
+    est, advarsler = [], []
+    for e in info.get("estimerede_cashflows", []):
+        if "investor" not in e:
+            raise ValueError(f"estimerede_cashflows mangler investor: {e}")
+        if e["investor"] != investor_code or _dato(e["dato"]) > nav_dato:
+            continue
+        if (abs(cf.amount - float(e["beloeb"])) < 1).any():
+            advarsler.append(f"det skønnede cash flow ({e['note']}) er nu registreret og "
+                             "medregnes ikke igen - slet det fra fund_info.yaml")
+            continue
+        est.append(e)
+    return est, advarsler
 
 
 def kaldt(indbetalt, gp_kaldt):
@@ -231,6 +270,27 @@ def kaldt(indbetalt, gp_kaldt):
     if gp_kaldt and gp_kaldt - indbetalt > GP_TOLERANCE * gp_kaldt:
         return gp_kaldt
     return indbetalt
+
+
+TVPI_TOLERANCE = 0.015    # forvalterne oplyser TVPI med to decimaler
+
+
+def afstem_mod_forvalteren(n, gp_resttilsagn, valuta):
+    """Advarsler, hvor resttilsagn eller TVPI afviger fra forvalterens eget tal (MM120, MM160).
+
+    Kun til bygningen: tallene i decket regnes af cash flows og NAV, men en afvigelse
+    betyder typisk et manglende kald, en manglende udlodning eller en udløbet genkaldelig
+    udlodning, som skal ses efter før udsendelse.
+    """
+    ud = []
+    if (gp_resttilsagn is not None and n["resttilsagn"] is not None and n["tilsagn"]
+            and abs(n["resttilsagn"] - gp_resttilsagn) > GP_TOLERANCE * n["tilsagn"]):
+        ud.append(f"resttilsagn {n['resttilsagn']:,.0f} {valuta}, forvalteren (MM120) "
+                  f"{gp_resttilsagn:,.0f} {valuta}")
+    if (n["gp_tvpi"] is not None and n["tvpi"] is not None
+            and abs(n["tvpi"] - n["gp_tvpi"]) > TVPI_TOLERANCE):
+        ud.append(f"TVPI {n['tvpi']:.3f}, forvalteren (MM160) {n['gp_tvpi']:.2f}")
+    return ud
 
 
 def _memo(ka, nav_dato, konto):
@@ -757,6 +817,8 @@ def fond(inv, as_of, info):
                      ORDER BY value_date, account_code""", i=iid)
     cf["value_date"] = cf.value_date.map(_dato)
     cf["amount"] = cf.amount.astype(float)
+    # intet efter rapportdatoen: en rapport pr. en tidligere dato skal se ud, som den gjorde da
+    cf = cf[cf.value_date <= as_of]
     alle_cf = cf
     senere, cf = cf[cf.value_date > nav_dato], cf[cf.value_date <= nav_dato]
 
@@ -780,20 +842,19 @@ def fond(inv, as_of, info):
     ka["period_end"] = ka.period_end.map(_dato)
     gp_indbetalt = _gp_indbetalt(ka, nav_dato)
     mod_tilsagn = cf_indbetalt
-    if gp_indbetalt and abs(gp_indbetalt - cf_indbetalt) > GP_TOLERANCE * gp_indbetalt:
+    if gp_vinder(cf_indbetalt, gp_indbetalt, recallable):
         mod_tilsagn = gp_indbetalt
         # forvalterens tal står i nøgletallene; noten siger kun, hvad kaldene summerer til
         noter.append(Note(f"Indbetalt kapital følger forvalterens opgørelse; de modtagne "
                           f"kapitalkald summerer til {cf_indbetalt / 1000:,.0f} t{inv.currency}."
                           .replace(",", "."), "indbetalt"))
 
-    est = [(_dato(e["dato"]), float(e["beloeb"])) for e in info.get("estimerede_cashflows", [])
-           if _dato(e["dato"]) <= nav_dato]
+    estimerede, advarsler = estimerede_cashflows(info, inv.investor_code, cf, nav_dato)
+    est = [(_dato(e["dato"]), float(e["beloeb"])) for e in estimerede]
     if est:
         noter.append(Note("IRR og historik medregner kapitalkald med skønnet dato, hvor "
                           "meddelelsen ikke er modtaget: "
-                          + "; ".join(e["note"] for e in info["estimerede_cashflows"]) + ".",
-                          "irr"))
+                          + "; ".join(e["note"] for e in estimerede) + ".", "irr"))
 
     nav_nu = float(nav.nav.iloc[-1])
     irr_flows = [(r.value_date, r.amount) for r in cf.itertuples()
@@ -927,8 +988,12 @@ def fond(inv, as_of, info):
         kilder=dict(nav=nav, cash_flows=alle_cf, kapitalkonto=ka, tilsagn=tilsagn_haendelser,
                     fondsstoerrelse=fondsstr_kilde, fonds_nav=fonds_navs,
                     indbetalt="forvalteren" if mod_tilsagn != cf_indbetalt else "kapitalkald",
-                    estimerede=[e for e in info.get("estimerede_cashflows", [])
-                                if _dato(e["dato"]) <= nav_dato]))
+                    estimerede=estimerede),
+        # til bygningen, ikke til decket: forhold, der skal ses på før udsendelse
+        advarsler=advarsler + afstem_mod_forvalteren(n, _memo(ka, nav_dato, "MM120"),
+                                                     inv.currency)
+        + (["beskrivelserne i fund_info.yaml er ikke gennemgået (status: udkast)"]
+           if info.get("status") == "udkast" else []))
 
 
 def total(fonde):
@@ -938,13 +1003,16 @@ def total(fonde):
     """
     if len({f["valuta"] for f in fonde}) != 1:
         return None
-    s = lambda k: sum(f["n"][k] or 0 for f in fonde)
+    # et ukendt beløb gør summen ukendt; som 0 ville det fx give for høj PICC
+    s = lambda k: (None if any(f["n"][k] is None for f in fonde)
+                   else sum(f["n"][k] for f in fonde))
     tilsagn, indbetalt, udloddet, nav = s("tilsagn"), s("indbetalt"), s("udloddet"), s("nav")
     return dict(tilsagn=tilsagn, indbetalt=indbetalt, udloddet=udloddet, nav=nav,
                 recallable=s("recallable"), resttilsagn=s("resttilsagn"),
-                picc=indbetalt / tilsagn if tilsagn else None,
-                dpi=udloddet / indbetalt if indbetalt else None,
-                tvpi=(udloddet + nav) / indbetalt if indbetalt else None,
+                picc=indbetalt / tilsagn if tilsagn and indbetalt is not None else None,
+                dpi=udloddet / indbetalt if indbetalt and udloddet is not None else None,
+                tvpi=((udloddet + nav) / indbetalt
+                      if indbetalt and udloddet is not None and nav is not None else None),
                 irr=xirr([x for f in fonde for x in f["irr_flows"]]))
 
 

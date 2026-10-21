@@ -40,9 +40,78 @@ def test_total_er_none_ved_blandede_valutaer():
     assert data.total([a, b]) is None
 
 
+def test_total_er_none_naar_et_beloeb_mangler():
+    a = _fond("DKK", 100, 50, 10, 60, [])
+    b = _fond("DKK", 200, 150, 0, 150, [])
+    b["n"].update(tilsagn=None, resttilsagn=None)
+    t = data.total([a, b])
+    # som 0 ville tilsagnet give PICC 200 % og et for lavt resttilsagn
+    assert t["tilsagn"] is None and t["resttilsagn"] is None and t["picc"] is None
+    assert t["indbetalt"] == 200 and t["tvpi"] == pytest.approx(220 / 200)
+
+
+def _ka(*raekker):
+    return pd.DataFrame(raekker, columns=["period_end", "basis", "account_code", "amount"])
+
+
+def test_gp_indbetalt_bruger_kun_ca110_paa_nav_datoen():
+    nav_dato = date(2026, 6, 30)
+    ka = _ka((date(2026, 3, 31), "ITD", "CA110", 900.0), (nav_dato, "POINT", "MM110", 1000.0))
+    # et ældre CA110 mangler de senere kald, og MM110 er kaldt kapital inkl. rabat
+    assert data._gp_indbetalt(ka, nav_dato) is None
+    ka = _ka((nav_dato, "ITD", "CA110", 950.0), (nav_dato, "POINT", "MM110", 1000.0))
+    assert data._gp_indbetalt(ka, nav_dato) == 950.0
+
+
+def test_gp_vinder_ikke_naar_forskellen_er_genkaldelige_udlodninger():
+    # MIF3 pr. 30.06.2026: kaldene summerer til MM110, CA110 er fratrukket den genkaldelige
+    # udlodning, som her tæller som udlodning - GP-tallet ville trække den fra to gange
+    assert not data.gp_vinder(4_089_038.0, 3_698_585.0, 390_453.09)
+    assert not data.gp_vinder(22_734_924.0, 22_734_924.0, 0.0)
+    assert not data.gp_vinder(100.0, None, 0.0)
+    # et manglende kald i databasen: forvalterens tal vinder
+    assert data.gp_vinder(20_000_000.0, 21_000_000.0, 0.0)
+
+
+def _cf(*beloeb):
+    return pd.DataFrame({"amount": list(beloeb)})
+
+
+def test_estimerede_cashflows_hoerer_til_investoren():
+    info = {"estimerede_cashflows": [
+        dict(investor="A", dato="2024-06-30", beloeb=-100, note="Kald 1"),
+        dict(investor="B", dato="2024-06-30", beloeb=-200, note="Kald 2"),
+        dict(investor="A", dato="2026-09-30", beloeb=-300, note="Efter NAV")]}
+    est, advarsler = data.estimerede_cashflows(info, "A", _cf(-50.0), date(2026, 6, 30))
+    assert [e["note"] for e in est] == ["Kald 1"] and advarsler == []
+
+
+def test_registreret_skoen_medregnes_ikke_igen():
+    info = {"estimerede_cashflows": [
+        dict(investor="A", dato="2024-06-30", beloeb=-943382, note="Draw down 14")]}
+    est, advarsler = data.estimerede_cashflows(info, "A", _cf(-943382.0), date(2026, 6, 30))
+    assert est == [] and "Draw down 14" in advarsler[0]
+
+
+def test_skoen_uden_investor_afvises():
+    info = {"estimerede_cashflows": [dict(dato="2024-06-30", beloeb=-1, note="x")]}
+    with pytest.raises(ValueError):
+        data.estimerede_cashflows(info, "A", _cf(), date(2026, 6, 30))
+
+
+def test_afstemning_mod_forvalteren():
+    n = dict(tilsagn=1000.0, resttilsagn=500.0, tvpi=1.311, gp_tvpi=1.30)
+    assert data.afstem_mod_forvalteren(n, 502.0, "EUR") == []     # afrunding
+    advarsler = data.afstem_mod_forvalteren(n | {"gp_tvpi": 1.25}, 450.0, "EUR")
+    assert len(advarsler) == 2 and "MM120" in advarsler[0] and "MM160" in advarsler[1]
+    assert data.afstem_mod_forvalteren(n | {"gp_tvpi": None}, None, "EUR") == []
+
+
 def test_fund_info_har_de_forventede_felter():
     for kode, info in data.fund_info().items():
         assert {"status", "beskrivelse"} <= set(info), kode
+        # cash flows hører til investor × fond, så et skøn skal sige, hvis kald det er
+        assert all("investor" in e for e in info.get("estimerede_cashflows", [])), kode
         # stamdata fra rpt.v_fund_master hører ikke hjemme her; to kilder kunne være uenige
         assert not {"geografi", "segment", "loebetid", "fondsstoerrelse",
                     "forvalter"} & set(info), kode
