@@ -350,8 +350,10 @@ def test_tilsagn_paa_tvaers_summerer_dkk_paa_tvaers_af_valutaer():
                                     indbetalt_dkk=100_000.0, udloddet_dkk=0.0),
                      kurser={"DKK": (1.0, date(2026, 6, 30)), "EUR": (7.46, date(2026, 6, 30))})
     r["valuta"] = None
+    r["irr_dkk"] = dict(irr=0.0841, flows=[])
     t = _tekster(slides.tilsagn_paa_tvaers(_prs(), r))
     assert "I alt²" in t and "DKK\vNAV¹" in t
+    assert "8,4 %" in t                               # porteføljens IRR i DKK
     assert "87" in t and "131" in t                   # DKK-summerne
     assert any("² Fondene har forskellige valutaer, så i alt-rækken har kun beløbene i DKK" in x
                for x in t)
@@ -510,7 +512,7 @@ def test_sammendrag_viser_noegletal_hoejdepunkter_og_fordeling():
     t = _tekster(s)
     assert "Executive summary" in t
     for label in ("fonde i porteføljen", "tilsagn, tDKK", "resttilsagn, tDKK", "NAV, tDKK",
-                  "TVPI¹"):
+                  "TVPI¹\vIRR n/a"):          # uden IRR i DKK
         assert label in t, label
     assert any(x.startswith("eksponering, tDKK") and x.endswith("resttilsagn + NAV") for x in t)
     assert slides.tusind(r["total_dkk"]["tilsagn_dkk"]) in t
@@ -858,6 +860,19 @@ def test_sammendrag_bruger_regionerne_fra_geografisk_eksponering():
     assert any("Geografien er fordelt efter fondenes underliggende investeringer." in x
                for x in t)
     assert not any("på siden Geografisk eksponering" in x for x in t)   # siden er ikke i decket
+
+
+def test_sammendrag_viser_porteføljens_irr_i_dkk():
+    r = _ford_rapport()
+    for f, m, v in zip(r["fonde"], ("X", "Y", "X"), (2020, 2022, 2023)):
+        f.update(manager=m, vintage=v)
+        f["n"]["irr"] = 0.12
+    r["fordelinger"]["segment"] = data.fordeling(r["fonde"], "segment")
+    r["total_dkk"] = data.dkk_total(r["fonde"])
+    r["sammendrag"] = data.sammendrag(r["fonde"], r["total_dkk"], 0.0841)
+    t = _tekster(slides.sammendrag(_prs(), r))
+    assert "TVPI¹\vIRR 8,4 %" in t
+    assert any("Porteføljens nøgletal, også IRR, er beregnet på beløbene i DKK." in x for x in t)
 
 
 def test_sammendrag_naevner_det_stoerste_segment_ikke_det_foerste():

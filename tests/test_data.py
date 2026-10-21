@@ -107,6 +107,31 @@ def test_afstemning_mod_forvalteren():
     assert data.afstem_mod_forvalteren(n | {"gp_tvpi": None}, None, "EUR") == []
 
 
+def _irr_fond(kode, valuta, flows, nav_dato, nav, nav_dkk):
+    return dict(fund_code=kode, fund_name=kode, valuta=valuta,
+                irr_flows=flows + [(nav_dato, nav)], n=dict(nav=nav, nav_dkk=nav_dkk))
+
+
+def test_irr_dkk_omregner_hver_cash_flow_med_kursen_paa_dagen():
+    d0, d1 = date(2024, 1, 1), date(2025, 1, 1)
+    kurser = {("EUR", d0): 7.0, ("DKK", d0): 1.0}
+    kurs = lambda v, d: kurser.get((v, d))
+    eur = _irr_fond("E", "EUR", [(d0, -100.0)], d1, 100.0, 770.0)    # EUR 7,00 -> 7,70
+    dkk = _irr_fond("D", "DKK", [(d0, -300.0)], d1, 330.0, 330.0)
+    ud = data.irr_dkk([eur, dkk], kurs)
+    # -700 - 300 ud, 770 + 330 tilbage efter 366 dage: 10 % i DKK, selv om EUR-fonden gav 0 %
+    assert ud["irr"] == pytest.approx(data.xirr([(d0, -1000.0), (d1, 1100.0)]))
+    assert [x["dkk"] for x in ud["flows"]] == [-700.0, -300.0, 770.0, 330.0]
+    assert ud["flows"][2]["type"] == "NAV (sidste cash flow)"
+
+
+def test_irr_dkk_er_none_uden_kurs():
+    d0, d1 = date(2024, 1, 1), date(2025, 1, 1)
+    eur = _irr_fond("E", "EUR", [(d0, -100.0)], d1, 100.0, 770.0)
+    assert data.irr_dkk([eur], lambda v, d: None) is None
+    assert data.irr_dkk([eur | {"n": dict(nav=100.0, nav_dkk=None)}], lambda v, d: 7.0) is None
+
+
 def test_fund_info_har_de_forventede_felter():
     for kode, info in data.fund_info().items():
         assert {"status", "beskrivelse"} <= set(info), kode

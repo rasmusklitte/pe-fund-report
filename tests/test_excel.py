@@ -70,6 +70,8 @@ def _rapport(tmp_path, monkeypatch):
              kurser={"DKK": (1.0, NAV_DATO)}, kursopslag={("DKK", NAV_DATO): (1.0, NAV_DATO)},
              udvikling=data.portefoelje_udvikling([f]), vaerdibevaegelser=None, dokumenter=dok,
              datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
+    f["n"]["nav_dkk"] = f["n"]["nav"]
+    r["irr_dkk"] = data.irr_dkk([f], lambda v, d: 1.0)
     return excel.skriv(r)
 
 
@@ -90,6 +92,13 @@ def test_noegletal_er_formler_med_kontrol_mod_kapitalstroemmene(tmp_path, monkey
     kontrol = ws.cell(2, _kolonne(ws, "Kontrol: indbetalt iflg. kapitalkald")).value
     assert "SUMIFS('Kapitalstrømme'!$I:$I" in kontrol and '"CONTRIBUTION"' in kontrol
     assert ws.cell(2, _kolonne(ws, "Kontrol: IRR med XIRR")).value.startswith("=IFERROR(XIRR(IRR!")
+
+
+def test_irr_i_dkk_har_omregning_som_formel_og_xirr_kontrol(tmp_path, monkeypatch):
+    ws = _rapport(tmp_path, monkeypatch)["IRR DKK"]
+    assert ws.cell(2, _kolonne(ws, "Beløb DKK")).value == "=E2*F2"
+    assert ws.cell(2, _kolonne(ws, "Kontrol: IRR med XIRR")).value.startswith("=IFERROR(XIRR(")
+    assert ws.cell(ws.max_row, _kolonne(ws, "Type")).value == "NAV (sidste cash flow)"
 
 
 def test_kapitalstroemme_efter_nav_datoen_er_ikke_i_noegletal(tmp_path, monkeypatch):

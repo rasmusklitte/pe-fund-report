@@ -259,6 +259,27 @@ def _irr(wb, r):
     return blokke
 
 
+def _irr_dkk(wb, r):
+    """Porteføljens IRR i DKK: alle fondes cash flows omregnet med kursen på dagen."""
+    ird = r.get("irr_dkk")
+    if not ird:
+        return
+    ark = Ark(wb, "IRR DKK", [("Fondskode", 11, None, None), ("Fond", 34, None, None),
+                              ("Dato", 11, "dato", None), ("Valuta", 7, None, None),
+                              ("Beløb", 15, "tal", None), ("DKK-kurs", 9, "kurs", None),
+                              ("Beløb DKK", 15, "tal", None), ("Type", 24, None, None),
+                              ("IRR i rapporten", 10, "pct", None),
+                              ("Kontrol: IRR med XIRR", 10, "pct", "kontrol")])
+    foerste, sidste = 2, len(ird["flows"]) + 1
+    for i, x in enumerate(ird["flows"]):
+        ark.raekke([x["fund_code"], x["fund_name"], x["dato"], x["valuta"], x["beloeb"], x["kurs"],
+                    lambda rad, k: f"={k['Beløb']}{rad}*{k['DKK-kurs']}{rad}", x["type"],
+                    ird["irr"] if i == 0 else None,
+                    (f"=IFERROR(XIRR($G${foerste}:$G${sidste},$C${foerste}:$C${sidste}),\"\")"
+                     if i == 0 else None)])
+    ark.afslut()
+
+
 def _noegletal(wb, r, kilder, ks, nav_rad, irr_blokke):
     ark = Ark(wb, "Nøgletal", [
         ("Fondskode", 11, None, None), ("Fond", 34, None, None), ("Valuta", 7, None, None),
@@ -585,6 +606,8 @@ FANER = [
     ("Tilsagn", "Tilsagnshændelser pr. fond."),
     ("IRR", "IRR-cash flows pr. fond, med NAV som sidste cash flow; grundlaget for XIRR-"
             "kontrollen."),
+    ("IRR DKK", "Porteføljens IRR i DKK: alle fondes cash flows omregnet med Nationalbankens "
+                "kurs på dagen og NAV i DKK som sidste cash flow, med XIRR-kontrol."),
     ("Beholdninger", "Fondenes beholdninger ultimo og primo, hele fonden og investors andel. "
                      "For feederne (Gennem udfyldt) er det den underliggende fonds positioner, og "
                      "ejerandelen er feederens NAV / den underliggende fonds samlede dagsværdi."),
@@ -614,6 +637,7 @@ def skriv(r):
     _kapitalkonto(wb, r, kilder)
     _tilsagn(wb, r, kilder)
     irr_blokke = _irr(wb, r)
+    _irr_dkk(wb, r)
     _noegletal(wb, r, kilder, ks, nav_rad, irr_blokke)
     _vaerdibro(wb, r)
     _udvikling(wb, r, ks, nav_rad)

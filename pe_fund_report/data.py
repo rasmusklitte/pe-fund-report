@@ -1465,12 +1465,44 @@ def opdel_aktivklasser(fonde, art):
     return dict(ejendomme=ejendomme, dele=dele)
 
 
-def sammendrag(fonde, total_dkk):
+def irr_dkk(fonde, kurs):
+    """Porteføljens IRR i DKK, poolet over alle fondes cash flows, eller None.
+
+    Hver cash flow omregnes med kursen på sin egen dato (som amount_dkk i rpt.v_cash_flow),
+    og NAV er fondens NAV i DKK (kursen på rapportdatoen) på fondens NAV-dato. Så kan fonde i
+    forskellige valutaer regnes sammen, og afkastet er det, investor har haft i kroner,
+    valutakursændringer medregnet. kurs(valuta, dato) -> DKK pr. enhed eller None; mangler en
+    kurs, er IRR None. {irr, flows: [{fund_code, fund_name, dato, valuta, beloeb, kurs, dkk,
+    type}]} med flows i datoorden, til kontrollen i Excel.
+    """
+    flows = []
+    for f in fonde:
+        # irr_flows slutter med NAV på NAV-datoen (data.fond)
+        *cf, (nav_dato, _) = f["irr_flows"]
+        nav_dkk = f["n"].get("nav_dkk")
+        if nav_dkk is None:
+            return None
+        for d, a in cf:
+            k = kurs(f["valuta"], d)
+            if k is None:
+                return None
+            flows.append(dict(fund_code=f["fund_code"], fund_name=f["fund_name"], dato=d,
+                              valuta=f["valuta"], beloeb=a, kurs=k, dkk=a * k, type="Cash flow"))
+        flows.append(dict(fund_code=f["fund_code"], fund_name=f["fund_name"], dato=nav_dato,
+                          valuta=f["valuta"], beloeb=f["n"]["nav"],
+                          kurs=nav_dkk / f["n"]["nav"] if f["n"]["nav"] else None,
+                          dkk=nav_dkk, type="NAV (sidste cash flow)"))
+    if not flows:
+        return None
+    flows.sort(key=lambda x: (x["dato"], x["type"] != "Cash flow"))
+    return dict(irr=xirr([(x["dato"], x["dkk"]) for x in flows]), flows=flows)
+
+
+def sammendrag(fonde, total_dkk, irr=None):
     """Porteføljens hovedtal til executive summary.
 
     Beløb og nøgletal for porteføljen er i DKK (total_dkk), så fonde i forskellige valutaer kan
-    lægges sammen; uden DKK-tal er de None. IRR for porteføljen beregnes ikke her: der findes
-    ingen cash flow-serie i DKK, så IRR vises kun pr. fond.
+    lægges sammen; uden DKK-tal er de None. irr er porteføljens IRR i DKK fra irr_dkk().
     """
     td = total_dkk or {}
     ind, udl, nav = td.get("indbetalt_dkk"), td.get("udloddet_dkk"), td.get("nav_dkk")
@@ -1486,6 +1518,7 @@ def sammendrag(fonde, total_dkk):
         picc=ind / td["tilsagn_dkk"] if ind is not None and td.get("tilsagn_dkk") else None,
         dpi=udl / ind if ind and udl is not None else None,
         tvpi=(udl + nav) / ind if ind and udl is not None and nav is not None else None,
+        irr=irr,
         # det, investor samlet har stående i fondene: værdien i dag plus det, der kan kaldes
         eksponering_dkk=(td["resttilsagn_dkk"] + nav
                          if td.get("resttilsagn_dkk") is not None and nav is not None else None),
@@ -1748,9 +1781,11 @@ def investor_rapport(investor_code, as_of=None):
             if beh else None
             for p, (fra, _) in rapport_perioder.items()}
     omregn_udvikling_til_dkk(fonde, kurs)
+    irr_i_dkk = irr_dkk(fonde, kurs)
     return dict(investor=investor_code, navn=investor_navn(investor_code),
                 as_of=rapport_dato, fonde=fonde, total=total(fonde),
-                kurser=kurser, total_dkk=total_dkk, sammendrag=sammendrag(fonde, total_dkk),
+                kurser=kurser, total_dkk=total_dkk, irr_dkk=irr_i_dkk,
+                sammendrag=sammendrag(fonde, total_dkk, irr_i_dkk and irr_i_dkk["irr"]),
                 valutafordeling=valutafordeling(fonde),
                 fordelinger={k: fordeling(fonde, k) for k in ("geografi", "segment")},
                 brancher=eksponering(fonde, "brancher"), benchmark=benchmark(),

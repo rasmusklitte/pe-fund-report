@@ -131,7 +131,13 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   (ownership × fair value, as on the fund pages) in DKK at the report-date rate, shown as % of the
   investor's total NAV (the user's choice; holdings don't sum to NAV because of the funds' cash
   and carry). Funds without comparable holdings — property funds, unscaled or no holdings — are
-  ranked as one line at their NAV ("Fond (ikke gennemlyst)", light bar), also the user's choice. There is no portfolio IRR across currencies; IRR is only shown per fund.
+  ranked as one line at their NAV ("Fond (ikke gennemlyst)", light bar), also the user's choice.
+- **Portfolio IRR in DKK** (`data.irr_dkk()`, pure, in `r["irr_dkk"]`): every fund's IRR cash
+  flows converted at the Nationalbanken rate on their own date (same as `amount_dkk` in
+  `rpt.v_cash_flow`) with `nav_dkk` as the final flow, pooled with `xirr`. It is the IRR on the
+  executive summary tile and on the *Investeringer* total row when currencies differ; a
+  single-currency total row keeps the fund-currency IRR from `total()`. The Excel sheet
+  *IRR DKK* lists the flows with the DKK amount as a formula and an XIRR check.
 - **Industry and geography slides** (`slides.brancher` / `slides.regioner`, after the segment
   slide): one shared data path, configured per `art` in `data.ARTER`. `data._eksponering()` reads
   each fund's shares from `rpt.v_industry_exposure` / `rpt.v_geography_exposure` (GP breakdown, else

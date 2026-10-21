@@ -1142,7 +1142,8 @@ def tilsagn_paa_tvaers(prs, r):
     fond_m = {f["fund_name"]: (fod.maerker(_fondsnoter(f, "indbetalt")),
                                fod.maerker(_resttilsagnsnoter(f))) for f in fonde}
     i_alt_m = "" if t or not td else fod.maerke(
-        "Fondene har forskellige valutaer, så i alt-rækken har kun beløbene i DKK og TVPI.")
+        "Fondene har forskellige valutaer, så i alt-rækken har kun beløbene i DKK samt TVPI og "
+        "IRR i DKK.")
     fod.generel(_datonoter(r))
     raekke_h = min(0.95, (_noter_y(fod.tekst()) - Y_TOP - hoved_h - 0.1) / max(n_raekker, 1))
     _kolonnehoved(s, [(navn + hoved_m.get(j, ""), b, just)
@@ -1184,6 +1185,8 @@ def tilsagn_paa_tvaers(prs, r):
                 # som på fordelingssiderne: TVPI i DKK kan beregnes på tværs af valutaer
                 celler.append((TPT_TVPI, gange((td["udloddet_dkk"] + td["nav_dkk"])
                                                / td["indbetalt_dkk"])))
+            if not t:
+                celler.append((TPT_TVPI + 1, pct((r.get("irr_dkk") or {}).get("irr"))))
         for j, tekst in celler:
             tal(j, y, tekst, fed=True)
 
@@ -3015,8 +3018,8 @@ DEFINITIONER = [
     ("TVPI", "Total value to paid-in: (udlodninger + NAV) i forhold til indbetalt kapital. På "
              "i alt-rækker med flere valutaer er alle beløb omregnet til DKK."),
     ("IRR", "Den årlige interne rente af investors cash flows med NAV som sidste cash flow. "
-            "Porteføljens IRR er beregnet på alle fondes cash flows samlet, ikke som et "
-            "gennemsnit. Kildeskat indgår ikke."),
+            "Porteføljens IRR er regnet på alle fondes cash flows samlet, i DKK med dagens "
+            "kurs. Kildeskat indgår ikke."),
     ("Vintage", "Det år, fonden begyndte at investere."),
     ("Løbetid", "Fondens løbetid i år efter vedtægterne. Hvert »+1« er en mulig forlængelse "
                 "på ét år."),
@@ -3302,8 +3305,7 @@ def sammendrag(prs, r):
     sm = r["sammendrag"]
 
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
-    dkk = fod.maerke("Porteføljens nøgletal er beregnet på beløbene i DKK; med flere valutaer "
-                     "vises IRR kun pr. fond.")
+    dkk = fod.maerke("Porteføljens nøgletal, også IRR, er beregnet på beløbene i DKK.")
     fliser = [(sm["antal_fonde"], "fonde i porteføljen"),
               (tusind(sm["tilsagn_dkk"]), "tilsagn, tDKK"),
               # otte fliser er for smalle til nøgletallet på samme linje som labelen
@@ -3312,7 +3314,7 @@ def sammendrag(prs, r):
               (tusind(sm["udloddet_dkk"]), f"udloddet, tDKK\nDPI {gange(sm['dpi'])}"),
               (tusind(sm["nav_dkk"]), "NAV, tDKK"),
               (tusind(sm.get("eksponering_dkk")), "eksponering, tDKK\nresttilsagn + NAV"),
-              (gange(sm["tvpi"]), f"TVPI{dkk}")]
+              (gange(sm["tvpi"]), f"TVPI{dkk}\nIRR {pct(sm.get('irr'))}")]
     luft = 0.14
     flise_b = (X1 - X0 - luft * (len(fliser) - 1)) / len(fliser)
     for i, (tal, label) in enumerate(fliser):
