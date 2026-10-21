@@ -3314,13 +3314,14 @@ def sammendrag(prs, r):
     dkk = fod.maerke("Porteføljens nøgletal, også IRR, er beregnet på beløbene i DKK.")
     fliser = [(sm["antal_fonde"], "fonde i porteføljen"),
               (tusind(sm["tilsagn_dkk"]), "tilsagn, tDKK"),
-              # otte fliser er for smalle til nøgletallet på samme linje som labelen
+              # fliserne er for smalle til nøgletallet på samme linje som labelen
               (tusind(sm["indbetalt_dkk"]), f"indbetalt, tDKK\nPICC {pct(sm['picc'])}"),
               (tusind(sm["resttilsagn_dkk"]), "resttilsagn, tDKK"),
               (tusind(sm["udloddet_dkk"]), f"udloddet, tDKK\nDPI {gange(sm['dpi'])}"),
               (tusind(sm["nav_dkk"]), "NAV, tDKK"),
               (tusind(sm.get("eksponering_dkk")), "eksponering, tDKK\nresttilsagn + NAV"),
-              (gange(sm["tvpi"]), f"TVPI{dkk}\nIRR {pct(sm.get('irr'))}")]
+              (gange(sm["tvpi"]), f"TVPI{dkk}"),
+              (pct(sm.get("irr")), f"IRR{dkk}")]
     luft = 0.14
     flise_b = (X1 - X0 - luft * (len(fliser) - 1)) / len(fliser)
     for i, (tal, label) in enumerate(fliser):

@@ -512,7 +512,7 @@ def test_sammendrag_viser_noegletal_hoejdepunkter_og_fordeling():
     t = _tekster(s)
     assert "Executive summary" in t
     for label in ("fonde i porteføljen", "tilsagn, tDKK", "resttilsagn, tDKK", "NAV, tDKK",
-                  "TVPI¹\vIRR n/a"):          # uden IRR i DKK
+                  "TVPI¹", "IRR¹"):
         assert label in t, label
     assert any(x.startswith("eksponering, tDKK") and x.endswith("resttilsagn + NAV") for x in t)
     assert slides.tusind(r["total_dkk"]["tilsagn_dkk"]) in t
@@ -876,7 +876,7 @@ def test_sammendrag_viser_porteføljens_irr_i_dkk():
     r["total_dkk"] = data.dkk_total(r["fonde"])
     r["sammendrag"] = data.sammendrag(r["fonde"], r["total_dkk"], 0.0841)
     t = _tekster(slides.sammendrag(_prs(), r))
-    assert "TVPI¹\vIRR 8,4 %" in t
+    assert "IRR¹" in t and "8,4 %" in t          # egen flise med samme DKK-note som TVPI
     assert any("Porteføljens nøgletal, også IRR, er beregnet på beløbene i DKK." in x for x in t)
 
 
