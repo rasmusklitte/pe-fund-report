@@ -3043,10 +3043,6 @@ def _mio(v):
     return round(v * _SKALA / 1_000_000, 1)
 
 
-def _mio_tekst(v):
-    return style._dk(v * _SKALA / 1_000_000, 1) + " mio."
-
-
 def _diagramakser(diagram, talformat):
     """Vandrette gitterlinjer, ingen lodret akselinje, kategorierne nederst."""
     diagram.font.name, diagram.font.size = BROED_FONT, Pt(8)
@@ -3114,13 +3110,26 @@ def _j_kurve(s, x, y, w, h, kvartaler):
     return diagram
 
 
-def _stablede_soejler(s, x, y, w, h, kategorier, serier, talformat, etiketformat=None,
-                      totaler=None):
-    """Stablede søjler pr. år. serier: [(navn, værdier, farve)], nederst først; den nederste får
-    etiketter med etiketformat. totaler: en tekst pr. søjle, der står oven på den."""
+LQ_ETIKET_MIN = 0.08      # et stykke under 8 % af den højeste søjle er for lavt til sin etiket
+
+
+def _etiket(punkt, tekst, farve, position=XL_LABEL_POSITION.CENTER, fed=False):
+    etiket = punkt.data_label
+    etiket.position = position
+    etiket.text_frame.text = tekst
+    run = etiket.text_frame.paragraphs[0].runs[0]
+    run.font.size, run.font.bold, run.font.color.rgb = Pt(8), fed, farve
+
+
+def _stablede_soejler(s, x, y, w, h, kategorier, serier, talformat, totaler=None):
+    """Stablede søjler pr. år uden forklaring: hvert stykke bærer sin værdi som etiket.
+
+    serier: [(navn, værdier, farve, etiketter)], nederst først; etiketter er en tekst pr.
+    søjle (hvid på de mørke farver) eller None. totaler: en tekst pr. søjle oven på den.
+    """
     cd = CategoryChartData(number_format=talformat)
     cd.categories = kategorier
-    for navn, vaerdier, _ in serier:
+    for navn, vaerdier, *_ in serier:
         cd.add_series(navn, vaerdier)
     if totaler:
         # en usynlig serie på 0 øverst i stablen bærer totalen som etiket ved sin fod
@@ -3128,29 +3137,20 @@ def _stablede_soejler(s, x, y, w, h, kategorier, serier, talformat, etiketformat
     diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(x), Inches(y),
                                  Inches(w), Inches(h), cd).chart
     _diagramakser(diagram, talformat)
+    diagram.has_legend = False
     plot = diagram.plots[0]
     plot.gap_width = 45
-    for serie, (_, _, farve) in zip(plot.series, serier):
+    hoejest = max(sum(v) for v in zip(*(vaerdier for _, vaerdier, *_ in serier))) or 1
+    for serie, (_, vaerdier, farve, etiketter) in zip(plot.series, serier):
         _farv(serie, farve)
-    if etiketformat:
-        etiketter = plot.series[0].data_labels
-        etiketter.show_value = True
-        etiketter.number_format, etiketter.number_format_is_linked = etiketformat, False
-        etiketter.position = XL_LABEL_POSITION.CENTER
-        etiketter.font.size, etiketter.font.color.rgb = Pt(8), HVID
+        for punkt, v, tekst in zip(serie.points, vaerdier, etiketter or []):
+            if v >= LQ_ETIKET_MIN * hoejest:
+                _etiket(punkt, tekst, SORT if farve in KORT_LYSE else HVID)
     if totaler:
         top = plot.series[-1]
         top.format.fill.background()
         for punkt, tekst in zip(top.points, totaler):
-            etiket = punkt.data_label
-            etiket.position = XL_LABEL_POSITION.INSIDE_BASE
-            etiket.text_frame.text = tekst
-            run = etiket.text_frame.paragraphs[0].runs[0]
-            run.font.size, run.font.bold, run.font.color.rgb = Pt(8), True, SORT
-        # ingen forklaring for den usynlige serie
-        diagram.legend._element.insert(0, parse_xml(
-            f'<c:legendEntry {nsdecls("c")}><c:idx val="{len(serier)}"/>'
-            f'<c:delete val="1"/></c:legendEntry>'))
+            _etiket(punkt, tekst, SORT, XL_LABEL_POSITION.INSIDE_BASE, fed=True)
     return diagram
 
 
@@ -3202,16 +3202,18 @@ def likviditet(prs, r, med_ejendomme=False):
     kategorier[-1] += aar_maerke
     kaldt = _KALDT_LABEL[lq["genkaldelige"]]
     _tekst(s, X0, LQ_BUND_Y, bw, 0.22, "Kapitaltilsagn ved årets udgang", 11, fed=True)
-    _stablede_soejler(s, X0, by, bw, bh, kategorier, [
-        (f"Resttilsagn {_mio_tekst(sidste['resttilsagn'])}",
-         [_mio(a["resttilsagn"]) for a in lq["aar"]], SAGE),
-        (f"{kaldt} {_mio_tekst(sidste['kaldt'])}", [_mio(a["kaldt"]) for a in lq["aar"]],
-         SAGE_LYS)], '#,##0" mio."', '#,##0" mio."')
+    def mio(noegle, farve, navn):
+        return (navn, [_mio(a[noegle]) for a in lq["aar"]], farve,
+                [million(a[noegle]) + " mio." for a in lq["aar"]])
+
+    _stablede_soejler(s, X0, by, bw, bh, kategorier,
+                      [mio("resttilsagn", SAGE, "Resttilsagn"), mio("kaldt", SAGE_LYS, kaldt)],
+                      '#,##0" mio."')
     x2 = X0 + bw + LQ_LUFT
     _tekst(s, x2, LQ_BUND_Y, bw, 0.22, "TVPI ved årets udgang", 11, fed=True)
     _stablede_soejler(s, x2, by, bw, bh, kategorier, [
-        (f"RVPI {gange(sidste['rvpi'])}", [a["rvpi"] or 0 for a in lq["aar"]], SAGE),
-        (f"DPI {gange(sidste['dpi'])}", [a["dpi"] or 0 for a in lq["aar"]], SAGE_LYS)],
+        ("RVPI", [a["rvpi"] or 0 for a in lq["aar"]], SAGE, [gange(a["rvpi"]) for a in lq["aar"]]),
+        ("DPI", [a["dpi"] or 0 for a in lq["aar"]], SAGE_LYS, None)],
         '0.00"x"', totaler=[gange(a["tvpi"]) for a in lq["aar"]])
     fod.tegn(s, noter_y)
     return s

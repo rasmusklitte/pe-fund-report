@@ -1532,14 +1532,19 @@ def test_likviditet_med_ejendomme_siger_det_i_undertitlen():
     assert not any("indgår ikke" in x for x in t)
 
 
-def test_likviditet_tvpi_soejler_har_totalen_som_etiket():
+def test_likviditet_soejlerne_har_etiketter_og_ingen_forklaring():
     lq = data.likviditet([_lq_fond("Alfa", "Private equity")], lambda v, d: LQ_KURSER[d],
                          date(2026, 6, 30))
     r = dict(navn="Investor", as_of=date(2026, 6, 30), likviditet=lq,
              datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
-    tvpi = [sh.chart for sh in slides.likviditet(_prs(), r).shapes if sh.has_chart][-1]
-    top = tvpi.plots[0].series[-1]
-    assert [p.data_label.text_frame.text for p in top.points] == [
-        slides.gange(a["tvpi"]) for a in lq["aar"]]
-    # den usynlige bærerserie har ingen forklaring
-    assert tvpi.legend._element.find(qn("c:legendEntry")) is not None
+    with slides.beloebsskala(1_000_000):        # beløbene i mio., så de får etiketter
+        s = slides.likviditet(_prs(), r)
+    tilsagn, tvpi = [sh.chart for sh in s.shapes if sh.has_chart][1:]
+    etiketter = lambda serie: [p.data_label.text_frame.text for p in serie.points]
+    rvpi, _, total = tvpi.plots[0].series
+    assert etiketter(total) == [slides.gange(a["tvpi"]) for a in lq["aar"]]
+    assert etiketter(rvpi) == [slides.gange(a["rvpi"]) for a in lq["aar"]]
+    # 2024: resttilsagn 60 EUR og kaldt 40 EUR til 7,2
+    rest, kaldt = tilsagn.plots[0].series
+    assert (etiketter(rest)[0], etiketter(kaldt)[0]) == ("432 mio.", "288 mio.")
+    assert not tilsagn.has_legend and not tvpi.has_legend
