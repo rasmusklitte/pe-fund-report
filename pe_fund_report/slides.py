@@ -3136,15 +3136,17 @@ def _stablede_soejler(s, x, y, w, h, kategorier, serier, talformat, etiketformat
     return diagram
 
 
-def likviditet(prs, r):
-    """Samlede investeringer uden ejendomsfondene: fem nøgletal, J-kurven af den akkumulerede
-    netto cash flow, tilsagn og resttilsagn ved årets udgang og TVPI (DPI + RVPI) ved årets
-    udgang. Data fra data.likviditet(); None uden DKK-tal."""
-    lq = r.get("likviditet")
+def likviditet(prs, r, med_ejendomme=False):
+    """Samlede investeringer: fem nøgletal, J-kurven af den akkumulerede netto cash flow,
+    tilsagn og resttilsagn ved årets udgang og TVPI (DPI + RVPI) ved årets udgang. Uden
+    ejendomsfondene (r["likviditet"]), eller med dem (r["likviditet_alle"]). Data fra
+    data.likviditet(); None uden DKK-tal."""
+    lq = r.get("likviditet_alle" if med_ejendomme else "likviditet")
     if not lq:
         return None
     s = _oversigtsslide(prs, r, "Samlede investeringer",
-                        enhed="uden ejendomsfonde, beløb i tusinde DKK")
+                        enhed=("hele porteføljen inkl. ejendomsfonde" if med_ejendomme
+                               else "uden ejendomsfonde") + ", beløb i tusinde DKK")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel(f"Ejendomsfondene ({_navne(lq['udeladt'])}) er evergreen og indgår ikke."
                 if lq["udeladt"] else None,
@@ -3154,6 +3156,10 @@ def likviditet(prs, r):
     afkast = fod.maerke("Afkast er markedsværdi + udbetalinger - indbetalinger.")
     aar_maerke = (fod.maerke(f"{sidste['aar']} er pr. {sidste['dato']:%d.%m.%Y}.")
                   if (sidste["dato"].month, sidste["dato"].day) != (12, 31) else "")
+    if lq.get("foer_start"):
+        fod.generel(f"Ind- og udbetalinger før {lq['aar'][0]['aar']} "
+                    f"({_navne(lq['foer_start'])}) indgår samlet i den akkumulerede netto cash "
+                    f"flow fra start: {tusind(lq['primo'])} tDKK.")
     if lq["foer_nav"]:
         fod.generel(f"Før den første NAV indgår {_navne(lq['foer_nav'])} med det, der er "
                     "betalt ind netto.")

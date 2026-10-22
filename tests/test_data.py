@@ -1151,3 +1151,27 @@ def test_likviditet_uden_kurs_eller_uden_andre_end_ejendomme_er_none():
     assert data.likviditet(fonde, lambda v, d: None, date(2026, 6, 30)) is None
     assert data.likviditet([_lq_fond("E", "Ejendomme")], lambda v, d: LQ_KURSER[d],
                            date(2026, 6, 30)) is None
+
+
+def test_likviditet_med_ejendomme_paa_samme_tidsakse_samler_de_tidlige_i_primo():
+    # en ejendomsfond fra 2015 (DKK) og Alfa fra 2024: aksen starter i 2024, som sliden uden
+    ejd = _lq_fond("Ejendom", "Ejendomme", "DKK")
+    ejd["kapitalstroemme"] = [(date(2015, 5, 1), -30.0, "kald")]
+    ejd["kilder"]["tilsagn"] = pd.DataFrame(dict(event_date=[date(2015, 1, 1)], amount=[30.0]))
+    ejd["kilder"]["cash_flows"] = pd.DataFrame(dict(
+        value_date=[date(2015, 5, 1)], flow_class=["CONTRIBUTION"], is_recallable=[0],
+        amount=[-30.0]))
+    ejd["historik"] = [dict(dato=date(2025, 12, 31), nav=35.0)]
+    ejd["n"].update(indbetalt_dkk=30.0, udloddet_dkk=0.0)
+    kurs = lambda v, d: 1.0 if v == "DKK" else LQ_KURSER[d]
+    fonde = [_lq_fond("Alfa", "Private equity"), ejd]
+    uden = data.likviditet(fonde, kurs, date(2026, 6, 30))
+    alle = data.likviditet(fonde, kurs, date(2026, 6, 30), uden=None, fra_aar=uden["aar"][0]["aar"])
+    assert [a["aar"] for a in alle["aar"]] == [a["aar"] for a in uden["aar"]] == [2024, 2025, 2026]
+    assert (alle["primo"], alle["foer_start"]) == (-30.0, ["Ejendom"])
+    assert alle["kvartaler"][0]["dato"] == uden["kvartaler"][0]["dato"]
+    assert alle["kvartaler"][-1]["akkumuleret"] == pytest.approx(alle["total"]["netto"])
+    # før sin første NAV står ejendomsfonden til det betalte; tilsagnet tæller fra 2015
+    assert alle["aar"][0]["nav"] == pytest.approx(uden["aar"][0]["nav"] + 30.0)
+    assert alle["aar"][0]["tilsagn"] == pytest.approx(uden["aar"][0]["tilsagn"] + 30.0)
+    assert "Ejendom" in alle["foer_nav"] and uden["primo"] == 0

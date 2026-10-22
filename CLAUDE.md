@@ -97,7 +97,12 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   `tilsagn_dkk`/`resttilsagn_dkk`/`nav_dkk`. The J-curve is one native combo chart: a column
   chart whose last series `_j_kurve` moves into a `c:areaChart` sharing its axes (python-pptx
   cannot build combo charts). House colours, not the example's teal (Real Estate's colour).
-  Excel sheet *Likviditet* lists the series.
+  Excel sheet *Likviditet* lists the series. A second slide right after it
+  (`likviditet(prs, r, med_ejendomme=True)`, `r["likviditet_alle"]`, sheet *Likviditet med
+  ejendomme*) includes the property funds on the **same time axis** (`fra_aar`, the first year
+  of the slide without them): earlier cash flows (CRED from 2005) are summed into `primo`, where
+  the cumulative curve starts, and named in the note (`foer_start`). Year ends only look up a
+  rate for funds that existed by then (no USD rate exists for 2005).
 - *Eksponering* (`slides.valutafordeling`, after *Ændringer pr. fond*): three doughnuts
   (`slides._ring`) in a near-equilateral triangle in the middle of the slide (exposure on top,
   NAV and resttilsagn below, `VF_BASIS` apart; a true equilateral would make the lower rings

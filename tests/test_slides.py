@@ -1519,3 +1519,14 @@ def test_likviditet_viser_fem_tal_og_tre_diagrammer():
     plot_area = j._chartSpace.chart.plotArea
     assert plot_area.find(qn("c:areaChart")) is not None
     assert slides.likviditet(_prs(), r | dict(likviditet=None)) is None
+
+
+def test_likviditet_med_ejendomme_siger_det_i_undertitlen():
+    fonde = [_lq_fond("Alfa", "Private equity"), _lq_fond("Ejendom", "Ejendomme")]
+    r = dict(navn="Investor", as_of=date(2026, 6, 30),
+             likviditet_alle=data.likviditet(fonde, lambda v, d: LQ_KURSER[d], date(2026, 6, 30),
+                                             uden=None),
+             datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
+    t = _tekster(slides.likviditet(_prs(), r, med_ejendomme=True))
+    assert any("hele porteføljen inkl. ejendomsfonde" in x for x in t)
+    assert not any("indgår ikke" in x for x in t)

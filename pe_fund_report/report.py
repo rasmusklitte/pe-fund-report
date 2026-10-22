@@ -129,6 +129,7 @@ def _byg_supplerende(r, master=None):
     _saet_ph(s, 0, f"{r['navn']} – supplerende slides")
     _saet_ph(s, 1, f"Slides uden for porteføljerapporten pr. {r['as_of']:%d.%m.%Y}")
     slides.likviditet(prs, r)           # samlede investeringer uden ejendomsfondene
+    slides.likviditet(prs, r, med_ejendomme=True)  # og med dem
     slides.lange_tilsagn(prs, r)
     slides.fordeling(prs, r, "geografi", "Geografisk fordeling efter tilsagn")
     slides.brancher(prs, r)             # cirkeldiagrammerne

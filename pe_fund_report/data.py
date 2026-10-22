@@ -1570,8 +1570,14 @@ def _kaldt_pr(f, dato):
     return float(kaldt_), float(recallable)
 
 
-def likviditet(fonde, kurs, rapport_dato):
-    """Porteføljens likviditet uden ejendomsfondene, i DKK, til sliden Samlede investeringer.
+def _likviditet_start(lq):
+    """Det første år på tidsaksen i et likviditet()-resultat, eller None."""
+    return lq["aar"][0]["aar"] if lq else None
+
+
+def likviditet(fonde, kurs, rapport_dato, uden=LIKVIDITET_UDEN, fra_aar=None):
+    """Porteføljens likviditet i DKK uden fondene i segmentet uden (standard ejendomsfondene;
+    None tager alle med), til sliderne Samlede investeringer.
 
     Kapitalstrømmene (som i indbetalt og udloddet: kald inkl. udligningsrente og rabat) omregnes
     med kursen på deres egen dato, så summerne er indbetalt_dkk og udloddet_dkk. Pr. årsskifte
@@ -1581,9 +1587,14 @@ def likviditet(fonde, kurs, rapport_dato):
 
     {fonde, udeladt, total: {nav, indbetalt, udloddet, afkast, netto}, kvartaler: [{dato,
     kald, udlodning, netto, akkumuleret}] (kald med LP-fortegn < 0), aar: [{aar, dato, tilsagn, resttilsagn, kaldt, indbetalt, udloddet,
-    nav, dpi, rvpi, tvpi}], foer_nav, genkaldelige}. None uden fonde eller med en manglende kurs.
+    nav, dpi, rvpi, tvpi}], foer_nav, genkaldelige, primo, foer_start}. None uden fonde eller
+    med en manglende kurs.
+
+    fra_aar: første år på tidsaksen (standard: året for den første cash flow), så sliden med
+    ejendomsfondene kan dele akse med sliden uden; cash flows før det år står samlet i primo,
+    som den akkumulerede kurve starter i, og foer_start nævner fondene bag.
     """
-    med = [f for f in fonde if f.get("segment") != LIKVIDITET_UDEN]
+    med = [f for f in fonde if uden is None or f.get("segment") != uden]
     if not med or any(f["n"].get(k) is None for f in med for k in DKK_FELTER):
         return None
     flows = []                          # (dato, DKK med LP-fortegn, "kald"/"udlodning")
@@ -1602,7 +1613,10 @@ def likviditet(fonde, kurs, rapport_dato):
     total.update(afkast=total["nav"] + total["udloddet"] - total["indbetalt"],
                  netto=total["udloddet"] - total["indbetalt"])
 
-    kvartaler, q, akk = [], _kvartalsslut(flows[0][0]), 0.0
+    start = max(date(fra_aar, 1, 1), flows[0][0]) if fra_aar else flows[0][0]
+    foer = [x for x in flows if x[0] < start]
+    primo = sum(a for _, a, _ in foer)
+    kvartaler, q, akk = [], _kvartalsslut(start), primo
     while q <= _kvartalsslut(rapport_dato):
         i_kvartalet = [(a, t) for d, a, t in flows if _kvartalsslut(d) == q]
         kald = sum(a for a, t in i_kvartalet if t == "kald")
@@ -1613,7 +1627,7 @@ def likviditet(fonde, kurs, rapport_dato):
         q = _kvartalsslut(q + timedelta(days=1))
 
     aar, foer_nav = [], set()
-    for y in range(flows[0][0].year, rapport_dato.year + 1):
+    for y in range(start.year, rapport_dato.year + 1):
         dato = date(y, 12, 31) if y < rapport_dato.year else rapport_dato
         tilsagn = resttilsagn = nav = 0.0
         for f in med:
@@ -1623,21 +1637,24 @@ def likviditet(fonde, kurs, rapport_dato):
                 resttilsagn += n["resttilsagn_dkk"]
                 nav += n["nav_dkk"]
                 continue
+            t = f["kilder"]["tilsagn"]
+            t = float(t[t.event_date <= dato].amount.sum()) if t is not None else 0.0
+            h = [p for p in f["historik"] if p["dato"] <= dato]
+            betalt = [a for d, a, _ in f["kapitalstroemme"] if d <= dato]
+            if not t and not h and not betalt:
+                continue                # fonden var der ikke endnu; ingen kurs at slå op
             k = kurs(f["valuta"], dato)
             if k is None:
                 return None
-            t = f["kilder"]["tilsagn"]
-            t = float(t[t.event_date <= dato].amount.sum()) if t is not None else 0.0
             kaldt_, recallable = _kaldt_pr(f, dato)
             tilsagn += t * k
             resttilsagn += max(t - kaldt_ + recallable, 0.0) * k
-            h = [p for p in f["historik"] if p["dato"] <= dato]
             if h:
                 nav += h[-1]["nav"] * k
-            elif any(d <= dato for d, _, _ in f["kapitalstroemme"]):
+            elif betalt:
                 # kaldt, men endnu ingen NAV: fonden står til det, der er betalt netto ind
                 foer_nav.add(f["fund_name"])
-                nav -= sum(a for d, a, _ in f["kapitalstroemme"] if d <= dato) * k
+                nav -= sum(betalt) * k
         ind = -sum(a for d, a, t in flows if d <= dato and t == "kald")
         udl = sum(a for d, a, t in flows if d <= dato and t == "udlodning")
         aar.append(dict(aar=y, dato=dato, tilsagn=tilsagn, resttilsagn=resttilsagn,
@@ -1647,7 +1664,9 @@ def likviditet(fonde, kurs, rapport_dato):
     return dict(fonde=[f["fund_name"] for f in med],
                 udeladt=[f["fund_name"] for f in fonde if f not in med],
                 total=total, kvartaler=kvartaler, aar=aar, foer_nav=sorted(foer_nav),
-                genkaldelige=any(f["n"].get("recallable") for f in med))
+                genkaldelige=any(f["n"].get("recallable") for f in med), primo=primo,
+                foer_start=[f["fund_name"] for f in med
+                            if any(d < start for d, _, _ in f["kapitalstroemme"])])
 
 
 def sammendrag(fonde, total_dkk, irr=None):
@@ -1935,6 +1954,7 @@ def investor_rapport(investor_code, as_of=None):
             for p, (fra, _) in rapport_perioder.items()}
     omregn_udvikling_til_dkk(fonde, kurs)
     irr_i_dkk = irr_dkk(fonde, kurs)
+    lq = likviditet(fonde, kurs, rapport_dato)      # uden ejendomsfondene
     return dict(investor=investor_code, navn=investor_navn(investor_code),
                 as_of=rapport_dato, fonde=fonde, total=total(fonde),
                 kurser=kurser, total_dkk=total_dkk, irr_dkk=irr_i_dkk,
@@ -1952,7 +1972,10 @@ def investor_rapport(investor_code, as_of=None):
                 gennemlysning=gennemlysning(fonde),
                 stoerste_eksponering=stoerste_eksponering(fonde, kurser),
                 stoerste_positioner=stoerste_positioner(fonde, kurser),
-                likviditet=likviditet(fonde, kurs, rapport_dato),
+                likviditet=lq,
+                # med ejendomsfondene, på samme tidsakse som sliden uden
+                likviditet_alle=likviditet(fonde, kurs, rapport_dato, uden=None,
+                                           fra_aar=_likviditet_start(lq)),
                 perioder=rapport_perioder, udvikling=portefoelje_udvikling(fonde),
                 fortegnsafvigelser=fortegnsafvigelser(fonde),
                 vaerdibevaegelser=vaerdibevaegelser(fonde, kurser),

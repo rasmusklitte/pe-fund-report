@@ -541,13 +541,13 @@ def _vaerdibevaegelser(wb, r):
     ark.afslut()
 
 
-def _likviditet(wb, r):
-    """Siden Samlede investeringer (de supplerende slides): kvartalernes cash flows og
-    årsskifterne i DKK, uden ejendomsfondene."""
-    lq = r.get("likviditet")
+def _likviditet(wb, r, noegle="likviditet", navn="Likviditet"):
+    """Siderne Samlede investeringer (de supplerende slides): kvartalernes cash flows og
+    årsskifterne i DKK, uden ejendomsfondene (likviditet) eller med dem (likviditet_alle)."""
+    lq = r.get(noegle)
     if not lq:
         return
-    ark = Ark(wb, "Likviditet", [
+    ark = Ark(wb, navn, [
         ("Type", 11, None, None), ("Dato", 11, "dato", None),
         ("Indbetalinger DKK", 15, "tal", None), ("Udbetalinger DKK", 15, "tal", None),
         ("Netto DKK", 15, "tal", None), ("Akkumuleret netto DKK", 15, "tal", None),
@@ -678,6 +678,8 @@ FANER = [
     ("Likviditet", "Siden Samlede investeringer i de supplerende slides, uden ejendomsfondene: "
                    "ind- og udbetalinger pr. kvartal med kursen på deres dato, og tilsagn, "
                    "resttilsagn, NAV, DPI, RVPI og TVPI ved hvert årsskifte."),
+    ("Likviditet med ejendomme", "Som Likviditet, men for hele porteføljen inkl. "
+                                 "ejendomsfondene."),
     ("Valutakurser", "Alle DKK-kurser, rapporten har brugt."),
     ("Stamdata", "Geografi, investeringsstrategi, løbetid og forvalter pr. fond."),
     ("Dokumenter", "Alle kildedokumenter med type, periode, godkendelse og link til PDF'en; "
@@ -706,6 +708,7 @@ def skriv(r):
     _eksponering(wb, r, kilder, "brancher")
     _eksponering(wb, r, kilder, "regioner")
     _likviditet(wb, r)
+    _likviditet(wb, r, "likviditet_alle", "Likviditet med ejendomme")
     _valutakurser(wb, r)
     _stamdata(wb, r)
     _laes_mig(wb, r, [(n, t) for n, t in FANER if n in wb.sheetnames])
