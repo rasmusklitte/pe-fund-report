@@ -1206,17 +1206,41 @@ def _dkk_kurs(valuta, dato):
     return _f(df.dkk_per_1[0]), _dato(df.rate_date[0])
 
 
-def omregn_til_dkk(fonde, kurser):
+def transaktionskurs(f, type_, kurs):
+    """Kapitalstrømmenes gennemsnitskurs, vægtet med beløbene, hvor hver strøm har kursen på sin
+    egen dato. type_ er "kald" eller "udlodning" i f["kapitalstroemme"]; kurs(valuta, dato) ->
+    DKK pr. enhed eller None. None uden strømme eller med en manglende kurs."""
+    flows = [(d, a) for d, a, t in f["kapitalstroemme"] if t == type_]
+    i_alt = sum(a for _, a in flows)
+    if not i_alt:
+        return None
+    kurser = [kurs(f["valuta"], d) for d, _ in flows]
+    if any(k is None for k in kurser):
+        return None
+    return sum(a * k for (_, a), k in zip(flows, kurser, strict=True)) / i_alt
+
+
+# kapitalstrømmene, der med en kursfunktion omregnes til kursen på deres egen dato
+STROEMME_DKK = {"indbetalt": "kald", "udloddet": "udlodning"}
+
+
+def omregn_til_dkk(fonde, kurser, kurs=None):
     """Sæt beløbene omregnet til DKK (tilsagn_dkk, nav_dkk, …) på hver fonds nøgletal.
 
+    Beholdningerne (tilsagn, resttilsagn, NAV) får kursen på rapportdatoen (kurser). Med
+    kurs(valuta, dato) får indbetalt og udloddet kursen på hver kapitalstrøms egen dato (som
+    Aleta og IRR i DKK): beløbet gange transaktionskurs(); uden strømme rapportdatoens kurs.
     None uden kurs.
     """
     for f in fonde:
-        kurs = (kurser.get(f["valuta"]) or (None,))[0]
+        k_rapport = (kurser.get(f["valuta"]) or (None,))[0]
         n = f["n"]
         for k in ("tilsagn", "indbetalt", "udloddet", "resttilsagn", "nav"):
-            n[f"{k}_dkk"] = n[k] * kurs if kurs is not None and n[k] is not None else None
-        if kurs is None:
+            k_ = k_rapport
+            if kurs is not None and k in STROEMME_DKK and k_rapport is not None and n[k]:
+                k_ = transaktionskurs(f, STROEMME_DKK[k], kurs)
+            n[f"{k}_dkk"] = n[k] * k_ if k_ is not None and n[k] is not None else None
+        if k_rapport is None:
             f["noter"].append(f"Nationalbanken oplyser ingen {f['valuta']}-kurs, så fonden "
                               "kan ikke omregnes til DKK.")
 
@@ -1787,16 +1811,17 @@ def investor_rapport(investor_code, as_of=None):
         if f["nav_dato"] < rapport_dato:
             f["noter"].insert(0, Note(f"Seneste NAV er pr. {f['nav_dato']:%d.%m.%Y}.", "nav"))
     kurser = {v: _dkk_kurs(v, rapport_dato) for v in sorted({f["valuta"] for f in fonde})}
-    omregn_til_dkk(fonde, kurser)
-    total_dkk = dkk_total(fonde)
-
-    rapport_perioder = perioder(rapport_dato)
     kurscache = {}
 
     def kurs(valuta, dato):
         if (valuta, dato) not in kurscache:
             kurscache[valuta, dato] = _dkk_kurs(valuta, dato)
         return (kurscache[valuta, dato] or (None,))[0]
+
+    omregn_til_dkk(fonde, kurser, kurs)
+    total_dkk = dkk_total(fonde)
+
+    rapport_perioder = perioder(rapport_dato)
 
     for f in fonde:
         udvikling(f, rapport_perioder)

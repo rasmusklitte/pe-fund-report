@@ -3057,8 +3057,8 @@ DEFINITIONER = [
                   "af fondens NAV). Beholdninger ganges med ejerandelen."),
     ("Andel af tilsagn", "En fonds eller gruppes tilsagn i DKK i forhold til porteføljens "
                          "samlede tilsagn i DKK."),
-    ("Beløb i DKK", "Omregnet med Danmarks Nationalbanks kurs på rapportdatoen eller den "
-                    "seneste kurs før."),
+    ("Beløb i DKK", "Nationalbankens kurs: NAV og tilsagn på rapportdatoen, ind- og "
+                    "udbetalinger på deres egen dato."),
     ("Værdiskabelse", "Ændringen i fondens værdi ud over indbetalinger, udlodninger, "
                       "omkostninger og carried interest. Beregnet som residual, så "
                       "værdibroen går op; uden opdeling fra forvalteren efter begge."),

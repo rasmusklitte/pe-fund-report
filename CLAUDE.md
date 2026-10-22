@@ -26,8 +26,7 @@ falls back to `_v2`, `_v3`, … rather than failing — don't reach for `--out` 
 Aleta's `securityCode` to our fund code, `KONTROLLER` holds the tolerances). It is marked `db` and
 skips when the database can't be reached. Failures there are differences to look into, not
 necessarily bugs. Aleta's amounts are in DKK (except
-`nav`), so ours are compared in DKK: NAV and commitments at the report-date rate (`n["..._dkk"]`),
-paid-in and distributions at each cash flow's own date (`aleta.transaktionskurs`), as Aleta does.
+`nav`), so they are compared with the report's own `n["..._dkk"]`.
 
 `ruff check .` currently reports 14 pre-existing findings (C408 `dict()` literals, DTZ011
 `date.today()`) in `data.py` and the tests — that is the baseline, not a regression you caused.
@@ -347,6 +346,10 @@ not use. Non-negotiables:
 - DKK conversion (*Investeringer*: resttilsagn and NAV in DKK) uses one
   Nationalbanken rate per currency at the report date, read by `data._dkk_kurs()` from
   `dbo.fx_rates_nationalbanken` (latest `rate_date` on or before; DKK has no rows and gets 1).
+  That rate is for the balances (tilsagn, resttilsagn, NAV). Paid-in and distributions in DKK
+  (`indbetalt_dkk`, `udloddet_dkk`) use each cash flow's own date, as Aleta does (the user's
+  choice): `omregn_til_dkk(fonde, kurser, kurs)` multiplies by `data.transaktionskurs()`, the
+  amount-weighted rate over `f["kapitalstroemme"]`; a missing rate on a date gives `None`.
   `data.dkk_total()` sums DKK amounts across currencies; it is `None` if a fund lacks a rate.
   The geography/segment slides use the same conversion via `data.fordeling()`: the share is
   commitment in DKK over total commitment in DKK; TVPI on the total/subtotal rows is

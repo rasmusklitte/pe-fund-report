@@ -434,6 +434,25 @@ def test_omregn_til_dkk_bruger_valutaens_kurs():
     assert g["n"]["nav_dkk"] is None and g["noter"]
 
 
+def test_omregn_til_dkk_kapitalstroemme_med_kursen_paa_deres_dato():
+    # kald: 5 EUR til 7,0 og 15 EUR til 8,0 -> 20 EUR = 155 DKK; udlodning 4 EUR til 7,4.
+    # NAV, tilsagn og resttilsagn følger rapportdatoens kurs (7,5)
+    kurser = {date(2023, 1, 1): 7.0, date(2024, 1, 1): 8.0, date(2025, 1, 1): 7.4}
+    f = dict(valuta="EUR", noter=[],
+             n=dict(tilsagn=30.0, indbetalt=20.0, udloddet=4.0, resttilsagn=10.0, nav=20.0),
+             kapitalstroemme=[(date(2023, 1, 1), -5.0, "kald"), (date(2024, 1, 1), -15.0, "kald"),
+                              (date(2025, 1, 1), 4.0, "udlodning")])
+    data.omregn_til_dkk([f], {"EUR": (7.5, None)}, lambda v, d: kurser[d])
+    assert f["n"]["indbetalt_dkk"] == pytest.approx(155.0)
+    assert f["n"]["udloddet_dkk"] == pytest.approx(29.6)
+    assert (f["n"]["nav_dkk"], f["n"]["tilsagn_dkk"], f["n"]["resttilsagn_dkk"]) == (150.0, 225.0,
+                                                                                   75.0)
+    assert data.transaktionskurs(f, "kald", lambda v, d: kurser[d]) == pytest.approx(7.75)
+    # en manglende kurs på en transaktionsdato giver None, ikke rapportdatoens kurs
+    data.omregn_til_dkk([f], {"EUR": (7.5, None)}, lambda v, d: None)
+    assert f["n"]["indbetalt_dkk"] is None and f["n"]["nav_dkk"] == 150.0
+
+
 def _ford_fond(navn, geografi, valuta, kurs, tilsagn, indbetalt, udloddet, nav):
     n = dict(tilsagn=tilsagn, indbetalt=indbetalt, udloddet=udloddet, nav=nav,
              tvpi=(udloddet + nav) / indbetalt, tilsagn_dkk=tilsagn * kurs, nav_dkk=nav * kurs,
