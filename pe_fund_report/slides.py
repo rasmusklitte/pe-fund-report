@@ -3083,8 +3083,8 @@ def _j_kurve(s, x, y, w, h, kvartaler):
                                  Inches(w), Inches(h), cd).chart
     _diagramakser(diagram, '#,##0" mio."')
     soejler = diagram.plots[0]
-    soejler.overlap, soejler.gap_width = 100, 60
-    for serie, farve in zip(soejler.series, (TERRA, SAGE_MID)):
+    soejler.overlap, soejler.gap_width = 100, 30
+    for serie, farve in zip(soejler.series, (TERRA, SAGE)):
         _farv(serie, farve)
         serie.invert_if_negative = False     # ellers bliver kaldene (negative) hvide
     # den akkumulerede serie flyttes over i en flade, der deler akserne med søjlerne; fladen
@@ -3095,14 +3095,15 @@ def _j_kurve(s, x, y, w, h, kvartaler):
     for tag in ("c:invertIfNegative", "c:spPr"):
         for el in ser.findall(qn(tag)):
             ser.remove(el)
-    farve = str(SAGE)
-    # mørk salvie ved nul, der toner ud mod bunden, med kurven som en tydelig kant
+    lys, kant = str(SAGE_LYS), str(SAGE)
+    # lys salvie ved nul, der toner ud mod bunden, så søjlerne står tydeligt foran den; kurven
+    # selv er en mørk kant
     ser.find(qn("c:tx")).addnext(parse_xml(
         f'<c:spPr {nsdecls("c", "a")}><a:gradFill rotWithShape="1"><a:gsLst>'
-        f'<a:gs pos="0"><a:srgbClr val="{farve}"><a:alpha val="85000"/></a:srgbClr></a:gs>'
-        f'<a:gs pos="100000"><a:srgbClr val="{farve}"><a:alpha val="8000"/></a:srgbClr></a:gs>'
+        f'<a:gs pos="0"><a:srgbClr val="{lys}"><a:alpha val="90000"/></a:srgbClr></a:gs>'
+        f'<a:gs pos="100000"><a:srgbClr val="{lys}"><a:alpha val="15000"/></a:srgbClr></a:gs>'
         f'</a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>'
-        f'<a:ln w="15875"><a:solidFill><a:srgbClr val="{farve}"/></a:solidFill></a:ln>'
+        f'<a:ln w="19050"><a:solidFill><a:srgbClr val="{kant}"/></a:solidFill></a:ln>'
         f'</c:spPr>'))
     flade = parse_xml(f'<c:areaChart {nsdecls("c")}><c:grouping val="standard"/>'
                       f'<c:varyColors val="0"/></c:areaChart>')
@@ -3113,13 +3114,17 @@ def _j_kurve(s, x, y, w, h, kvartaler):
     return diagram
 
 
-def _stablede_soejler(s, x, y, w, h, kategorier, serier, talformat, etiketformat=None):
+def _stablede_soejler(s, x, y, w, h, kategorier, serier, talformat, etiketformat=None,
+                      totaler=None):
     """Stablede søjler pr. år. serier: [(navn, værdier, farve)], nederst først; den nederste får
-    etiketter med etiketformat."""
+    etiketter med etiketformat. totaler: en tekst pr. søjle, der står oven på den."""
     cd = CategoryChartData(number_format=talformat)
     cd.categories = kategorier
     for navn, vaerdier, _ in serier:
         cd.add_series(navn, vaerdier)
+    if totaler:
+        # en usynlig serie på 0 øverst i stablen bærer totalen som etiket ved sin fod
+        cd.add_series("I alt", [0] * len(kategorier))
     diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(x), Inches(y),
                                  Inches(w), Inches(h), cd).chart
     _diagramakser(diagram, talformat)
@@ -3133,6 +3138,19 @@ def _stablede_soejler(s, x, y, w, h, kategorier, serier, talformat, etiketformat
         etiketter.number_format, etiketter.number_format_is_linked = etiketformat, False
         etiketter.position = XL_LABEL_POSITION.CENTER
         etiketter.font.size, etiketter.font.color.rgb = Pt(8), HVID
+    if totaler:
+        top = plot.series[-1]
+        top.format.fill.background()
+        for punkt, tekst in zip(top.points, totaler):
+            etiket = punkt.data_label
+            etiket.position = XL_LABEL_POSITION.INSIDE_BASE
+            etiket.text_frame.text = tekst
+            run = etiket.text_frame.paragraphs[0].runs[0]
+            run.font.size, run.font.bold, run.font.color.rgb = Pt(8), True, SORT
+        # ingen forklaring for den usynlige serie
+        diagram.legend._element.insert(0, parse_xml(
+            f'<c:legendEntry {nsdecls("c")}><c:idx val="{len(serier)}"/>'
+            f'<c:delete val="1"/></c:legendEntry>'))
     return diagram
 
 
@@ -3194,7 +3212,7 @@ def likviditet(prs, r, med_ejendomme=False):
     _stablede_soejler(s, x2, by, bw, bh, kategorier, [
         (f"RVPI {gange(sidste['rvpi'])}", [a["rvpi"] or 0 for a in lq["aar"]], SAGE),
         (f"DPI {gange(sidste['dpi'])}", [a["dpi"] or 0 for a in lq["aar"]], SAGE_LYS)],
-        '0.00"x"')
+        '0.00"x"', totaler=[gange(a["tvpi"]) for a in lq["aar"]])
     fod.tegn(s, noter_y)
     return s
 

@@ -1530,3 +1530,16 @@ def test_likviditet_med_ejendomme_siger_det_i_undertitlen():
     t = _tekster(slides.likviditet(_prs(), r, med_ejendomme=True))
     assert any("hele porteføljen inkl. ejendomsfonde" in x for x in t)
     assert not any("indgår ikke" in x for x in t)
+
+
+def test_likviditet_tvpi_soejler_har_totalen_som_etiket():
+    lq = data.likviditet([_lq_fond("Alfa", "Private equity")], lambda v, d: LQ_KURSER[d],
+                         date(2026, 6, 30))
+    r = dict(navn="Investor", as_of=date(2026, 6, 30), likviditet=lq,
+             datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
+    tvpi = [sh.chart for sh in slides.likviditet(_prs(), r).shapes if sh.has_chart][-1]
+    top = tvpi.plots[0].series[-1]
+    assert [p.data_label.text_frame.text for p in top.points] == [
+        slides.gange(a["tvpi"]) for a in lq["aar"]]
+    # den usynlige bærerserie har ingen forklaring
+    assert tvpi.legend._element.find(qn("c:legendEntry")) is not None
