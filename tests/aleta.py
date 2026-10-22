@@ -122,7 +122,7 @@ def afstem(aleta, r):
                 kurs = (kurser.get(f["valuta"]) or (None,))[0]
                 if kontrol in FONDSVALUTA and kurs:
                     aleta_fv = linje["aleta"] if kontrol == "NAV" else linje["aleta"] / kurs
-                    rapport_fv = _tal(f["n"][FONDSVALUTA[kontrol]])
+                    rapport_fv = _tal(f["n"].get(FONDSVALUTA[kontrol]))
                     linje.update(valuta=f["valuta"], kurs=_tal(kurs), aleta_fv=aleta_fv,
                                  rapport_fv=rapport_fv,
                                  afvigelse_fv=None if rapport_fv is None else rapport_fv - aleta_fv)
