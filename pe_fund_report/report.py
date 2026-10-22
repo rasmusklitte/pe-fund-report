@@ -11,12 +11,15 @@ from .deck import L_FORSIDE, L_SKILLE, L_SLUT, _find_master, _ny_slide, _ryd_sli
 from .paths import EXPORTS, MASTER
 
 
-def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, anonym=False):
+def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, anonym=False,
+        med_supplerende=True):
     """Byg rapporten for én investor og returnér stien til pptx-filen.
 
     as_of: rapportdato (ÅÅÅÅ-MM-DD); standard er investors seneste NAV-dato.
     outfile: standard er exports/<INVESTOR>_<dato>.pptx (ANONYM_<dato>.pptx med anonym).
     med_data: gem også dataudtrækket <outfile>_data.xlsx med kilder til hvert tal.
+    med_supplerende: gem også <outfile>_supplerende_slides.pptx med de slides, der er taget ud
+    af rapporten (_byg_supplerende).
     anonym: uden navne, logoer, beskrivelser, fondsstørrelse og ejerandel, og alle beløb
     ganget med én skjult tilfældig faktor; aldrig med dataudtræk. Stopper uden at gemme, hvis
     et oprindeligt navn står i decket.
@@ -33,15 +36,25 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
             med_data = False
         with slides.beloebsskala(skala) if anonym else nullcontext():
             prs = _byg_deck(r, master)
-        if anonym and (laek := anonymisering.laek(prs, originaler)):
-            raise ValueError("Den anonymiserede udgave nævner stadig: " + ", ".join(laek)
-                             + " - intet er gemt")
+            ekstra = _byg_supplerende(r, master) if med_supplerende else None
+        if anonym:
+            # begge decks tjekkes, før noget gemmes
+            laek = sorted({x for p in (prs, ekstra) if p for x in anonymisering.laek(p, originaler)})
+            if laek:
+                raise ValueError("Den anonymiserede udgave nævner stadig: " + ", ".join(laek)
+                                 + " - intet er gemt")
 
         navn = "ANONYM" if anonym else r["investor"]
-        outfile = _gem(prs, Path(outfile or EXPORTS / f"{navn}_{r['as_of']:%Y-%m-%d}.pptx"))
+        oenske = Path(outfile or EXPORTS / f"{navn}_{r['as_of']:%Y-%m-%d}.pptx")
+        outfile = _gem(prs, oenske)
         lg.filer.append(outfile)
         print(f"gemt: {outfile}  ({len(r['fonde'])} fonde, {len(prs.slides._sldIdLst)} slides"
               + (", anonymiseret)" if anonym else ")"))
+        if ekstra:
+            # navngivet efter det ønskede navn, ikke et _v2, fordi rapporten var åben
+            sti = _gem(ekstra, oenske.with_name(f"{oenske.stem}_supplerende_slides.pptx"))
+            lg.filer.append(sti)
+            print(f"gemt: {sti}  (supplerende slides, {len(ekstra.slides._sldIdLst)} slides)")
         if med_data:
             # dataudtrækket ved siden af decket: samme navn med _data, til intern afstemning
             xlsx = _gem(excel.skriv(r), outfile.with_name(f"{outfile.stem}_data.xlsx"))
@@ -75,10 +88,9 @@ def _byg_deck(r, master=None):
     slides.tilsagn_paa_tvaers(prs, r)
     slides.aendringer_pr_fond(prs, r)
     slides.valutafordeling(prs, r)      # springes over uden DKK-kurser for alle fonde
-    # geografien efter tilsagn vises ikke længere; Geografisk eksponering afløser den
+    # geografien efter tilsagn, cirkeldiagrammerne og ejendomme for sig står i de supplerende
+    # slides (_byg_supplerende); Geografisk eksponering og treemaps afløser dem her
     slides.fordeling(prs, r, "segment", "Porteføljefordeling efter investeringsstrategi")
-    # slides.brancher og regioner (cirkeldiagrammerne) og branchekort_ejendomme og
-    # regionskort_ejendomme (ejendomme for sig) findes stadig, men er ikke med i decket
     slides.branchekort(prs, r)          # hele porteføljen, ejendommene som Real Estate
     slides.branchekort_aktivklasser(prs, r)     # Private Equity, Private Credit og ejendomme
     slides.regionskort(prs, r)          # hele porteføljen
@@ -87,8 +99,8 @@ def _byg_deck(r, master=None):
     # i fondens valuta, så den springes over, hvis fondene har forskellige valutaer; Største
     # positioner ovenfor er den samme gennemlysning i DKK
     slides.gennemlysning(prs, r)
-    # slides.vaerdibevaegelser findes stadig, men er ikke med i decket for tiden; dataene
-    # står i dataudtrækkets fane Værdibevægelser
+    # Største værdibevægelser står i de supplerende slides og i dataudtrækkets fane
+    # Værdibevægelser
 
     s = _ny_slide(prs, L_SKILLE[1])
     _saet_ph(s, 0, "Fondsoversigter")
@@ -103,6 +115,32 @@ def _byg_deck(r, master=None):
     slides.gics_oversigt(prs, r)        # GICS-sektorerne og deres branchegrupper
     _ny_slide(prs, L_SLUT)
     slides.sidefod(prs, r["navn"])      # til sidst, så sidetallene er endelige
+    return prs
+
+
+def _byg_supplerende(r, master=None):
+    """De supplerende slides: dem, der er taget ud af rapporten, men stadig bygges af de samme
+    data. En slide, der fjernes fra rapporten, flyttes hertil. Hver springer sig selv over uden
+    sine data (fx uden DKK-kurser eller ejendomme); gemmes ikke."""
+    prs = Presentation(str(_find_master(master or MASTER)))
+    _ryd_slides(prs)
+
+    s = _ny_slide(prs, L_FORSIDE)
+    _saet_ph(s, 0, f"{r['navn']} – supplerende slides")
+    _saet_ph(s, 1, f"Slides uden for porteføljerapporten pr. {r['as_of']:%d.%m.%Y}")
+    slides.lange_tilsagn(prs, r)
+    slides.fordeling(prs, r, "geografi", "Geografisk fordeling efter tilsagn")
+    slides.brancher(prs, r)             # cirkeldiagrammerne
+    slides.regioner(prs, r)
+    slides.branchekort_ejendomme(prs, r)        # ejendommene for sig
+    slides.regionskort_ejendomme(prs, r)
+    slides.vaerdibevaegelser(prs, r)
+
+    s = _ny_slide(prs, L_SKILLE[2])
+    _saet_ph(s, 0, "Appendiks")
+    slides.definitioner(prs, r)
+    _ny_slide(prs, L_SLUT)
+    slides.sidefod(prs, r["navn"])
     return prs
 
 

@@ -138,9 +138,9 @@ def test_cli_anonym(monkeypatch):
     kald = {}
     monkeypatch.setattr(cli, "byg", lambda *a, **k: kald.update(a=a, k=k))
     cli.main(["MOTORTRAMP", "--as-of", "2026-06-30", "--anonym"])
-    assert kald["k"] == dict(med_data=True, anonym=True)
-    cli.main(["MOTORTRAMP"])
-    assert kald["k"]["anonym"] is False
+    assert kald["k"] == dict(med_data=True, anonym=True, med_supplerende=True)
+    cli.main(["MOTORTRAMP", "--uden-supplerende"])
+    assert kald["k"]["anonym"] is False and kald["k"]["med_supplerende"] is False
 
 
 def test_kort_fondsnavn_beholder_loebenummer():

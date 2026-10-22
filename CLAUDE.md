@@ -18,7 +18,8 @@ ruff check .
 ```
 
 The positional argument is `investor_code` in `fund.investor`. Output defaults to
-`exports/<INVESTOR>_<date>.pptx`. PowerPoint locks the file while it is open, so `report._gem()`
+`exports/<INVESTOR>_<date>.pptx`, with `<…>_supplerende_slides.pptx` and `<…>_data.xlsx` next to
+it. PowerPoint locks the file while it is open, so `report._gem()`
 falls back to `_v2`, `_v3`, … rather than failing — don't reach for `--out` to dodge a lock.
 
 `tests/test_aleta.py` compares the Motortramp report at 30.06.2026 with Aleta's export
@@ -70,13 +71,19 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   *Fondsoversigter* section: the portfolio overview table, then each fund page and its company
   cards | *Appendiks* section: definitions, the GICS overview (`slides.gics_oversigt`: the 11
   sectors with a Danish description in `GICS_BESKRIVELSER` and their industry groups from
-  `data.GICS_STRUKTUR`, in the sector colours) | end slide. The geography-by-commitment slide is no longer built (the data
-  stays: the executive summary falls back on it). Nor are the pie slides *Branchefordeling*
-  and *Geografisk eksponering* (`slides.brancher` / `regioner`) or the two "ejendomme for sig"
-  treemaps (`branchekort_ejendomme` / `regionskort_ejendomme`, replaced by the whole-portfolio
-  treemaps at the user's request): the code and tests are kept for later use. *Største værdibevægelser*
-  (`slides.vaerdibevaegelser`) is likewise kept but not built; its data stays in Excel. Client
-  notes must therefore not refer to those pages by name.
+  `data.GICS_STRUKTUR`, in the sector colours) | end slide.
+- **Supplerende slides.** Slides taken out of the report go into a second deck,
+  `report._byg_supplerende()`, written on every build next to the report as
+  `<deck>_supplerende_slides.pptx` (named from the intended path, not a `_v2`; skip with
+  `--uden-supplerende`; anonymized too, and leak-checked with the report before either is
+  saved; no Excel of its own). It holds a cover, *Lange tilsagn*, the geography-by-commitment
+  slide (`fordeling(..., "geografi", ...)`; its data also feeds the executive summary's
+  fallback), the pies *Branchefordeling* / *Geografisk eksponering* (`slides.brancher` /
+  `regioner`), the two "ejendomme for sig" treemaps (`branchekort_ejendomme` /
+  `regionskort_ejendomme`, replaced in the report by the whole-portfolio treemaps), *Største
+  værdibevægelser* (`slides.vaerdibevaegelser`), then *Definitioner* and the end slide. When a
+  slide is removed from the report, move its call here rather than only commenting it out.
+  Client notes in the report must not refer to these pages by name.
 - *Eksponering* (`slides.valutafordeling`, after *Ændringer pr. fond*): three doughnuts
   (`slides._ring`) in a near-equilateral triangle in the middle of the slide (exposure on top,
   NAV and resttilsagn below, `VF_BASIS` apart; a true equilateral would make the lower rings
@@ -89,7 +96,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
 - Page footer: `slides.sidefod()` runs last in `report.byg()` and clones the master's slide-number
   placeholder onto every `L_TEKST` slide as "**<investor>** | Side n" (n is a `slidenum` field).
   Cover, dividers and end slide get none but still count. *Lange tilsagn* (`slides.lange_tilsagn`,
-  the only user of `benchmark`) is kept and tested but no longer in the deck - the appendix was dropped.
+  the only user of `benchmark`) is in the supplerende slides, not the report.
 - **Feeder look-through.** PPPC2 and PPPE2 are our feeders into PSCP5 and NEP6
   (`underlying_fund_code`). When a feeder has no holdings of its own,
   `data._feeder_beholdninger()` takes the underlying fund's holdings and **scales by NAV**:
@@ -188,7 +195,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   regions), and the property segments are fixed slate shades in `EJD_SEGMENT_FARVER`.
   Regions keep `GEO_FARVER`.
 - **Treemaps with property for itself** (`slides.branchekort_ejendomme` / `regionskort_ejendomme`,
-  kept but not in the deck). The area is split into »Alternative investeringer« (left,
+  in the supplerende slides). The area is split into »Alternative investeringer« (left,
   drawn by the same `_branchekasser` / `_regionskasser` helpers as the overviews) and Ejendomme
   (right), widths proportional to NAV. The Ejendomme part is not shown per fund (the user's
   choice): `ejendomme["fordeling"]` splits it on the industry slide by the funds' property
@@ -250,7 +257,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   not stable between GP reports, so `_par()`/`_forkortelse_af()` pair renamed lines, and
   anything unpaired goes in `usammenlignelige` instead of being counted as a gain or loss. The
   slides are `udvikling` (after the executive summary) and `aendringer_pr_fond`;
-  `vaerdibevaegelser` is kept but not in the deck. *Ændringer pr. fond* has vertical lines between
+  `vaerdibevaegelser` is in the supplerende slides. *Ændringer pr. fond* has vertical lines between
   the quarter, the year and "Pr. <date>". Its value change is in DKK incl. FX while the return is
   Modified Dietz in the fund's currency, so the two can have opposite signs:
   `data.fortegnsafvigelser()` (pure) finds those cells in `r["fortegnsafvigelser"]` with the cause
