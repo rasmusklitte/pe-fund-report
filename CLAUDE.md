@@ -26,7 +26,8 @@ falls back to `_v2`, `_v3`, … rather than failing — don't reach for `--out` 
 Aleta's `securityCode` to our fund code, `KONTROLLER` holds the tolerances). It is marked `db` and
 skips when the database can't be reached. Failures there are differences to look into, not
 necessarily bugs. Aleta's amounts are in DKK (except
-`nav`), so ours are compared as `n["..._dkk"]`, at the report-date rate.
+`nav`), so ours are compared in DKK: NAV and commitments at the report-date rate (`n["..._dkk"]`),
+paid-in and distributions at each cash flow's own date (`aleta.transaktionskurs`), as Aleta does.
 
 `ruff check .` currently reports 14 pre-existing findings (C408 `dict()` literals, DTZ011
 `date.today()`) in `data.py` and the tests — that is the baseline, not a regression you caused.

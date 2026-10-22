@@ -2,8 +2,9 @@
 
 Aleta er et andet system med de samme fonde; udtrækket har én række pr. fond. afstem() sammenligner
 rapportens nøgletal med Aletas, kontrol for kontrol. Aletas beløb er i DKK (undtagen nav, der er i
-fondens valuta), så rapportens beløb sammenlignes omregnet til DKK med Nationalbankens kurs på
-rapportdatoen (n["..._dkk"] fra data.omregn_til_dkk). test_aleta.py kører kontrollerne og skriver
+fondens valuta), så rapportens beløb sammenlignes omregnet til DKK: beholdningerne (NAV, tilsagn,
+resttilsagn) med Nationalbankens kurs på rapportdatoen (n["..._dkk"] fra data.omregn_til_dkk),
+kapitalstrømmene (indbetalt, udloddet) hver med kursen på sin egen dato, som Aleta gør. test_aleta.py kører kontrollerne og skriver
 afstemningsdokumentet (skriv()) med de samme linjer, så de altid er enige:
 
     python -m pytest tests/test_aleta.py     # testene + exports/aleta_afstemning_<dato>.xlsx
@@ -63,6 +64,11 @@ FONDSVALUTA = {"NAV": "nav", "NAV DKK": "nav", "Tilsagn DKK": "tilsagn",
                "Resttilsagn DKK": "resttilsagn", "Indbetalt DKK": "indbetalt",
                "Udloddet DKK": "udloddet"}
 
+# kapitalstrømmene, der omregnes med kursen på transaktionsdatoen: kontrol -> (nøgletal, type i
+# f["kapitalstroemme"])
+TRANSAKTIONSKURS = {"Indbetalt DKK": ("indbetalt", "kald"),
+                    "Udloddet DKK": ("udloddet", "udlodning")}
+
 
 def laes_aleta(sti=ALETA):
     """Aletas rækker som dicts med kolonnenavnene som nøgler; vintage som årstal."""
@@ -97,11 +103,26 @@ def _vurder(aleta, rapport, tolerance, tilsagn):
     return afvigelse, tilladt, "ok" if abs(afvigelse) <= tilladt else "afviger"
 
 
-def afstem(aleta, r):
+def transaktionskurs(f, type_, kurs):
+    """Kapitalstrømmenes gennemsnitskurs, vægtet med beløbene, hver omregnet med kursen på sin
+    egen dato: nøgletallet gange denne kurs er summen af strømmene i DKK. None uden strømme eller
+    kurs. kurs(valuta, dato) -> DKK pr. enhed eller None."""
+    flows = [(d, a) for d, a, t in f["kapitalstroemme"] if t == type_]
+    i_alt = sum(a for _, a in flows)
+    if not i_alt:
+        return None
+    kurser = [kurs(f["valuta"], d) for d, _ in flows]
+    if any(k is None for k in kurser):
+        return None
+    return sum(a * k for (_, a), k in zip(flows, kurser, strict=True)) / i_alt
+
+
+def afstem(aleta, r, kurs=None):
     """Én række pr. fond og kontrol: fond, kontrol, aleta, rapport, afvigelse, tilladt, status,
     bemaerkning og, for beløbene, valuta, kurs og aleta_fv / rapport_fv / afvigelse_fv i fondens
-    valuta. Status afgøres af DKK-tallene. En fond fra Aleta, der ikke er i rapporten, får status
-    afviger i alle kontroller."""
+    valuta. Status afgøres af DKK-tallene. Med kurs(valuta, dato) omregnes indbetalt og udloddet
+    for fonde i fremmed valuta med kursen på hver transaktionsdato, ellers med rapportdatoens kurs.
+    En fond fra Aleta, der ikke er i rapporten, får status afviger i alle kontroller."""
     fonde = {f["fund_code"]: f for f in r["fonde"]}
     kurser = r.get("kurser", {})
     ud = []
@@ -117,13 +138,20 @@ def afstem(aleta, r):
                 linje["bemaerkning"] = "fonden er ikke i rapporten"
             else:
                 linje["rapport"] = _tal(hent(f))
+                k = (kurser.get(f["valuta"]) or (None,))[0]
+                if kontrol in TRANSAKTIONSKURS and kurs and f["valuta"] != "DKK":
+                    noegle, type_ = TRANSAKTIONSKURS[kontrol]
+                    k = transaktionskurs(f, type_, kurs) or k
+                    if f["n"].get(noegle) is not None and k:
+                        linje["rapport"] = f["n"][noegle] * k
+                    linje["bemaerkning"] = ("omregnet med kursen på hver transaktionsdato "
+                                            "(Kurs er gennemsnittet, vægtet med beløbene)")
                 linje["afvigelse"], linje["tilladt"], linje["status"] = _vurder(
                     linje["aleta"], linje["rapport"], tolerance, _tal(a["commitment"]))
-                kurs = (kurser.get(f["valuta"]) or (None,))[0]
-                if kontrol in FONDSVALUTA and kurs:
-                    aleta_fv = linje["aleta"] if kontrol == "NAV" else linje["aleta"] / kurs
+                if kontrol in FONDSVALUTA and k:
+                    aleta_fv = linje["aleta"] if kontrol == "NAV" else linje["aleta"] / k
                     rapport_fv = _tal(f["n"].get(FONDSVALUTA[kontrol]))
-                    linje.update(valuta=f["valuta"], kurs=_tal(kurs), aleta_fv=aleta_fv,
+                    linje.update(valuta=f["valuta"], kurs=_tal(k), aleta_fv=aleta_fv,
                                  rapport_fv=rapport_fv,
                                  afvigelse_fv=None if rapport_fv is None else rapport_fv - aleta_fv)
             ud.append(linje)
@@ -156,9 +184,10 @@ def skriv(linjer, as_of=AS_OF):
     ov["A1"] = f"Motortramp: rapporten mod Aleta pr. {as_of:%d.%m.%Y}"
     ov["A1"].font = Font(bold=True, size=14)
     ov["A2"] = (f"{antal['ok']} ok, {antal['afviger']} afviger - se fanen Detaljer. Rapportens "
-                "beløb i EUR og USD er omregnet til DKK med Nationalbankens kurs på rapportdatoen. "
-                "I Detaljer står beløbene også i fondens valuta; Aletas DKK-beløb er regnet "
-                "tilbage med samme kurs")
+                "beløb i EUR og USD er omregnet til DKK med Nationalbankens kurs: NAV og tilsagn "
+                "med kursen på rapportdatoen, indbetalt og udloddet med kursen på hver "
+                "transaktionsdato. I Detaljer står beløbene også i fondens valuta; Aletas "
+                "DKK-beløb er regnet tilbage med samme kurs")
     kontroller = [k[0] for k in KONTROLLER]
     fonde = list(dict.fromkeys(x["fond"] for x in linjer))
     for j, navn in enumerate(["Fond", *kontroller], start=1):

@@ -5,11 +5,15 @@
 Hver fond × kontrol er sin egen test, fx test_aleta[SEED4-NAV], og kørslen skriver de samme
 linjer som afstemningsdokument til exports/aleta_afstemning_<dato>.xlsx.
 """
+from datetime import date
+from functools import cache
+
 import pyodbc
 import pytest
 from sqlalchemy.exc import DBAPIError
 
-from aleta import AS_OF, FONDE, INVESTOR, KONTROLLER, afstem, laes_aleta, skriv
+from aleta import (AS_OF, FONDE, INVESTOR, KONTROLLER, afstem, laes_aleta, skriv,
+                   transaktionskurs)
 
 
 @pytest.fixture(scope="module")
@@ -24,8 +28,14 @@ def rapport():
 @pytest.fixture(scope="module")
 def linjer(rapport):
     from pe_fund_report import report
+    from pe_fund_report import data
     from pe_fund_report.paths import EXPORTS
-    alle = afstem(laes_aleta(), rapport)
+
+    @cache
+    def kurs(valuta, dato):         # Nationalbankens kurs på transaktionsdatoen
+        return (data._dkk_kurs(valuta, dato) or (None,))[0]
+
+    alle = afstem(laes_aleta(), rapport, kurs)
     sti = report._gem(skriv(alle), EXPORTS / f"aleta_afstemning_{AS_OF:%Y-%m-%d}.xlsx")
     print(f"\nafstemningsdokument: {sti}")
     return {(x["fond"], x["kontrol"]): x for x in alle}
@@ -94,3 +104,21 @@ def test_afstem_tolerancer_og_valuta():
     linjer = afstem([_aleta(securityCode="UKENDT")], _rapport())
     assert {x["status"] for x in linjer} == {"afviger"}
     assert linjer[0]["bemaerkning"] == "fonden er ikke i rapporten"
+
+
+def test_transaktionskurs_vaegter_med_beloebene():
+    # 100 EUR til 7,0 og 300 EUR til 8,0: (700 + 2.400) / 400 = 7,75
+    f = dict(valuta="EUR", kapitalstroemme=[(date(2023, 1, 1), -100.0, "kald"),
+                                            (date(2024, 1, 1), -300.0, "kald"),
+                                            (date(2024, 1, 1), 50.0, "udlodning")])
+    kurser = {date(2023, 1, 1): 7.0, date(2024, 1, 1): 8.0}
+    assert transaktionskurs(f, "kald", lambda v, d: kurser[d]) == pytest.approx(7.75)
+    assert transaktionskurs(f, "udlodning", lambda v, d: kurser[d]) == 8.0
+    assert transaktionskurs(f | dict(kapitalstroemme=[]), "kald", lambda v, d: 7.0) is None
+    # i afstem: indbetalt 400 EUR * 7,75 = 3.100 DKK mod Aletas 3.100
+    r = _rapport("EUR", indbetalt=400.0, indbetalt_dkk=3200.0)
+    r["fonde"][0]["kapitalstroemme"] = f["kapitalstroemme"]
+    x = {x["kontrol"]: x for x in afstem([_aleta(navCurrency="EUR", drawdowns=3100.0)], r,
+                                         lambda v, d: kurser[d])}["Indbetalt DKK"]
+    assert (x["rapport"], x["status"], x["kurs"]) == (pytest.approx(3100.0), "ok",
+                                                      pytest.approx(7.75))
