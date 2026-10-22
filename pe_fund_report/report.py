@@ -40,7 +40,9 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
     slides.regionskort(prs, r)          # hele porteføljen
     slides.regionskort_aktivklasser(prs, r)     # Private Equity, Private Credit og ejendomme
     slides.stoerste_positioner(prs, r)  # selskaber, underliggende fonde og ikke-gennemlyste fonde
-    slides.gennemlysning(prs, r)        # springes over, hvis fondene har forskellige valutaer
+    # i fondens valuta, så den springes over, hvis fondene har forskellige valutaer; Største
+    # positioner ovenfor er den samme gennemlysning i DKK
+    slides.gennemlysning(prs, r)
     # slides.vaerdibevaegelser findes stadig, men er ikke med i decket for tiden; dataene
     # står i dataudtrækkets fane Værdibevægelser
 
@@ -70,10 +72,11 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
             print(f"ADVARSEL: {f['fund_name']}: {advarsel}")
     _advar_om_klassifikation(r["brancher"], "branchen")
     _advar_om_klassifikation(r["regioner"], "geografien")
-    if r["valuta"] is None:
-        valutaer = ", ".join(sorted({f["valuta"] for f in r["fonde"]}))
-        print(f"ADVARSEL: fondene har forskellige valutaer ({valutaer}) - beløb lægges ikke "
-              "sammen: ingen samlet række, ingen poolet IRR, og gennemlysningen springes over")
+    # forskellige valutaer regnes sammen i DKK; kun en manglende kurs efterlader hul i totalerne
+    uden_dkk = [f["fund_name"] for f in r["fonde"] if f["n"].get("nav_dkk") is None]
+    if r["valuta"] is None and uden_dkk:
+        print(f"ADVARSEL: ingen DKK-kurs for {', '.join(uden_dkk)} - fondene har forskellige "
+              "valutaer, så porteføljens tal i DKK, fordelingerne og IRR i DKK mangler")
     return outfile
 
 
