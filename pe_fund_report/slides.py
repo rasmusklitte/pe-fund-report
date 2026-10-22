@@ -7,15 +7,18 @@ fonde eller - hvor fonden ikke er indlæst på fondsniveau - NAV-historik og væ
 import io
 import uuid
 from contextlib import contextmanager
+from copy import deepcopy
 from math import ceil
 
 from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
-from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
+from pptx.enum.chart import (XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION,
+                             XL_TICK_LABEL_POSITION)
 from pptx.enum.dml import MSO_LINE_DASH_STYLE
 from pptx.enum.shapes import MSO_SHAPE, PP_PLACEHOLDER
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
-from pptx.oxml.ns import qn
+from pptx.oxml import parse_xml
+from pptx.oxml.ns import nsdecls, qn
 from pptx.util import Inches, Pt
 
 from . import style
@@ -3024,6 +3027,169 @@ def vaerdibevaegelser(prs, r):
     fod = Fodnoter()
     fod.generel(noter)
     fod.tegn(s)
+    return s
+
+
+# ---------- samlede investeringer (likviditet) ----------
+
+LQ_FLISE_Y, LQ_FLISE_H = 1.12, 0.52       # de fem tal øverst
+LQ_KURVE_Y, LQ_KURVE_H = 1.72, 1.90       # J-kurven
+LQ_BUND_Y = 3.70                          # overskrifterne over de to søjlediagrammer
+LQ_LUFT = 0.45                            # mellem de to søjlediagrammer
+
+
+def _mio(v):
+    """Et beløb i mio. som tal til en diagramserie."""
+    return round(v * _SKALA / 1_000_000, 1)
+
+
+def _mio_tekst(v):
+    return style._dk(v * _SKALA / 1_000_000, 1) + " mio."
+
+
+def _diagramakser(diagram, talformat):
+    """Vandrette gitterlinjer, ingen lodret akselinje, kategorierne nederst."""
+    diagram.font.name, diagram.font.size = BROED_FONT, Pt(8)
+    diagram.font.color.rgb = SORT
+    y_akse, x_akse = diagram.value_axis, diagram.category_axis
+    y_akse.has_major_gridlines = True
+    y_akse.major_gridlines.format.line.color.rgb = _rgb(style.GRID)
+    y_akse.major_gridlines.format.line.width = Pt(0.75)
+    y_akse.format.line.fill.background()
+    y_akse.tick_labels.number_format, y_akse.tick_labels.number_format_is_linked = talformat, False
+    x_akse.format.line.color.rgb = STREG
+    x_akse.has_major_gridlines = False
+    x_akse.tick_label_position = XL_TICK_LABEL_POSITION.LOW
+    diagram.has_legend = True
+    diagram.legend.position = XL_LEGEND_POSITION.TOP
+    diagram.legend.include_in_layout = False
+    diagram.legend.font.size = Pt(8)
+
+
+def _farv(serie, farve):
+    serie.format.fill.solid()
+    serie.format.fill.fore_color.rgb = farve
+
+
+def _j_kurve(s, x, y, w, h, kvartaler):
+    """Kvartalets ind- og udbetalinger som søjler og den akkumulerede netto cash flow som flade
+    i ét diagram (et kombinationsdiagram), så det kan redigeres i PowerPoint."""
+    cd = CategoryChartData(number_format="#,##0.0")
+    cd.categories = [kvartal(q["dato"]) for q in kvartaler]
+    cd.add_series("Indbetalinger i kvartalet", [_mio(q["kald"]) for q in kvartaler])
+    cd.add_series("Udbetalinger i kvartalet", [_mio(q["udlodning"]) for q in kvartaler])
+    cd.add_series("Akkumuleret netto cash flow", [_mio(q["akkumuleret"]) for q in kvartaler])
+    diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(x), Inches(y),
+                                 Inches(w), Inches(h), cd).chart
+    _diagramakser(diagram, '#,##0" mio."')
+    soejler = diagram.plots[0]
+    soejler.overlap, soejler.gap_width = 100, 60
+    for serie, farve in zip(soejler.series, (TERRA, SAGE_MID)):
+        _farv(serie, farve)
+        serie.invert_if_negative = False     # ellers bliver kaldene (negative) hvide
+    # den akkumulerede serie flyttes over i en flade, der deler akserne med søjlerne; fladen
+    # står først, så søjlerne tegnes oven på den
+    bar = soejler._element
+    ser = bar.findall(qn("c:ser"))[-1]
+    bar.remove(ser)
+    for tag in ("c:invertIfNegative", "c:spPr"):
+        for el in ser.findall(qn(tag)):
+            ser.remove(el)
+    farve = str(SAGE)
+    # mørk salvie ved nul, der toner ud mod bunden, med kurven som en tydelig kant
+    ser.find(qn("c:tx")).addnext(parse_xml(
+        f'<c:spPr {nsdecls("c", "a")}><a:gradFill rotWithShape="1"><a:gsLst>'
+        f'<a:gs pos="0"><a:srgbClr val="{farve}"><a:alpha val="85000"/></a:srgbClr></a:gs>'
+        f'<a:gs pos="100000"><a:srgbClr val="{farve}"><a:alpha val="8000"/></a:srgbClr></a:gs>'
+        f'</a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>'
+        f'<a:ln w="15875"><a:solidFill><a:srgbClr val="{farve}"/></a:solidFill></a:ln>'
+        f'</c:spPr>'))
+    flade = parse_xml(f'<c:areaChart {nsdecls("c")}><c:grouping val="standard"/>'
+                      f'<c:varyColors val="0"/></c:areaChart>')
+    flade.append(ser)
+    for akse in bar.findall(qn("c:axId")):
+        flade.append(deepcopy(akse))
+    bar.addprevious(flade)
+    return diagram
+
+
+def _stablede_soejler(s, x, y, w, h, kategorier, serier, talformat, etiketformat=None):
+    """Stablede søjler pr. år. serier: [(navn, værdier, farve)], nederst først; den nederste får
+    etiketter med etiketformat."""
+    cd = CategoryChartData(number_format=talformat)
+    cd.categories = kategorier
+    for navn, vaerdier, _ in serier:
+        cd.add_series(navn, vaerdier)
+    diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(x), Inches(y),
+                                 Inches(w), Inches(h), cd).chart
+    _diagramakser(diagram, talformat)
+    plot = diagram.plots[0]
+    plot.gap_width = 45
+    for serie, (_, _, farve) in zip(plot.series, serier):
+        _farv(serie, farve)
+    if etiketformat:
+        etiketter = plot.series[0].data_labels
+        etiketter.show_value = True
+        etiketter.number_format, etiketter.number_format_is_linked = etiketformat, False
+        etiketter.position = XL_LABEL_POSITION.CENTER
+        etiketter.font.size, etiketter.font.color.rgb = Pt(8), HVID
+    return diagram
+
+
+def likviditet(prs, r):
+    """Samlede investeringer uden ejendomsfondene: fem nøgletal, J-kurven af den akkumulerede
+    netto cash flow, tilsagn og resttilsagn ved årets udgang og TVPI (DPI + RVPI) ved årets
+    udgang. Data fra data.likviditet(); None uden DKK-tal."""
+    lq = r.get("likviditet")
+    if not lq:
+        return None
+    s = _oversigtsslide(prs, r, "Samlede investeringer",
+                        enhed="uden ejendomsfonde, beløb i tusinde DKK")
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    fod.generel(f"Ejendomsfondene ({_navne(lq['udeladt'])}) er evergreen og indgår ikke."
+                if lq["udeladt"] else None,
+                "Ind- og udbetalinger er omregnet med Nationalbankens kurs på deres dato, "
+                "tilsagn, resttilsagn og NAV med kursen ved årets udgang.")
+    t, sidste = lq["total"], lq["aar"][-1]
+    afkast = fod.maerke("Afkast er markedsværdi + udbetalinger - indbetalinger.")
+    aar_maerke = (fod.maerke(f"{sidste['aar']} er pr. {sidste['dato']:%d.%m.%Y}.")
+                  if (sidste["dato"].month, sidste["dato"].day) != (12, 31) else "")
+    if lq["foer_nav"]:
+        fod.generel(f"Før den første NAV indgår {_navne(lq['foer_nav'])} med det, der er "
+                    "betalt ind netto.")
+    fod.generel(_datonoter(r))
+    noter_y = _noter_y(fod.tekst())
+
+    # de fem tal
+    fliser = [("Markedsværdi", t["nav"]), ("Afkast" + afkast, t["afkast"]),
+              ("Indbetalinger", t["indbetalt"]), ("Udbetalinger", t["udloddet"]),
+              ("Netto cash flow", t["netto"])]
+    fw = (X1 - X0) / len(fliser)
+    for i, (label, v) in enumerate(fliser):
+        _tekst(s, X0 + i * fw, LQ_FLISE_Y, fw, 0.22, label, 11, just=C)
+        _tekst(s, X0 + i * fw, LQ_FLISE_Y + 0.22, fw, 0.30, tusind(v), 16, fed=True,
+               farve=SAGE, just=C)
+
+    _j_kurve(s, X0, LQ_KURVE_Y, X1 - X0, LQ_KURVE_H, lq["kvartaler"])
+
+    bw = (X1 - X0 - LQ_LUFT) / 2
+    by, bh = LQ_BUND_Y + 0.24, noter_y - 0.05 - (LQ_BUND_Y + 0.24)
+    kategorier = [str(a["aar"]) for a in lq["aar"]]
+    kategorier[-1] += aar_maerke
+    kaldt = _KALDT_LABEL[lq["genkaldelige"]]
+    _tekst(s, X0, LQ_BUND_Y, bw, 0.22, "Kapitaltilsagn ved årets udgang", 11, fed=True)
+    _stablede_soejler(s, X0, by, bw, bh, kategorier, [
+        (f"Resttilsagn {_mio_tekst(sidste['resttilsagn'])}",
+         [_mio(a["resttilsagn"]) for a in lq["aar"]], SAGE),
+        (f"{kaldt} {_mio_tekst(sidste['kaldt'])}", [_mio(a["kaldt"]) for a in lq["aar"]],
+         SAGE_LYS)], '#,##0" mio."', '#,##0" mio."')
+    x2 = X0 + bw + LQ_LUFT
+    _tekst(s, x2, LQ_BUND_Y, bw, 0.22, "TVPI ved årets udgang", 11, fed=True)
+    _stablede_soejler(s, x2, by, bw, bh, kategorier, [
+        (f"RVPI {gange(sidste['rvpi'])}", [a["rvpi"] or 0 for a in lq["aar"]], SAGE),
+        (f"DPI {gange(sidste['dpi'])}", [a["dpi"] or 0 for a in lq["aar"]], SAGE_LYS)],
+        '0.00"x"')
+    fod.tegn(s, noter_y)
     return s
 
 

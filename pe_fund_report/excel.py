@@ -541,6 +541,53 @@ def _vaerdibevaegelser(wb, r):
     ark.afslut()
 
 
+def _likviditet(wb, r):
+    """Siden Samlede investeringer (de supplerende slides): kvartalernes cash flows og
+    årsskifterne i DKK, uden ejendomsfondene."""
+    lq = r.get("likviditet")
+    if not lq:
+        return
+    ark = Ark(wb, "Likviditet", [
+        ("Type", 11, None, None), ("Dato", 11, "dato", None),
+        ("Indbetalinger DKK", 15, "tal", None), ("Udbetalinger DKK", 15, "tal", None),
+        ("Netto DKK", 15, "tal", None), ("Akkumuleret netto DKK", 15, "tal", None),
+        ("Tilsagn DKK", 15, "tal", None), ("Resttilsagn DKK", 15, "tal", None),
+        ("Kaldt DKK", 15, "tal", None), ("Akk. indbetalt DKK", 15, "tal", None),
+        ("Akk. udloddet DKK", 15, "tal", None), ("NAV DKK", 15, "tal", None),
+        ("DPI", 8, "gange", None), ("RVPI", 8, "gange", None), ("TVPI", 8, "gange", None),
+        ("Bemærkning", 70, None, None)])
+
+    def formel(udtryk):
+        """=udtryk med {Kolonnenavn} erstattet af cellen i samme række."""
+        def f(rad, k):
+            u = udtryk
+            for navn, bogstav in k.items():
+                u = u.replace("{" + navn + "}", f"{bogstav}{rad}")
+            return "=" + u
+        return f
+
+    for i, q in enumerate(lq["kvartaler"]):
+        ark.raekke(["Kvartal", q["dato"], -q["kald"], q["udlodning"],
+                    formel("{Udbetalinger DKK}-{Indbetalinger DKK}"),
+                    formel("{Netto DKK}") if i == 0 else
+                    (lambda rad, k: f"={k['Akkumuleret netto DKK']}{rad - 1}+{k['Netto DKK']}{rad}"),
+                    None, None, None, None, None, None, None, None, None,
+                    "Kapitalstrømmene omregnet med kursen på deres dato" if i == 0 else None])
+    for a in lq["aar"]:
+        sidste = a is lq["aar"][-1]
+        ark.raekke(["Årsskifte", a["dato"], None, None, None, None, a["tilsagn"], a["resttilsagn"],
+                    formel("{Tilsagn DKK}-{Resttilsagn DKK}"),
+                    a["indbetalt"], a["udloddet"], a["nav"],
+                    formel('IFERROR({Akk. udloddet DKK}/{Akk. indbetalt DKK},"")'),
+                    formel('IFERROR({NAV DKK}/{Akk. indbetalt DKK},"")'),
+                    formel('IFERROR(({Akk. udloddet DKK}+{NAV DKK})/{Akk. indbetalt DKK},"")'),
+                    "Rapportens egne tal (tilsagn_dkk, resttilsagn_dkk, nav_dkk)" if sidste
+                    else "Tilsagn, resttilsagn og NAV med kursen på årsskiftet"])
+    if lq["udeladt"]:
+        ark.raekke(["Uden", None] + [None] * 13 + [", ".join(lq["udeladt"])])
+    ark.afslut()
+
+
 def _valutakurser(wb, r):
     ark = Ark(wb, "Valutakurser", [
         ("Valuta", 8, None, None), ("Ønsket dato", 12, "dato", None),
@@ -628,6 +675,9 @@ FANER = [
     ("Geografi", "Siden Geografisk eksponering: hver fonds andele pr. region og delregion (fra "
                  "rpt.v_geography_exposure) ganget med fondens NAV i DKK; Foreløbig som i "
                  "Brancher."),
+    ("Likviditet", "Siden Samlede investeringer i de supplerende slides, uden ejendomsfondene: "
+                   "ind- og udbetalinger pr. kvartal med kursen på deres dato, og tilsagn, "
+                   "resttilsagn, NAV, DPI, RVPI og TVPI ved hvert årsskifte."),
     ("Valutakurser", "Alle DKK-kurser, rapporten har brugt."),
     ("Stamdata", "Geografi, investeringsstrategi, løbetid og forvalter pr. fond."),
     ("Dokumenter", "Alle kildedokumenter med type, periode, godkendelse og link til PDF'en; "
@@ -655,6 +705,7 @@ def skriv(r):
     _vaerdibevaegelser(wb, r)
     _eksponering(wb, r, kilder, "brancher")
     _eksponering(wb, r, kilder, "regioner")
+    _likviditet(wb, r)
     _valutakurser(wb, r)
     _stamdata(wb, r)
     _laes_mig(wb, r, [(n, t) for n, t in FANER if n in wb.sheetnames])

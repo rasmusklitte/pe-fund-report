@@ -3,8 +3,9 @@ from datetime import date
 
 from pe_fund_report import report, slides
 
-SUPPLERENDE = ["lange_tilsagn", "fordeling", "brancher", "regioner", "branchekort_ejendomme",
-               "regionskort_ejendomme", "vaerdibevaegelser", "definitioner"]
+SUPPLERENDE = ["likviditet", "lange_tilsagn", "fordeling", "brancher", "regioner",
+               "branchekort_ejendomme", "regionskort_ejendomme", "vaerdibevaegelser",
+               "definitioner"]
 
 
 def test_supplerende_slides_rummer_dem_uden_for_rapporten(monkeypatch):

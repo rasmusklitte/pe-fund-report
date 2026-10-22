@@ -1099,3 +1099,55 @@ def test_benchmark_laeser_regionvaegte(tmp_path):
     bm = data.benchmark(sti)
     assert bm["indeks"] == {}
     assert bm["regioner"]["MSCI ACWI"]["NORTH_AMERICA"] == pytest.approx(0.6711)
+
+
+LQ_KURSER = {date(2024, 3, 1): 7.0, date(2025, 6, 1): 8.0, date(2025, 9, 1): 7.5,
+             date(2024, 12, 31): 7.2, date(2025, 12, 31): 7.3}
+
+
+def _lq_fond(navn, segment, valuta="EUR"):
+    """En EUR-fond: tilsagn 100, kald 40 (2024) og 20 (2025), udlodning 10 (2025), NAV 70."""
+    cf = pd.DataFrame(dict(value_date=[date(2024, 3, 1), date(2025, 6, 1), date(2025, 9, 1)],
+                           flow_class=["CONTRIBUTION", "CONTRIBUTION", "DISTRIBUTION"],
+                           is_recallable=[0, 0, 0], amount=[-40.0, -20.0, 10.0]))
+    tilsagn = pd.DataFrame(dict(event_date=[date(2024, 1, 1)], amount=[100.0]))
+    n = dict(tilsagn=100.0, indbetalt=60.0, udloddet=10.0, resttilsagn=40.0, nav=70.0,
+             recallable=0.0, tilsagn_dkk=746.0, resttilsagn_dkk=298.4, nav_dkk=522.2,
+             indbetalt_dkk=440.0, udloddet_dkk=75.0)
+    return dict(fund_name=navn, segment=segment, valuta=valuta, nav_dato=date(2026, 6, 30), n=n,
+                kapitalstroemme=[(date(2024, 3, 1), -40.0, "kald"),
+                                 (date(2025, 6, 1), -20.0, "kald"),
+                                 (date(2025, 9, 1), 10.0, "udlodning")],
+                historik=[dict(dato=date(2024, 12, 31), nav=45.0),
+                          dict(dato=date(2025, 12, 31), nav=60.0),
+                          dict(dato=date(2026, 6, 30), nav=70.0)],
+                kilder=dict(cash_flows=cf, tilsagn=tilsagn, rabat=None))
+
+
+def test_likviditet_uden_ejendomme_med_kursen_paa_dagen_og_ved_aarets_udgang():
+    fonde = [_lq_fond("Alfa", "Private equity"), _lq_fond("Ejendom", "Ejendomme")]
+    lq = data.likviditet(fonde, lambda v, d: LQ_KURSER[d], date(2026, 6, 30))
+    assert lq["fonde"] == ["Alfa"] and lq["udeladt"] == ["Ejendom"]
+    t = lq["total"]
+    assert (t["indbetalt"], t["udloddet"], t["nav"]) == (440.0, 75.0, 522.2)
+    assert t["netto"] == -365.0 and t["afkast"] == pytest.approx(157.2)
+    # kvartalerne går fra det første kald til rapportdatoen og ender i netto cash flow
+    q = lq["kvartaler"]
+    assert (q[0]["dato"], q[0]["kald"], len(q)) == (date(2024, 3, 31), -280.0, 10)
+    assert q[-1]["akkumuleret"] == pytest.approx(t["netto"])
+    a24, a25, a26 = lq["aar"]
+    # årsskifterne med kursen på dagen: tilsagn 100, kaldt 40 til 7,2
+    assert (a24["tilsagn"], a24["resttilsagn"], a24["nav"]) == pytest.approx((720.0, 432.0, 324.0))
+    assert a24["dpi"] == 0 and a24["rvpi"] == pytest.approx(324.0 / 280.0)
+    assert (a25["resttilsagn"], a25["indbetalt"], a25["udloddet"]) == pytest.approx((292.0, 440.0,
+                                                                                    75.0))
+    # det sidste år er rapportens egne tal
+    assert (a26["dato"], a26["resttilsagn"], a26["nav"]) == (date(2026, 6, 30), 298.4, 522.2)
+    assert a26["tvpi"] == pytest.approx((75.0 + 522.2) / 440.0)
+
+
+def test_likviditet_uden_kurs_eller_uden_andre_end_ejendomme_er_none():
+    fonde = [_lq_fond("Alfa", "Private equity")]
+    assert data.likviditet(fonde, lambda v, d: None, date(2026, 6, 30)) is None
+    assert data.likviditet([_lq_fond("E", "Ejendomme")], lambda v, d: LQ_KURSER[d],
+                           date(2026, 6, 30)) is None

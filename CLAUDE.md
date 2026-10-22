@@ -76,7 +76,8 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   `report._byg_supplerende()`, written on every build next to the report as
   `<deck>_supplerende_slides.pptx` (named from the intended path, not a `_v2`; skip with
   `--uden-supplerende`; anonymized too, and leak-checked with the report before either is
-  saved; no Excel of its own). It holds a cover, *Lange tilsagn*, the geography-by-commitment
+  saved; no Excel of its own). It holds a cover, *Samlede investeringer* (`slides.likviditet`,
+  below), *Lange tilsagn*, the geography-by-commitment
   slide (`fordeling(..., "geografi", ...)`; its data also feeds the executive summary's
   fallback), the pies *Branchefordeling* / *Geografisk eksponering* (`slides.brancher` /
   `regioner`), the two "ejendomme for sig" treemaps (`branchekort_ejendomme` /
@@ -84,6 +85,19 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   værdibevægelser* (`slides.vaerdibevaegelser`), then *Definitioner* and the end slide. When a
   slide is removed from the report, move its call here rather than only commenting it out.
   Client notes in the report must not refer to these pages by name.
+- *Samlede investeringer* (`slides.likviditet`, modelled on a Hewema page the user supplied): the
+  portfolio **without the property funds** (`segment == "Ejendomme"`, `data.LIKVIDITET_UDEN`:
+  they are evergreen and drag the liquidity picture; the user's choice, also for the five figures
+  on top). Data from `data.likviditet()` (pure) in `r["likviditet"]`: market value, afkast (NAV +
+  distributions − paid-in), paid-in, distributions and net cash flow in DKK; a J-curve per quarter
+  (calls and distributions at their own date's rate, cumulative net as an area) and, per year
+  end, commitment, resttilsagn (same rules as `n["resttilsagn"]`, cut at the date by
+  `_kaldt_pr`), NAV (latest `historik` NAV; before a fund's first NAV, its net paid-in, noted)
+  and pooled DPI/RVPI, all at the year-end rate; the last year is the report's own
+  `tilsagn_dkk`/`resttilsagn_dkk`/`nav_dkk`. The J-curve is one native combo chart: a column
+  chart whose last series `_j_kurve` moves into a `c:areaChart` sharing its axes (python-pptx
+  cannot build combo charts). House colours, not the example's teal (Real Estate's colour).
+  Excel sheet *Likviditet* lists the series.
 - *Eksponering* (`slides.valutafordeling`, after *Ændringer pr. fond*): three doughnuts
   (`slides._ring`) in a near-equilateral triangle in the middle of the slide (exposure on top,
   NAV and resttilsagn below, `VF_BASIS` apart; a true equilateral would make the lower rings

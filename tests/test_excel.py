@@ -72,6 +72,8 @@ def _rapport(tmp_path, monkeypatch):
              datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
     f["n"]["nav_dkk"] = f["n"]["nav"]
     r["irr_dkk"] = data.irr_dkk([f], lambda v, d: 1.0)
+    f["n"].update(tilsagn_dkk=200.0, resttilsagn_dkk=100.0, indbetalt_dkk=100.0, udloddet_dkk=5.0)
+    r["likviditet"] = data.likviditet([f], lambda v, d: 1.0, NAV_DATO)
     return excel.skriv(r)
 
 
@@ -126,3 +128,11 @@ def test_udvikling_regner_vaerdiaendringen_som_formel(tmp_path, monkeypatch):
     assert ws.cell(2, _kolonne(ws, "Periode")).value == "Kvartalet"
     assert ws.cell(2, _kolonne(ws, "Værdiændring")).value == "=J2-G2-H2+I2"
     assert ws.cell(3, 1).value == "I alt"
+
+
+def test_likviditet_har_kvartaler_og_aarsskifter_med_formler(tmp_path, monkeypatch):
+    ws = _rapport(tmp_path, monkeypatch)["Likviditet"]
+    assert ws.cell(2, 1).value == "Kvartal" and ws.cell(2, _kolonne(ws, "Netto DKK")).value == "=D2-C2"
+    assert ws.cell(3, _kolonne(ws, "Akkumuleret netto DKK")).value == "=F2+E3"
+    aar = next(rad for rad in range(2, ws.max_row + 1) if ws.cell(rad, 1).value == "Årsskifte")
+    assert ws.cell(aar, _kolonne(ws, "TVPI")).value == f'=IFERROR((K{aar}+L{aar})/J{aar},"")'

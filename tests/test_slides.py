@@ -14,6 +14,7 @@ from pptx.util import Emu, Inches
 from pe_fund_report import data, slides
 from pe_fund_report.deck import L_FORSIDE, L_SKILLE, L_SLUT, L_TEKST, _ny_slide, _ryd_slides
 from pe_fund_report.paths import MASTER
+from test_data import LQ_KURSER, _lq_fond
 
 
 def test_danske_talformater():
@@ -1499,3 +1500,22 @@ def test_stoerste_positioner_uden_data_springes_over():
     r = _rapport([])
     r["stoerste_positioner"] = None
     assert slides.stoerste_positioner(_prs(), r) is None
+
+
+def test_likviditet_viser_fem_tal_og_tre_diagrammer():
+    lq = data.likviditet([_lq_fond("Alfa", "Private equity"), _lq_fond("Ejendom", "Ejendomme")],
+                         lambda v, d: LQ_KURSER[d], date(2026, 6, 30))
+    r = dict(navn="Investor", as_of=date(2026, 6, 30), likviditet=lq,
+             datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
+    s = slides.likviditet(_prs(), r)
+    t = _tekster(s)
+    for label in ("Markedsværdi", "Afkast¹", "Indbetalinger", "Udbetalinger", "Netto cash flow"):
+        assert label in t
+    assert sum(sh.has_chart for sh in s.shapes) == 3
+    noter = next(x for x in t if x.startswith("Kilde"))
+    assert "Ejendomsfondene (Ejendom)" in noter and "2026 er pr. 30.06.2026" in noter
+    # J-kurven: søjler og en flade, der deler akserne
+    j = next(sh.chart for sh in s.shapes if sh.has_chart)
+    plot_area = j._chartSpace.chart.plotArea
+    assert plot_area.find(qn("c:areaChart")) is not None
+    assert slides.likviditet(_prs(), r | dict(likviditet=None)) is None

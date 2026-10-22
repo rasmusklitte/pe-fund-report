@@ -1548,6 +1548,108 @@ def irr_dkk(fonde, kurs):
     return dict(irr=xirr([(x["dato"], x["dkk"]) for x in flows]), flows=flows)
 
 
+LIKVIDITET_UDEN = "Ejendomme"     # evergreen-ejendomsfondene trækker likviditetsbilledet skævt
+
+
+def _kvartalsslut(d):
+    """Sidste dag i d's kvartal."""
+    m = (d.month - 1) // 3 * 3 + 3
+    return (date(d.year, m + 1, 1) if m < 12 else date(d.year + 1, 1, 1)) - timedelta(days=1)
+
+
+def _kaldt_pr(f, dato):
+    """(kaldt mod tilsagnet, genkaldelige udlodninger) til og med dato, med de samme regler
+    som n["kaldt"] og n["recallable"]: kapitalkald uden udligningsrente, rabatten fra sin dato."""
+    cf = f["kilder"]["cash_flows"]
+    cf = cf[(cf.value_date <= min(dato, f["nav_dato"]))]
+    kaldt_ = -cf[cf.flow_class == "CONTRIBUTION"].amount.sum()
+    rabat_dato, rabat_ = f["kilder"].get("rabat") or (None, 0.0)
+    if rabat_dato and rabat_dato <= dato:
+        kaldt_ += rabat_
+    recallable = cf[(cf.flow_class == "DISTRIBUTION") & (cf.is_recallable == 1)].amount.sum()
+    return float(kaldt_), float(recallable)
+
+
+def likviditet(fonde, kurs, rapport_dato):
+    """Porteføljens likviditet uden ejendomsfondene, i DKK, til sliden Samlede investeringer.
+
+    Kapitalstrømmene (som i indbetalt og udloddet: kald inkl. udligningsrente og rabat) omregnes
+    med kursen på deres egen dato, så summerne er indbetalt_dkk og udloddet_dkk. Pr. årsskifte
+    (og rapportdatoen for det sidste år): tilsagn og resttilsagn med samme regler som
+    n["resttilsagn"] og fondens seneste NAV, alle med kursen på årsskiftet; DPI og RVPI er
+    poolet i DKK. Det sidste år er rapportens egne tal (tilsagn_dkk, resttilsagn_dkk, nav_dkk).
+
+    {fonde, udeladt, total: {nav, indbetalt, udloddet, afkast, netto}, kvartaler: [{dato,
+    kald, udlodning, netto, akkumuleret}] (kald med LP-fortegn < 0), aar: [{aar, dato, tilsagn, resttilsagn, kaldt, indbetalt, udloddet,
+    nav, dpi, rvpi, tvpi}], foer_nav, genkaldelige}. None uden fonde eller med en manglende kurs.
+    """
+    med = [f for f in fonde if f.get("segment") != LIKVIDITET_UDEN]
+    if not med or any(f["n"].get(k) is None for f in med for k in DKK_FELTER):
+        return None
+    flows = []                          # (dato, DKK med LP-fortegn, "kald"/"udlodning")
+    for f in med:
+        for d, a, type_ in f["kapitalstroemme"]:
+            k = kurs(f["valuta"], d)
+            if k is None:
+                return None
+            flows.append((d, a * k, type_))
+    if not flows:
+        return None
+    flows.sort(key=lambda x: x[0])
+    total = dict(nav=sum(f["n"]["nav_dkk"] for f in med),
+                 indbetalt=sum(f["n"]["indbetalt_dkk"] for f in med),
+                 udloddet=sum(f["n"]["udloddet_dkk"] for f in med))
+    total.update(afkast=total["nav"] + total["udloddet"] - total["indbetalt"],
+                 netto=total["udloddet"] - total["indbetalt"])
+
+    kvartaler, q, akk = [], _kvartalsslut(flows[0][0]), 0.0
+    while q <= _kvartalsslut(rapport_dato):
+        i_kvartalet = [(a, t) for d, a, t in flows if _kvartalsslut(d) == q]
+        kald = sum(a for a, t in i_kvartalet if t == "kald")
+        udlodning = sum(a for a, t in i_kvartalet if t == "udlodning")
+        akk += kald + udlodning
+        kvartaler.append(dict(dato=min(q, rapport_dato), kald=kald, udlodning=udlodning,
+                              netto=kald + udlodning, akkumuleret=akk))
+        q = _kvartalsslut(q + timedelta(days=1))
+
+    aar, foer_nav = [], set()
+    for y in range(flows[0][0].year, rapport_dato.year + 1):
+        dato = date(y, 12, 31) if y < rapport_dato.year else rapport_dato
+        tilsagn = resttilsagn = nav = 0.0
+        for f in med:
+            n = f["n"]
+            if y == rapport_dato.year:
+                tilsagn += n["tilsagn_dkk"]
+                resttilsagn += n["resttilsagn_dkk"]
+                nav += n["nav_dkk"]
+                continue
+            k = kurs(f["valuta"], dato)
+            if k is None:
+                return None
+            t = f["kilder"]["tilsagn"]
+            t = float(t[t.event_date <= dato].amount.sum()) if t is not None else 0.0
+            kaldt_, recallable = _kaldt_pr(f, dato)
+            tilsagn += t * k
+            resttilsagn += max(t - kaldt_ + recallable, 0.0) * k
+            h = [p for p in f["historik"] if p["dato"] <= dato]
+            if h:
+                nav += h[-1]["nav"] * k
+            elif any(d <= dato for d, _, _ in f["kapitalstroemme"]):
+                # kaldt, men endnu ingen NAV: fonden står til det, der er betalt netto ind
+                foer_nav.add(f["fund_name"])
+                nav -= sum(a for d, a, _ in f["kapitalstroemme"] if d <= dato) * k
+        ind = -sum(a for d, a, t in flows if d <= dato and t == "kald")
+        udl = sum(a for d, a, t in flows if d <= dato and t == "udlodning")
+        aar.append(dict(aar=y, dato=dato, tilsagn=tilsagn, resttilsagn=resttilsagn,
+                        kaldt=tilsagn - resttilsagn, indbetalt=ind, udloddet=udl, nav=nav,
+                        dpi=udl / ind if ind else None, rvpi=nav / ind if ind else None,
+                        tvpi=(udl + nav) / ind if ind else None))
+    return dict(fonde=[f["fund_name"] for f in med],
+                udeladt=[f["fund_name"] for f in fonde if f not in med],
+                total=total, kvartaler=kvartaler, aar=aar, foer_nav=sorted(foer_nav),
+                genkaldelige=any(f["n"].get("recallable") for f in med))
+
+
 def sammendrag(fonde, total_dkk, irr=None):
     """Porteføljens hovedtal til executive summary.
 
@@ -1850,6 +1952,7 @@ def investor_rapport(investor_code, as_of=None):
                 gennemlysning=gennemlysning(fonde),
                 stoerste_eksponering=stoerste_eksponering(fonde, kurser),
                 stoerste_positioner=stoerste_positioner(fonde, kurser),
+                likviditet=likviditet(fonde, kurs, rapport_dato),
                 perioder=rapport_perioder, udvikling=portefoelje_udvikling(fonde),
                 fortegnsafvigelser=fortegnsafvigelser(fonde),
                 vaerdibevaegelser=vaerdibevaegelser(fonde, kurser),
