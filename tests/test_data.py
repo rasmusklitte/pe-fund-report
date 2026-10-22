@@ -679,6 +679,17 @@ def test_kaldt_bruger_forvalterens_tal_ved_rabat():
     assert data.kaldt(100.0, 90.0) == 100.0                            # mindre kaldt: ikke rabat
 
 
+def test_rabat_dateres_paa_foerste_kald():
+    # PPPC2: 75.000 EUR i rabat på første kald (300.000 kaldt, 225.000 betalt) den 27.06.2023;
+    # den tæller som indbetalt og som udlodning den dag (som i Aleta)
+    cf = pd.DataFrame(dict(value_date=[date(2023, 11, 2), date(2023, 6, 27), date(2024, 1, 5)],
+                           flow_class=["CONTRIBUTION", "CONTRIBUTION", "DISTRIBUTION"],
+                           amount=[-700_000.0, -225_000.0, 10.0]))
+    assert data.rabat(3_125_000.0, 3_200_000.0, cf) == (75_000.0, date(2023, 6, 27))
+    assert data.rabat(3_125_000.0, 3_125_000.0, cf) == (0.0, None)     # ingen rabat
+    assert data.rabat(100.0, 200.0, cf[cf.flow_class == "DISTRIBUTION"]) == (0.0, None)
+
+
 # ---------- gennemlysning af feedere ----------
 
 def test_selskab_fjerner_instrumentord():

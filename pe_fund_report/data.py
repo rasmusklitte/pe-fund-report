@@ -2,7 +2,8 @@
 
 Reglerne følger docs/analysis-data-guide.md: rpt-views først, LP-fortegn på cash flows
 (betalt < 0), betalt udligningsrente (EQUALISATION) tæller med i indbetalt og modtaget i
-udloddet, men ikke i kaldt kapital og resttilsagn; WITHHOLDING_TAX holdes ude af IRR,
+udloddet, men ikke i kaldt kapital og resttilsagn; en rabat på kald tæller som indbetalt og
+udloddet (som i Aleta); WITHHOLDING_TAX holdes ude af IRR,
 og basistabeller filtreres på APPROVED + is_active = 1. Investor- og fondsniveau blandes
 ikke: beholdningerne er hele fondens tal og skaleres med investors ejerandel.
 """
@@ -265,11 +266,27 @@ def kaldt(indbetalt, gp_kaldt):
 
     Har forvalteren givet rabat på et kald (Petersen & Partners' feedere: 25 % af første
     kald), er der kaldt mere af tilsagnet, end investor har betalt. Rabatten mindsker
-    resttilsagnet, ikke den indbetalte kapital. Små afvigelser (afrunding) ignoreres.
+    resttilsagnet; se rabat() for, hvordan den tæller i indbetalt og udloddet. Små afvigelser
+    (afrunding) ignoreres.
     """
     if gp_kaldt and gp_kaldt - indbetalt > GP_TOLERANCE * gp_kaldt:
         return gp_kaldt
     return indbetalt
+
+
+def rabat(betalt, kaldt_, cf):
+    """(rabat, dato) for en rabat på kald, eller (0.0, None).
+
+    Rabatten er det kaldte mod tilsagnet ud over det betalte. Den tæller som indbetalt kapital
+    og som udlodning (brugerens valg, som i Aleta): investor har fået kaldet fuldt, og
+    forvalteren har betalt rabatten tilbage. Datoen er det første kapitalkald, som rabatten
+    blev givet på; da begge ben ligger samme dag, ændrer den ikke IRR.
+    """
+    beloeb = kaldt_ - betalt
+    kald = cf[cf.flow_class == "CONTRIBUTION"]
+    if beloeb <= 0 or kald.empty:
+        return 0.0, None
+    return float(beloeb), min(kald.value_date)
 
 
 TVPI_TOLERANCE = 0.015    # forvalterne oplyser TVPI med to decimaler
@@ -883,7 +900,6 @@ def fond(inv, as_of, info):
             # Definitioner forklarer ejerandelen for en evergreen-fond, så der er ingen note
             andel = float(nav.nav.iloc[-1]) / fonds_nav
 
-    indbetalt = mod_tilsagn + udligning_betalt
     # hele beløb: rabat og udligningsrente er typisk skæve beløb (82.500), som tusinder
     # runder forkert
     hel = lambda v: f"{v:,.0f}".replace(",", ".") + f" {inv.currency}"
@@ -900,12 +916,15 @@ def fond(inv, as_of, info):
         noter.append(Note(tekst[0].upper() + tekst[1:] + "; den indgår ikke i kaldt kapital og "
                           "resttilsagn.", "indbetalt"))
     kaldt_ = kaldt(mod_tilsagn, _memo(ka, nav_dato, "MM110"))
-    if kaldt_ != mod_tilsagn:
-        # den indbetalte kapital står i nøgletallene
-        # at resttilsagnet regnes af det kaldte beløb, står under Resttilsagn i Definitioner
-        noter.append(Note(f"Forvalteren har givet {hel(kaldt_ - mod_tilsagn)} i rabat på "
-                          f"kapitalkald; der er kaldt {hel(kaldt_)}.", "resttilsagn"))
-    n = dict(tilsagn=tilsagn, indbetalt=indbetalt, kaldt=kaldt_, rabat=kaldt_ - mod_tilsagn,
+    rabat_, rabat_dato = rabat(mod_tilsagn, kaldt_, cf)
+    indbetalt = mod_tilsagn + rabat_ + udligning_betalt
+    udloddet = udloddet + rabat_
+    if rabat_:
+        # den indbetalte kapital og udlodningerne står i nøgletallene
+        noter.append(Note(f"Forvalteren har givet {hel(rabat_)} i rabat på kapitalkaldet "
+                          f"{rabat_dato:%d.%m.%Y}; rabatten indgår i indbetalt kapital og som "
+                          "udlodning.", "indbetalt"))
+    n = dict(tilsagn=tilsagn, indbetalt=indbetalt, kaldt=kaldt_, rabat=rabat_,
              udligning=float(udligning_betalt),
              udloddet=udloddet, nav=nav_nu, recallable=float(recallable),
              resttilsagn=(tilsagn - kaldt_ + recallable) if tilsagn else None,
@@ -920,6 +939,9 @@ def fond(inv, as_of, info):
                                    cf[_er_indbetaling(cf)].amount)]
     ind += [(d, -a) for d, a in est]
     udl = list(zip(cf[_er_udlodning(cf)].value_date, cf[_er_udlodning(cf)].amount))
+    if rabat_:
+        ind.append((rabat_dato, rabat_))
+        udl.append((rabat_dato, rabat_))
     historik = [dict(dato=r.period_end, nav=float(r.nav),
                      indbetalt=sum(a for d, a in ind if d <= r.period_end),
                      udloddet=sum(a for d, a in udl if d <= r.period_end))
@@ -988,7 +1010,7 @@ def fond(inv, as_of, info):
         kilder=dict(nav=nav, cash_flows=alle_cf, kapitalkonto=ka, tilsagn=tilsagn_haendelser,
                     fondsstoerrelse=fondsstr_kilde, fonds_nav=fonds_navs,
                     indbetalt="forvalteren" if mod_tilsagn != cf_indbetalt else "kapitalkald",
-                    estimerede=estimerede),
+                    estimerede=estimerede, rabat=(rabat_dato, rabat_) if rabat_ else None),
         # til bygningen, ikke til decket: forhold, der skal ses på før udsendelse
         advarsler=advarsler + afstem_mod_forvalteren(n, _memo(ka, nav_dato, "MM120"),
                                                      inv.currency)

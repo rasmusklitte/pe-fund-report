@@ -25,7 +25,7 @@ falls back to `_v2`, `_v3`, … rather than failing — don't reach for `--out` 
 (`tests/motortramp_aleta_data.xlsx`), one test per fund × check (`tests/aleta.py`: `FONDE` maps
 Aleta's `securityCode` to our fund code, `KONTROLLER` holds the tolerances). It is marked `db` and
 skips when the database can't be reached. Failures there are differences to look into, not
-necessarily bugs: Aleta books call discounts as distributions. Aleta's amounts are in DKK (except
+necessarily bugs. Aleta's amounts are in DKK (except
 `nav`), so ours are compared as `n["..._dkk"]`, at the report-date rate.
 
 `ruff check .` currently reports 14 pre-existing findings (C408 `dict()` literals, DTZ011
@@ -329,6 +329,11 @@ not use. Non-negotiables:
 - IRR is `data.xirr` (act/365 bisection) over the investor's cash flows with NAV as the final flow;
   the portfolio IRR is pooled over all funds, not averaged. `data.total()` returns `None` when the
   funds are not all in the same currency — the slides then drop the total row.
+- **Call discounts** (Petersen & Partners' feeders: 25 % off the first call) count as paid-in and
+  as a distribution on the first call date, as Aleta books them (the user's choice):
+  `data.rabat()` gives MM110 − the paid amount, `fond()` adds it to `indbetalt`, `udloddet`,
+  `historik` and `kapitalstroemme` (not to the IRR flows: the two legs net out the same day), and
+  Excel lists both legs in *Kapitalstrømme*. Resttilsagn is still tilsagn − MM110.
 - If the GP's own paid-in figure (CA110 ITD **at the NAV date only**; MM110 is called capital,
   which includes call discounts) differs from the registered capital calls by more than
   `GP_TOLERANCE` (0.5 %), the GP figure wins and a note is added (`data.gp_vinder`) — unless

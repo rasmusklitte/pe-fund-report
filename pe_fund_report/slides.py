@@ -1027,24 +1027,22 @@ def _tvpi_irr_soejler(s, kol, j_tvpi, y, raekke_h, n, maks_tvpi, maks_irr, grund
 def kaldt_netto(n):
     """Kaldt kapital fratrukket genkaldelige udlodninger.
 
-    Resttilsagnet er tilsagn - kaldt + genkaldelige udlodninger, hvor kaldt er indbetalt plus
-    en eventuel rabat på kald. Trækkes de genkaldelige udlodninger fra den kaldte kapital i
-    stedet, går tilsagn - kaldt op i resttilsagnet, og broen kan tegnes med to trin. Tallet er
-    derfor lavere end "Indbetalt kapital" i tabellerne, som er den kapital, der faktisk er
-    betalt ind.
+    Resttilsagnet er tilsagn - kaldt + genkaldelige udlodninger, hvor kaldt er forvalterens
+    kaldte kapital (inkl. rabat på kald, uden udligningsrente). Trækkes de genkaldelige
+    udlodninger fra den kaldte kapital i stedet, går tilsagn - kaldt op i resttilsagnet, og
+    broen kan tegnes med to trin. Tallet er derfor lavere end "Indbetalt kapital" i tabellerne.
     """
     kaldt = n.get("kaldt")
     return (n["indbetalt"] if kaldt is None else kaldt or 0) - (n.get("recallable") or 0)
 
 
 def _resttilsagnsnoter(f):
-    """Noterne til en fonds resttilsagn i tabellerne på tværs af fonde: rabat og genkaldelige
-    udlodninger, med fondens beløb. Hvad begreberne betyder, står i Definitioner."""
+    """Noten til en fonds resttilsagn i tabellerne på tværs af fonde: de genkaldelige
+    udlodninger, med fondens beløb. Hvad begrebet betyder, står i Definitioner. En rabat på kald
+    har sin note ved den indbetalte kapital (data.rabat), da den indgår i den."""
     n, v = f["n"], f["valuta"]
-    return ([f"Forvalteren har givet {kroner(n['rabat'])} {v} i rabat på kapitalkald."]
-            if (n.get("rabat") or 0) > 0 else []) + \
-        ([f"Resttilsagnet indeholder genkaldelige udlodninger på "
-          f"{tusind(n['recallable'])} t{v}."] if (n.get("recallable") or 0) else [])
+    return ([f"Resttilsagnet indeholder genkaldelige udlodninger på "
+             f"{tusind(n['recallable'])} t{v}."] if (n.get("recallable") or 0) else [])
 
 
 def _rabatnote(fonde):
@@ -1053,8 +1051,7 @@ def _rabatnote(fonde):
     if not med:
         return None
     return ("Forvalteren har givet rabat på kapitalkald for " + ", ".join(med)
-            + ": der er kaldt mere af tilsagnet, end der er indbetalt, og resttilsagnet er "
-              "regnet af det kaldte beløb.")
+            + "; rabatten indgår i indbetalt kapital og som udlodning.")
 
 
 def _tilsagnsbro(n, netto=None):
@@ -3037,12 +3034,12 @@ def vaerdibevaegelser(prs, r):
 DEFINITIONER = [
     ("Tilsagn", "Det beløb, investor har forpligtet sig til at indskyde i fonden, i fondens "
                 "valuta."),
-    ("Indbetalt kapital", "Den kapital, forvalteren har kaldt, og som investor har betalt ind. "
-                          "Betalt udligningsrente ved senere closings indgår."),
+    ("Indbetalt kapital", "Den kapital, forvalteren har kaldt, og som investor har betalt ind, "
+                          "inkl. udligningsrente og rabat på kald."),
     ("Udlodninger", "Den kapital, fonden har betalt tilbage til investor."),
     ("Genkaldelige udlodninger", "Udlodninger, som forvalteren efter fondens vedtægter kan "
                                  "kalde ind igen."),
-    ("Resttilsagn", "Tilsagn fratrukket kaldt kapital (inkl. rabat på kald) og tillagt "
+    ("Resttilsagn", "Tilsagn fratrukket kaldt kapital og tillagt "
                     "genkaldelige udlodninger: det, forvalteren fortsat kan kalde."),
     ("NAV", "Net asset value: investors andel af fondens indre værdi på opgørelsesdatoen, "
             "som forvalteren har opgjort den."),

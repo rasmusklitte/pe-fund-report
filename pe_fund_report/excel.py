@@ -173,6 +173,17 @@ def _kapitalstroemme(wb, r, kilder):
                                                        "EQUALISATION") else "Nej",
                 "Ja" if not efter and c.flow_class != "WITHHOLDING_TAX" else "Nej",
                 bem, c.flow_ref, kilder.id_(c.document_id), kilder.fil(c.document_id)])
+        if f["kilder"].get("rabat"):
+            # rabatten tæller som kald og som udlodning samme dag (data.rabat), så Kontrol-
+            # kolonnerne i Nøgletal går op; de to ben udligner hinanden og er ikke i IRR
+            dato, beloeb = f["kilder"]["rabat"]
+            for klasse, fortegn, hvad in (("CONTRIBUTION", -1, "kapitalkald"),
+                                          ("DISTRIBUTION", 1, "udlodning")):
+                ark.raekke([
+                    f["fund_code"], f["fund_name"], dato, None, None, "Rabat på kald", klasse,
+                    "", fortegn * beloeb, f["valuta"], None, None, "Ja", "Nej",
+                    f"Rabat på kald – indregnet som {hvad} (kaldt MM110 - betalt CA110)",
+                    None, None, "Forvalterens kapitalkonto (fanen Kapitalkonto)"])
         for e in f["kilder"]["estimerede"]:
             ark.raekke([
                 f["fund_code"], f["fund_name"], pd.Timestamp(e["dato"]).date(), None, None,
@@ -315,8 +326,7 @@ def _noegletal(wb, r, kilder, ks, nav_rad, irr_blokke):
             f["fund_code"], f["fund_name"], f["valuta"], f["nav_dato"], n["tilsagn"],
             n["indbetalt"], n.get("udligning", 0.0), n["udloddet"],
             n.get("kaldt", n["indbetalt"]),
-            lambda rad, k: f"={k['Kaldt mod tilsagn']}{rad}-{k['Indbetalt']}{rad}"
-                           f"+{k['Heraf udligningsrente']}{rad}",
+            n.get("rabat", 0.0),
             n["recallable"], n["nav"],
             lambda rad, k: f"={k['Tilsagn']}{rad}-{k['Kaldt mod tilsagn']}{rad}"
                            f"+{k['Genkaldelige udlodninger']}{rad}",
