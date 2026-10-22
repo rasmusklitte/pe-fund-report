@@ -10,7 +10,9 @@ pip install -e .[dev]                       # installs the pe-fund-report entry 
 python -m pe_fund_report MOTORTRAMP          # build the deck (latest NAV date)
 python -m pe_fund_report MOTORTRAMP --as-of 2025-12-31 --out exports/test.pptx
 
-pytest                                      # whole suite (no database needed)
+pytest                                      # whole suite; only test_aleta.py reads the database
+pytest -m "not db"                          # without the database tests
+python tests/aleta.py                       # the report vs Aleta -> exports/aleta_afstemning_<date>.xlsx
 pytest tests/test_slides.py::test_danske_talformater -q   # single test
 ruff check .
 ```
@@ -18,6 +20,12 @@ ruff check .
 The positional argument is `investor_code` in `fund.investor`. Output defaults to
 `exports/<INVESTOR>_<date>.pptx`. PowerPoint locks the file while it is open, so `report._gem()`
 falls back to `_v2`, `_v3`, … rather than failing — don't reach for `--out` to dodge a lock.
+
+`tests/test_aleta.py` compares the Motortramp report at 30.06.2026 with Aleta's export
+(`tests/motortramp_aleta_data.xlsx`), one test per fund × check (`tests/aleta.py`: `FONDE` maps
+Aleta's `securityCode` to our fund code, `KONTROLLER` holds the tolerances). It is marked `db` and
+skips when the database can't be reached. Failures there are differences to look into, not
+necessarily bugs: Aleta books call discounts as distributions and converts cash flows to DKK.
 
 `ruff check .` currently reports 14 pre-existing findings (C408 `dict()` literals, DTZ011
 `date.today()`) in `data.py` and the tests — that is the baseline, not a regression you caused.

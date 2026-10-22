@@ -30,6 +30,7 @@ packages = ["pe_fund_report"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["db: læser databasen (test_aleta.py); fravælg med -m \"not db\""]
 
 [tool.ruff]
 line-length = 100
