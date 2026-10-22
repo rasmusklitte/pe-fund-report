@@ -11,6 +11,7 @@ FUND_INFO = ROOT / "config" / "fund_info.yaml"       # manuelle stamdata pr. fon
 BENCHMARK = ROOT / "config" / "benchmark.yaml"       # MSCI-indeksenes sektorvægte
 MASTER = ROOT / "assets" / "ppim_slidemaster.pptx"   # PPIM-slidemasteren
 EXPORTS = ROOT / "exports"                           # færdige rapporter (ikke i git)
+LOG = ROOT / "log"                                   # byggeloggen, én fil pr. bygning (ikke i git)
 # kildedokumenterne; fund.document.rel_path er relativ til denne mappe
 DOKUMENTER = Path(os.environ.get("PE_DOCUMENTS",
                                  ROOT.parent / "pe-external-fund-data" / "documents"))

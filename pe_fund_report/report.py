@@ -6,7 +6,7 @@ from pathlib import Path
 from pptx import Presentation
 
 from . import anonym as anonymisering
-from . import data, excel, slides
+from . import data, excel, log, slides
 from .deck import L_FORSIDE, L_SKILLE, L_SLUT, _find_master, _ny_slide, _ryd_slides, _saet_ph
 from .paths import EXPORTS, MASTER
 
@@ -20,29 +20,35 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
     anonym: uden navne, logoer, beskrivelser, fondsstørrelse og ejerandel, og alle beløb
     ganget med én skjult tilfældig faktor; aldrig med dataudtræk. Stopper uden at gemme, hvis
     et oprindeligt navn står i decket.
-    """
-    r = rigtig = data.investor_rapport(investor_code, as_of)
-    skala = 1.0
-    if anonym:
-        skala = _skjult_faktor()
-        r, originaler = anonymisering.anonymiser(rigtig, skala)
-        med_data = False
-    with slides.beloebsskala(skala) if anonym else nullcontext():
-        prs = _byg_deck(r, master)
-    if anonym and (laek := anonymisering.laek(prs, originaler)):
-        raise ValueError("Den anonymiserede udgave nævner stadig: " + ", ".join(laek)
-                         + " - intet er gemt")
 
-    navn = "ANONYM" if anonym else r["investor"]
-    outfile = _gem(prs, Path(outfile or EXPORTS / f"{navn}_{r['as_of']:%Y-%m-%d}.pptx"))
-    print(f"gemt: {outfile}  ({len(r['fonde'])} fonde, {len(prs.slides._sldIdLst)} slides"
-          + (", anonymiseret)" if anonym else ")"))
-    if med_data:
-        # dataudtrækket ved siden af decket: samme navn med _data, til intern afstemning
-        xlsx = _gem(excel.skriv(r), outfile.with_name(f"{outfile.stem}_data.xlsx"))
-        print(f"gemt: {xlsx}  (data og kildedokumenter)")
-    # advarslerne er til bygningen, ikke decket, så de nævner de rigtige fonde
-    _advarsler(rigtig)
+    Hver bygning skrives i log/ (log.byggelog): hvem, hvornår, hvilken kode, filerne og alt,
+    hvad den skriver i terminalen - også når den fejler.
+    """
+    with log.byggelog(investor_code, as_of, anonym) as lg:
+        r = rigtig = lg.r = data.investor_rapport(investor_code, as_of)
+        skala = 1.0
+        if anonym:
+            skala = _skjult_faktor()
+            r, originaler = anonymisering.anonymiser(rigtig, skala)
+            med_data = False
+        with slides.beloebsskala(skala) if anonym else nullcontext():
+            prs = _byg_deck(r, master)
+        if anonym and (laek := anonymisering.laek(prs, originaler)):
+            raise ValueError("Den anonymiserede udgave nævner stadig: " + ", ".join(laek)
+                             + " - intet er gemt")
+
+        navn = "ANONYM" if anonym else r["investor"]
+        outfile = _gem(prs, Path(outfile or EXPORTS / f"{navn}_{r['as_of']:%Y-%m-%d}.pptx"))
+        lg.filer.append(outfile)
+        print(f"gemt: {outfile}  ({len(r['fonde'])} fonde, {len(prs.slides._sldIdLst)} slides"
+              + (", anonymiseret)" if anonym else ")"))
+        if med_data:
+            # dataudtrækket ved siden af decket: samme navn med _data, til intern afstemning
+            xlsx = _gem(excel.skriv(r), outfile.with_name(f"{outfile.stem}_data.xlsx"))
+            lg.filer.append(xlsx)
+            print(f"gemt: {xlsx}  (data og kildedokumenter)")
+        # advarslerne er til bygningen, ikke decket, så de nævner de rigtige fonde
+        _advarsler(rigtig)
     return outfile
 
 

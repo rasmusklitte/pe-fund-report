@@ -277,6 +277,14 @@ text in the finished deck (tables, charts, notes pages) for the original names a
 `byg()` raises without saving if any is left — a new name field in `data.fond()` must be added to
 `anonym._navnekort`. The PPIM house logo in the master stays.
 
+**Build log.** `report.byg()` runs inside `log.byggelog()`, which writes one file per build to
+`log/` (`<time>_<INVESTOR>_<date>[_anonym].log`, not in git: it names the investor and the real
+funds): user, command, report date, normal/anonymized, git commit (and whether the tree is dirty),
+database, the saved files, duration, the portfolio's NAV and IRR in DKK, and everything the build
+printed (`gemt`, `datotjek`, `ADVARSEL` …). A failed build is logged too, with status FEJL and the
+traceback. It is internal, not for the client; the anonymized deck's scale factor is never
+written. Anything a build should record goes through `print` inside `byg()` (or `lg.filer`).
+
 `data.datotjek()` guards the one assumption the whole deck rests on: that every fund is stated
 at the same date. Funds report on their own schedule and the NAV series have gaps, so
 `investor_rapport()` takes the **latest** NAV date across funds as the report date, and any fund

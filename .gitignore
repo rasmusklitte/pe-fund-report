@@ -12,6 +12,9 @@ dist/
 # Generated reports (contain investor data; rebuild with `python -m pe_fund_report`)
 exports/
 
+# Build logs (name the investor and the real funds)
+log/
+
 # Office lock files and editor settings
 ~$*
 .vscode/
