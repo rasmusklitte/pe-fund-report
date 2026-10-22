@@ -12,7 +12,7 @@ python -m pe_fund_report MOTORTRAMP --as-of 2025-12-31 --out exports/test.pptx
 
 pytest                                      # whole suite; only test_aleta.py reads the database
 pytest -m "not db"                          # without the database tests
-python tests/aleta.py                       # the report vs Aleta -> exports/aleta_afstemning_<date>.xlsx
+python -m pytest tests/test_aleta.py        # the report vs Aleta, also writes exports/aleta_afstemning_<date>.xlsx
 pytest tests/test_slides.py::test_danske_talformater -q   # single test
 ruff check .
 ```
@@ -25,7 +25,8 @@ falls back to `_v2`, `_v3`, … rather than failing — don't reach for `--out` 
 (`tests/motortramp_aleta_data.xlsx`), one test per fund × check (`tests/aleta.py`: `FONDE` maps
 Aleta's `securityCode` to our fund code, `KONTROLLER` holds the tolerances). It is marked `db` and
 skips when the database can't be reached. Failures there are differences to look into, not
-necessarily bugs: Aleta books call discounts as distributions and converts cash flows to DKK.
+necessarily bugs: Aleta books call discounts as distributions. Aleta's amounts are in DKK (except
+`nav`), so ours are compared as `n["..._dkk"]`, at the report-date rate.
 
 `ruff check .` currently reports 14 pre-existing findings (C408 `dict()` literals, DTZ011
 `date.today()`) in `data.py` and the tests — that is the baseline, not a regression you caused.

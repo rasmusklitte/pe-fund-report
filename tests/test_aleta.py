@@ -1,13 +1,15 @@
 """Rapporten mod Aletas tal for Motortramp (aleta.py). Læser databasen og springes over uden den.
 
-Hver fond × kontrol er sin egen test, fx test_aleta[SEED4-NAV]; python tests/aleta.py skriver
-det samme som et afstemningsdokument.
+    python -m pytest tests/test_aleta.py
+
+Hver fond × kontrol er sin egen test, fx test_aleta[SEED4-NAV], og kørslen skriver de samme
+linjer som afstemningsdokument til exports/aleta_afstemning_<dato>.xlsx.
 """
 import pyodbc
 import pytest
 from sqlalchemy.exc import DBAPIError
 
-from aleta import FONDE, IKKE_SAMMENLIGNELIG, INVESTOR, KONTROLLER, AS_OF, afstem, laes_aleta
+from aleta import AS_OF, FONDE, INVESTOR, KONTROLLER, afstem, laes_aleta, skriv
 
 
 @pytest.fixture(scope="module")
@@ -21,7 +23,12 @@ def rapport():
 
 @pytest.fixture(scope="module")
 def linjer(rapport):
-    return {(x["fond"], x["kontrol"]): x for x in afstem(laes_aleta(), rapport)}
+    from pe_fund_report import report
+    from pe_fund_report.paths import EXPORTS
+    alle = afstem(laes_aleta(), rapport)
+    sti = report._gem(skriv(alle), EXPORTS / f"aleta_afstemning_{AS_OF:%Y-%m-%d}.xlsx")
+    print(f"\nafstemningsdokument: {sti}")
+    return {(x["fond"], x["kontrol"]): x for x in alle}
 
 
 @pytest.mark.db
@@ -35,8 +42,6 @@ def test_samme_fonde(rapport):
 @pytest.mark.parametrize("fond", list(FONDE.values()))
 def test_aleta(linjer, fond, kontrol):
     x = linjer[fond, kontrol]
-    if x["status"] == IKKE_SAMMENLIGNELIG:
-        pytest.skip(x["bemaerkning"])
     assert x["status"] == "ok", (
         f"{fond} {kontrol}: Aleta {x['aleta']}, rapport {x['rapport']}, afvigelse "
         f"{x['afvigelse']}, tilladt {x['tilladt']} {x['bemaerkning']}".rstrip())
@@ -52,7 +57,8 @@ def _aleta(**k):
 def _rapport(valuta="DKK", **n):
     return dict(fonde=[dict(fund_code="KAPE20", valuta=valuta, vintage=2020, n=dict(dict(
         nav=1000.0, nav_dkk=1000.0, tilsagn_dkk=2000.0, resttilsagn_dkk=5.0, indbetalt=800.0,
-        udloddet=100.0, picc=0.4, dpi=0.125, tvpi=1.375, irr=0.1), **n))])
+        indbetalt_dkk=800.0, udloddet=100.0, udloddet_dkk=100.0, picc=0.4, dpi=0.125,
+        tvpi=1.375, irr=0.1), **n))])
 
 
 def test_afstem_status():
@@ -70,9 +76,11 @@ def test_afstem_tolerancer_og_valuta():
     linjer = {x["kontrol"]: x for x in afstem([_aleta()], _rapport(resttilsagn_dkk=11.0))}
     assert linjer["Resttilsagn DKK"]["tilladt"] == 10.0
     assert linjer["Resttilsagn DKK"]["status"] == "afviger"
-    # kapitalstrømmene i fremmed valuta sammenlignes ikke med Aletas DKK-tal
-    linjer = {x["kontrol"]: x for x in afstem([_aleta(navCurrency="EUR")], _rapport("EUR"))}
-    assert linjer["Indbetalt"]["status"] == linjer["Udloddet"]["status"] == IKKE_SAMMENLIGNELIG
+    # kapitalstrømmene sammenlignes i DKK, også for en fond i EUR
+    linjer = {x["kontrol"]: x for x in afstem(
+        [_aleta(navCurrency="EUR", drawdowns=746.0)],
+        _rapport("EUR", indbetalt=100.0, indbetalt_dkk=746.0, udloddet=13.4))}
+    assert linjer["Indbetalt DKK"]["status"] == linjer["Udloddet DKK"]["status"] == "ok"
     assert linjer["Valuta"]["status"] == "ok"
     # en fond, rapporten ikke har
     linjer = afstem([_aleta(securityCode="UKENDT")], _rapport())

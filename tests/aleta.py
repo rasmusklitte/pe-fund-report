@@ -1,12 +1,13 @@
 """Afstemning af Motortramp-rapporten mod Aletas tal (motortramp_aleta_data.xlsx).
 
 Aleta er et andet system med de samme fonde; udtrækket har én række pr. fond. afstem() sammenligner
-rapportens nøgletal med Aletas, kontrol for kontrol. test_aleta.py og afstemningsdokumentet bruger
-begge afstem(), så de altid er enige:
+rapportens nøgletal med Aletas, kontrol for kontrol. Aletas beløb er i DKK (undtagen nav, der er i
+fondens valuta), så rapportens beløb sammenlignes omregnet til DKK med Nationalbankens kurs på
+rapportdatoen (n["..._dkk"] fra data.omregn_til_dkk). test_aleta.py kører kontrollerne og skriver
+afstemningsdokumentet (skriv()) med de samme linjer, så de altid er enige:
 
-    python tests/aleta.py       # skriver exports/aleta_afstemning_<dato>.xlsx
+    python -m pytest tests/test_aleta.py     # testene + exports/aleta_afstemning_<dato>.xlsx
 """
-import sys
 from datetime import date
 from pathlib import Path
 
@@ -33,31 +34,27 @@ FONDE = {
     "Newbury - Private Equity II": "PPPE2",
 }
 
-IKKE_SAMMENLIGNELIG = "ikke sammenlignelig"
-KUN_DKK = "Aleta omregner kapitalstrømmene til DKK til egne kurser; rapporten har dem i fondens valuta"
-
-
 def _rvpi(n):
     return n["nav"] / n["indbetalt"] if n["indbetalt"] else None
 
 
-# (kontrol, Aletas kolonne, rapportens tal, tolerance, kun DKK-fonde)
+# (kontrol, Aletas kolonne, rapportens tal, tolerance)
 # tolerance: "eksakt", ("relativ", x), ("af_tilsagn", x) eller ("absolut", x)
 KONTROLLER = [
-    ("Valuta", "navCurrency", lambda f: f["valuta"], "eksakt", False),
-    ("Vintage", "vintage", lambda f: f["vintage"], "eksakt", False),
-    ("NAV", "nav", lambda f: f["n"]["nav"], ("relativ", TOLERANCE), False),
-    ("NAV DKK", "marketValue", lambda f: f["n"]["nav_dkk"], ("relativ", TOLERANCE), False),
-    ("Tilsagn DKK", "commitment", lambda f: f["n"]["tilsagn_dkk"], ("relativ", TOLERANCE), False),
+    ("Valuta", "navCurrency", lambda f: f["valuta"], "eksakt"),
+    ("Vintage", "vintage", lambda f: f["vintage"], "eksakt"),
+    ("NAV", "nav", lambda f: f["n"]["nav"], ("relativ", TOLERANCE)),
+    ("NAV DKK", "marketValue", lambda f: f["n"]["nav_dkk"], ("relativ", TOLERANCE)),
+    ("Tilsagn DKK", "commitment", lambda f: f["n"]["tilsagn_dkk"], ("relativ", TOLERANCE)),
     ("Resttilsagn DKK", "unfundedCommitment", lambda f: f["n"]["resttilsagn_dkk"],
-     ("af_tilsagn", TOLERANCE), False),
-    ("Indbetalt", "drawdowns", lambda f: f["n"]["indbetalt"], ("relativ", TOLERANCE), True),
-    ("Udloddet", "distributions", lambda f: f["n"]["udloddet"], ("relativ", TOLERANCE), True),
-    ("PICC", "calledPercent", lambda f: f["n"]["picc"], ("absolut", 0.005), False),
-    ("DPI", "dpi", lambda f: f["n"]["dpi"], ("absolut", 0.01), False),
-    ("RVPI", "rvpi", lambda f: _rvpi(f["n"]), ("absolut", 0.01), False),
-    ("TVPI", "tvpi", lambda f: f["n"]["tvpi"], ("absolut", 0.01), False),
-    ("IRR", "irr", lambda f: f["n"]["irr"], ("absolut", 0.0025), False),
+     ("af_tilsagn", TOLERANCE)),
+    ("Indbetalt DKK", "drawdowns", lambda f: f["n"]["indbetalt_dkk"], ("relativ", TOLERANCE)),
+    ("Udloddet DKK", "distributions", lambda f: f["n"]["udloddet_dkk"], ("relativ", TOLERANCE)),
+    ("PICC", "calledPercent", lambda f: f["n"]["picc"], ("absolut", 0.005)),
+    ("DPI", "dpi", lambda f: f["n"]["dpi"], ("absolut", 0.01)),
+    ("RVPI", "rvpi", lambda f: _rvpi(f["n"]), ("absolut", 0.01)),
+    ("TVPI", "tvpi", lambda f: f["n"]["tvpi"], ("absolut", 0.01)),
+    ("IRR", "irr", lambda f: f["n"]["irr"], ("absolut", 0.0025)),
 ]
 
 
@@ -102,7 +99,7 @@ def afstem(aleta, r):
     for a in aleta:
         kode = FONDE.get(a["securityCode"], a["securityCode"])
         f = fonde.get(kode)
-        for kontrol, kolonne, hent, tolerance, kun_dkk in KONTROLLER:
+        for kontrol, kolonne, hent, tolerance in KONTROLLER:
             linje = dict(fond=kode, aleta_navn=a["asset"], kontrol=kontrol,
                          aleta=_tal(a[kolonne]), rapport=None, afvigelse=None, tilladt=None,
                          status="afviger", bemaerkning="")
@@ -110,11 +107,8 @@ def afstem(aleta, r):
                 linje["bemaerkning"] = "fonden er ikke i rapporten"
             else:
                 linje["rapport"] = _tal(hent(f))
-                if kun_dkk and f["valuta"] != "DKK":
-                    linje.update(status=IKKE_SAMMENLIGNELIG, bemaerkning=KUN_DKK)
-                else:
-                    linje["afvigelse"], linje["tilladt"], linje["status"] = _vurder(
-                        linje["aleta"], linje["rapport"], tolerance, _tal(a["commitment"]))
+                linje["afvigelse"], linje["tilladt"], linje["status"] = _vurder(
+                    linje["aleta"], linje["rapport"], tolerance, _tal(a["commitment"]))
             ud.append(linje)
     return ud
 
@@ -123,10 +117,9 @@ def afstem(aleta, r):
 
 GROEN = PatternFill("solid", fgColor="C6EFCE")
 ROED = PatternFill("solid", fgColor="FFC7CE")
-GRAA = PatternFill("solid", fgColor="E7E6E6")
 HOVED = PatternFill("solid", fgColor="4F6B5A")
 HVID_FED = Font(bold=True, color="FFFFFF")
-MARKERING = {"ok": ("✓", GROEN), "afviger": ("✗", ROED), IKKE_SAMMENLIGNELIG: ("–", GRAA)}
+MARKERING = {"ok": ("✓", GROEN), "afviger": ("✗", ROED)}
 
 
 def _format(kontrol):
@@ -145,8 +138,8 @@ def skriv(linjer, as_of=AS_OF):
     antal = {s: sum(x["status"] == s for x in linjer) for s in MARKERING}
     ov["A1"] = f"Motortramp: rapporten mod Aleta pr. {as_of:%d.%m.%Y}"
     ov["A1"].font = Font(bold=True, size=14)
-    ov["A2"] = (f"{antal['ok']} ok, {antal['afviger']} afviger, "
-                f"{antal[IKKE_SAMMENLIGNELIG]} ikke sammenlignelige - se fanen Detaljer")
+    ov["A2"] = (f"{antal['ok']} ok, {antal['afviger']} afviger - se fanen Detaljer. Rapportens "
+                "beløb i EUR og USD er omregnet til DKK med Nationalbankens kurs på rapportdatoen")
     kontroller = [k[0] for k in KONTROLLER]
     fonde = list(dict.fromkeys(x["fond"] for x in linjer))
     for j, navn in enumerate(["Fond", *kontroller], start=1):
@@ -183,15 +176,3 @@ def skriv(linjer, as_of=AS_OF):
     de.freeze_panes = "A2"
     return wb
 
-
-if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from pe_fund_report import data, report
-    from pe_fund_report.paths import EXPORTS
-
-    linjer = afstem(laes_aleta(), data.investor_rapport(INVESTOR, AS_OF.isoformat()))
-    sti = report._gem(skriv(linjer), EXPORTS / f"aleta_afstemning_{AS_OF:%Y-%m-%d}.xlsx")
-    print(f"gemt: {sti}")
-    for x in linjer:
-        if x["status"] == "afviger":
-            print(f"AFVIGER: {x['fond']} {x['kontrol']}: Aleta {x['aleta']}, rapport {x['rapport']}")
