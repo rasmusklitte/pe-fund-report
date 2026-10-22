@@ -6,6 +6,7 @@ fonde eller - hvor fonden ikke er indlæst på fondsniveau - NAV-historik og væ
 """
 import io
 import uuid
+from contextlib import contextmanager
 from math import ceil
 
 from pptx.chart.data import CategoryChartData
@@ -46,13 +47,38 @@ OLIVEN, ROED = _rgb(style.PPIM_OLIVE), _rgb(style.PPIM_RED_MUTED)
 
 # ---------- talformater (dansk) ----------
 
+# den anonymiserede udgave ganger alle beløb med én skjult faktor; procenter, multipler og IRR
+# er uændrede. Alle beløb, decket viser, går derfor gennem tusind, million, kroner eller _kt.
+_SKALA = 1.0
+
+
+@contextmanager
+def beloebsskala(faktor):
+    """Vis alle beløb ganget med faktor, så længe blokken kører."""
+    global _SKALA
+    gammel, _SKALA = _SKALA, faktor
+    try:
+        yield
+    finally:
+        _SKALA = gammel
+
+
+def kroner(v):
+    return IKKE_OPLYST if v is None else style._dk(v * _SKALA, 0)
+
+
+def _kt(v):
+    """Et beløb i tusinder som tal til en diagramserie."""
+    return round(v * _SKALA / 1000)
+
+
 def tusind(v):
-    return IKKE_OPLYST if v is None else style._dk(v / 1000, 0)
+    return IKKE_OPLYST if v is None else style._dk(v * _SKALA / 1000, 0)
 
 
 def million(v):
     """Hele fondens beløb fylder for meget i tusinder - virksomhedskortene viser mio."""
-    return IKKE_OPLYST if v is None else style._dk(v / 1_000_000, 0)
+    return IKKE_OPLYST if v is None else style._dk(v * _SKALA / 1_000_000, 0)
 
 
 def pct(v, dec=1):
@@ -277,7 +303,7 @@ def _historik_graf(slide, x, y, w, h, historik):
               ("Akk. indbetalt", "indbetalt", style.PPIM_TERRACOTTA, 1.5),
               ("Akk. udloddet", "udloddet", style.PPIM_TAUPE_LIGHT, 1.5)]
     for navn, noegle, _, _ in serier:
-        data.add_series(navn, [round(p[noegle] / 1000) for p in historik])
+        data.add_series(navn, [_kt(p[noegle]) for p in historik])
     diagram = slide.shapes.add_chart(XL_CHART_TYPE.LINE, Inches(x), Inches(y), Inches(w),
                                      Inches(h), data).chart
     diagram.font.name, diagram.font.size = BROED_FONT, Pt(8)
@@ -966,8 +992,13 @@ def _fondscelle(s, r, f, kol, i, y, raekke_h, maerke=""):
     if afvigende:
         _tekst(s, _lt_x(0, kol), y + raekke_h - 0.26, kol[0][1], 0.16,
                f"opgjort pr. {afvigende:%d.%m.%Y}", 6.5, farve=TERRA)
-    _logo(s, f["logo"], x_midt=_lt_x(1, kol) + kol[1][1] / 2, y_midt=midt,
-          maks_b=min(1.05, kol[1][1] - 0.15), maks_h=min(0.34, raekke_h - 0.2))
+    if f["logo"]:
+        _logo(s, f["logo"], x_midt=_lt_x(1, kol) + kol[1][1] / 2, y_midt=midt,
+              maks_b=min(1.05, kol[1][1] - 0.15), maks_h=min(0.34, raekke_h - 0.2))
+    elif f.get("manager"):
+        # uden logo (fx den anonymiserede udgave) står forvalterens navn i kolonnen
+        _tekst(s, _lt_x(1, kol), y, kol[1][1], raekke_h, f["manager"], 8.5, just=C,
+               anker=MSO_ANCHOR.MIDDLE)
     felter = {"Type": f["segment"], "Vintage": f["vintage"], "Løbetid": f["loebetid"],
               "Valuta": f["valuta"]}
     for j, (navn, _, _) in enumerate(kol):
@@ -1010,7 +1041,7 @@ def _resttilsagnsnoter(f):
     """Noterne til en fonds resttilsagn i tabellerne på tværs af fonde: rabat og genkaldelige
     udlodninger, med fondens beløb. Hvad begreberne betyder, står i Definitioner."""
     n, v = f["n"], f["valuta"]
-    return ([f"Forvalteren har givet {style._dk(n['rabat'], 0)} {v} i rabat på kapitalkald."]
+    return ([f"Forvalteren har givet {kroner(n['rabat'])} {v} i rabat på kapitalkald."]
             if (n.get("rabat") or 0) > 0 else []) + \
         ([f"Resttilsagnet indeholder genkaldelige udlodninger på "
           f"{tusind(n['recallable'])} t{v}."] if (n.get("recallable") or 0) else [])
@@ -1234,11 +1265,12 @@ def _kort_fondsnavn(navn):
     """Kort navn til smalle kolonner.
 
     "K Alternativ Private Equity 2020 K/S" -> "KAPE 2020", "Petersen & Partners Private
-    Credit II A/S" -> "PPPC II"; ellers de første to ord.
+    Credit II A/S" -> "PPPC II"; ellers de første to ord. Et navn, der slutter med et
+    løbenummer (den anonymiserede udgaves "Private Equity-fond 1"), står helt.
     """
     uden = _uden_selskabsform(navn)
     ord_ = uden.split()
-    if len(ord_) <= 2:
+    if len(ord_) <= 2 or (ord_[-1].isdigit() and len(ord_[-1]) < 4):
         return uden
     aar = [o for o in ord_ if o.isdigit() and len(o) == 4]
     if aar:
@@ -1344,7 +1376,7 @@ def gennemlysning(prs, r):
     graf_w = 5.55
     data = CategoryChartData(number_format="#,##0")
     data.categories = [x["navn"] for x in reversed(top)]       # største øverst i en bar-graf
-    data.add_series("Dagsværdi", [round(x["dagsvaerdi"] / 1000) for x in reversed(top)])
+    data.add_series("Dagsværdi", [_kt(x["dagsvaerdi"]) for x in reversed(top)])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(X0 - 0.08), Inches(y - 0.06),
                                  Inches(graf_w), Inches(Y_NOTER - y - 0.04), data).chart
     diagram.font.name, diagram.font.size = BROED_FONT, Pt(8)
@@ -1572,7 +1604,7 @@ def _cirkel(s, x, y, w, h, skiver, serie="NAV, tDKK"):
     """Cirkeldiagram som rigtigt diagram; etiketterne skrives med danske talformater."""
     cd = CategoryChartData(number_format="#,##0")
     cd.categories = [navn for navn, *_ in skiver]
-    cd.add_series(serie, [round(dkk / 1000) for _, dkk, *_ in skiver])
+    cd.add_series(serie, [_kt(dkk) for _, dkk, *_ in skiver])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.PIE, Inches(x), Inches(y), Inches(w), Inches(h),
                                  cd).chart
     diagram.has_legend = diagram.has_title = False
@@ -2544,7 +2576,7 @@ def _ring(s, x, y, side, poster, serie):
     [(navn, dkk, andel, farve)]. Returnerer navnene, der er for små til en etiket."""
     cd = CategoryChartData(number_format="#,##0")
     cd.categories = [navn for navn, *_ in poster]
-    cd.add_series(serie, [round(dkk / 1000) for _, dkk, *_ in poster])
+    cd.add_series(serie, [_kt(dkk) for _, dkk, *_ in poster])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.DOUGHNUT, Inches(x), Inches(y), Inches(side),
                                  Inches(side), cd).chart
     diagram.has_legend = diagram.has_title = False

@@ -254,6 +254,20 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   `pyproject.toml`. Do not refactor them here; port a change to the other repos or not at all.
   `deck.py` also holds the slide-master layout indices (`L_FORSIDE`, `L_TEKST`, `L_SKILLE`, …).
 
+**Anonymized deck** (`--anonym`, `report.byg(anonym=True)`): the same report built from the real
+data, then rewritten by `anonym.anonymiser()` (pure), so every calculation and the
+quarter-to-quarter pairing run on the real names. Funds are named by segment ("Private Equity-fond
+1"), holdings "Selskab n" / "Underliggende fond n" / "Ejendom n", managers "Forvalter A", the
+investor "Investor"; logos, descriptions, company info, fund size, ownership share and the NAV
+reconciliation are removed (the user's choice; vintage and term stay). Amounts are multiplied by
+one hidden random factor away from 1 (`report._skjult_faktor`) **at the display layer**
+(`slides.beloebsskala`), so ratios, TVPI, IRR and % are exact: every place that prints an amount
+must go through `tusind` / `million` / `kroner` / `_kt`, and amounts `data.py` writes into note
+text are scaled by regex in `anonym`. No Excel workbook is written. `anonym.laek()` searches all
+text in the finished deck (tables, charts, notes pages) for the original names and codes, and
+`byg()` raises without saving if any is left — a new name field in `data.fond()` must be added to
+`anonym._navnekort`. The PPIM house logo in the master stays.
+
 `data.datotjek()` guards the one assumption the whole deck rests on: that every fund is stated
 at the same date. Funds report on their own schedule and the NAV series have gaps, so
 `investor_rapport()` takes the **latest** NAV date across funds as the report date, and any fund

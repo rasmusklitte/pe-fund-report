@@ -1,21 +1,59 @@
 """Samler investorrapporten: forside, porteføljeoversigt, én side pr. fond og slut-slide."""
+import random
+from contextlib import nullcontext
 from pathlib import Path
 
 from pptx import Presentation
 
+from . import anonym as anonymisering
 from . import data, excel, slides
 from .deck import L_FORSIDE, L_SKILLE, L_SLUT, _find_master, _ny_slide, _ryd_slides, _saet_ph
 from .paths import EXPORTS, MASTER
 
 
-def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
+def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, anonym=False):
     """Byg rapporten for én investor og returnér stien til pptx-filen.
 
     as_of: rapportdato (ÅÅÅÅ-MM-DD); standard er investors seneste NAV-dato.
-    outfile: standard er exports/<INVESTOR>_<dato>.pptx.
+    outfile: standard er exports/<INVESTOR>_<dato>.pptx (ANONYM_<dato>.pptx med anonym).
     med_data: gem også dataudtrækket <outfile>_data.xlsx med kilder til hvert tal.
+    anonym: uden navne, logoer, beskrivelser, fondsstørrelse og ejerandel, og alle beløb
+    ganget med én skjult tilfældig faktor; aldrig med dataudtræk. Stopper uden at gemme, hvis
+    et oprindeligt navn står i decket.
     """
-    r = data.investor_rapport(investor_code, as_of)
+    r = rigtig = data.investor_rapport(investor_code, as_of)
+    skala = 1.0
+    if anonym:
+        skala = _skjult_faktor()
+        r, originaler = anonymisering.anonymiser(rigtig, skala)
+        med_data = False
+    with slides.beloebsskala(skala) if anonym else nullcontext():
+        prs = _byg_deck(r, master)
+    if anonym and (laek := anonymisering.laek(prs, originaler)):
+        raise ValueError("Den anonymiserede udgave nævner stadig: " + ", ".join(laek)
+                         + " - intet er gemt")
+
+    navn = "ANONYM" if anonym else r["investor"]
+    outfile = _gem(prs, Path(outfile or EXPORTS / f"{navn}_{r['as_of']:%Y-%m-%d}.pptx"))
+    print(f"gemt: {outfile}  ({len(r['fonde'])} fonde, {len(prs.slides._sldIdLst)} slides"
+          + (", anonymiseret)" if anonym else ")"))
+    if med_data:
+        # dataudtrækket ved siden af decket: samme navn med _data, til intern afstemning
+        xlsx = _gem(excel.skriv(r), outfile.with_name(f"{outfile.stem}_data.xlsx"))
+        print(f"gemt: {xlsx}  (data og kildedokumenter)")
+    # advarslerne er til bygningen, ikke decket, så de nævner de rigtige fonde
+    _advarsler(rigtig)
+    return outfile
+
+
+def _skjult_faktor():
+    """En tilfældig faktor til beløbene, holdt væk fra 1, så de rigtige tal ikke skinner igennem."""
+    rng = random.SystemRandom()
+    return rng.uniform(0.55, 0.8) if rng.random() < 0.5 else rng.uniform(1.25, 1.8)
+
+
+def _byg_deck(r, master=None):
+    """Hele præsentationen i slide-rækkefølgen; gemmes ikke."""
     prs = Presentation(str(_find_master(master or MASTER)))
     _ryd_slides(prs)
 
@@ -59,13 +97,11 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
     slides.gics_oversigt(prs, r)        # GICS-sektorerne og deres branchegrupper
     _ny_slide(prs, L_SLUT)
     slides.sidefod(prs, r["navn"])      # til sidst, så sidetallene er endelige
+    return prs
 
-    outfile = _gem(prs, Path(outfile or EXPORTS / f"{r['investor']}_{r['as_of']:%Y-%m-%d}.pptx"))
-    print(f"gemt: {outfile}  ({len(r['fonde'])} fonde, {len(prs.slides._sldIdLst)} slides)")
-    if med_data:
-        # dataudtrækket ved siden af decket: samme navn med _data, til intern afstemning
-        xlsx = _gem(excel.skriv(r), outfile.with_name(f"{outfile.stem}_data.xlsx"))
-        print(f"gemt: {xlsx}  (data og kildedokumenter)")
+
+def _advarsler(r):
+    """Forhold, der skal ses på før udsendelse; skrives ved bygningen, ikke i decket."""
     _advar_om_datoer(r["datotjek"])
     for f in r["fonde"]:
         for advarsel in f.get("advarsler", []):
@@ -77,7 +113,6 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True):
     if r["valuta"] is None and uden_dkk:
         print(f"ADVARSEL: ingen DKK-kurs for {', '.join(uden_dkk)} - fondene har forskellige "
               "valutaer, så porteføljens tal i DKK, fordelingerne og IRR i DKK mangler")
-    return outfile
 
 
 MAKS_VERSIONER = 50
