@@ -57,6 +57,12 @@ KONTROLLER = [
     ("IRR", "irr", lambda f: f["n"]["irr"], ("absolut", 0.0025)),
 ]
 
+# beløbskontrollerne -> rapportens tal i fondens valuta, til fanen Detaljer; Aletas DKK-beløb
+# regnes tilbage med samme kurs (NAV er i fondens valuta hos begge)
+FONDSVALUTA = {"NAV": "nav", "NAV DKK": "nav", "Tilsagn DKK": "tilsagn",
+               "Resttilsagn DKK": "resttilsagn", "Indbetalt DKK": "indbetalt",
+               "Udloddet DKK": "udloddet"}
+
 
 def laes_aleta(sti=ALETA):
     """Aletas rækker som dicts med kolonnenavnene som nøgler; vintage som årstal."""
@@ -93,8 +99,11 @@ def _vurder(aleta, rapport, tolerance, tilsagn):
 
 def afstem(aleta, r):
     """Én række pr. fond og kontrol: fond, kontrol, aleta, rapport, afvigelse, tilladt, status,
-    bemaerkning. En fond fra Aleta, der ikke er i rapporten, får status afviger i alle kontroller."""
+    bemaerkning og, for beløbene, valuta, kurs og aleta_fv / rapport_fv / afvigelse_fv i fondens
+    valuta. Status afgøres af DKK-tallene. En fond fra Aleta, der ikke er i rapporten, får status
+    afviger i alle kontroller."""
     fonde = {f["fund_code"]: f for f in r["fonde"]}
+    kurser = r.get("kurser", {})
     ud = []
     for a in aleta:
         kode = FONDE.get(a["securityCode"], a["securityCode"])
@@ -102,13 +111,21 @@ def afstem(aleta, r):
         for kontrol, kolonne, hent, tolerance in KONTROLLER:
             linje = dict(fond=kode, aleta_navn=a["asset"], kontrol=kontrol,
                          aleta=_tal(a[kolonne]), rapport=None, afvigelse=None, tilladt=None,
-                         status="afviger", bemaerkning="")
+                         status="afviger", bemaerkning="", valuta=None, kurs=None,
+                         aleta_fv=None, rapport_fv=None, afvigelse_fv=None)
             if f is None:
                 linje["bemaerkning"] = "fonden er ikke i rapporten"
             else:
                 linje["rapport"] = _tal(hent(f))
                 linje["afvigelse"], linje["tilladt"], linje["status"] = _vurder(
                     linje["aleta"], linje["rapport"], tolerance, _tal(a["commitment"]))
+                kurs = (kurser.get(f["valuta"]) or (None,))[0]
+                if kontrol in FONDSVALUTA and kurs:
+                    aleta_fv = linje["aleta"] if kontrol == "NAV" else linje["aleta"] / kurs
+                    rapport_fv = _tal(f["n"][FONDSVALUTA[kontrol]])
+                    linje.update(valuta=f["valuta"], kurs=_tal(kurs), aleta_fv=aleta_fv,
+                                 rapport_fv=rapport_fv,
+                                 afvigelse_fv=None if rapport_fv is None else rapport_fv - aleta_fv)
             ud.append(linje)
     return ud
 
@@ -139,7 +156,9 @@ def skriv(linjer, as_of=AS_OF):
     ov["A1"] = f"Motortramp: rapporten mod Aleta pr. {as_of:%d.%m.%Y}"
     ov["A1"].font = Font(bold=True, size=14)
     ov["A2"] = (f"{antal['ok']} ok, {antal['afviger']} afviger - se fanen Detaljer. Rapportens "
-                "beløb i EUR og USD er omregnet til DKK med Nationalbankens kurs på rapportdatoen")
+                "beløb i EUR og USD er omregnet til DKK med Nationalbankens kurs på rapportdatoen. "
+                "I Detaljer står beløbene også i fondens valuta; Aletas DKK-beløb er regnet "
+                "tilbage med samme kurs")
     kontroller = [k[0] for k in KONTROLLER]
     fonde = list(dict.fromkeys(x["fond"] for x in linjer))
     for j, navn in enumerate(["Fond", *kontroller], start=1):
@@ -161,6 +180,9 @@ def skriv(linjer, as_of=AS_OF):
     kolonner = [("Fond", "fond", 11), ("Navn i Aleta", "aleta_navn", 34), ("Kontrol", "kontrol", 16),
                 ("Aleta", "aleta", 15), ("Rapport", "rapport", 15), ("Afvigelse", "afvigelse", 13),
                 ("Tilladt afvigelse", "tilladt", 15), ("Status", "status", 18),
+                ("Valuta", "valuta", 8), ("Kurs", "kurs", 9),
+                ("Aleta i fondsvaluta", "aleta_fv", 17), ("Rapport i fondsvaluta", "rapport_fv", 17),
+                ("Afvigelse i fondsvaluta", "afvigelse_fv", 15),
                 ("Bemærkning", "bemaerkning", 60)]
     for j, (navn, _, bredde) in enumerate(kolonner, start=1):
         c = de.cell(1, j, navn)
@@ -171,7 +193,12 @@ def skriv(linjer, as_of=AS_OF):
             c = de.cell(i, j, x[noegle])
             if noegle in ("aleta", "rapport", "afvigelse", "tilladt") and x["kontrol"] != "Vintage":
                 c.number_format = _format(x["kontrol"])
-        de.cell(i, 8).fill = MARKERING[x["status"]][1]
+            elif noegle in ("aleta_fv", "rapport_fv", "afvigelse_fv"):
+                c.number_format = "#,##0"
+            elif noegle == "kurs":
+                c.number_format = "0.0000"
+            elif noegle == "status":
+                c.fill = MARKERING[x["status"]][1]
     de.auto_filter.ref = de.dimensions
     de.freeze_panes = "A2"
     return wb

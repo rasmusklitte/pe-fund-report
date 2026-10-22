@@ -82,6 +82,14 @@ def test_afstem_tolerancer_og_valuta():
         _rapport("EUR", indbetalt=100.0, indbetalt_dkk=746.0, udloddet=13.4))}
     assert linjer["Indbetalt DKK"]["status"] == linjer["Udloddet DKK"]["status"] == "ok"
     assert linjer["Valuta"]["status"] == "ok"
+    # med kursen står beløbene også i fondens valuta; Aletas DKK regnes tilbage med kursen
+    linjer = {x["kontrol"]: x for x in afstem(
+        [_aleta(navCurrency="EUR", drawdowns=746.0)],
+        _rapport("EUR", indbetalt=100.0, indbetalt_dkk=746.0) | dict(kurser={"EUR": (7.46, None)}))}
+    x = linjer["Indbetalt DKK"]
+    assert (x["valuta"], x["aleta_fv"], x["rapport_fv"]) == ("EUR", pytest.approx(100.0), 100.0)
+    assert linjer["NAV"]["aleta_fv"] == 1000.0          # Aletas nav er allerede i fondens valuta
+    assert linjer["IRR"]["aleta_fv"] is None
     # en fond, rapporten ikke har
     linjer = afstem([_aleta(securityCode="UKENDT")], _rapport())
     assert {x["status"] for x in linjer} == {"afviger"}
