@@ -103,6 +103,18 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   of the slide without them): earlier cash flows (CRED from 2005) are summed into `primo`, where
   the cumulative curve starts, and named in the note (`foer_start`). Year ends only look up a
   rate for funds that existed by then (no USD rate exists for 2005).
+- Three more transaction slides follow in the supplerende deck (the user gave free hands):
+  *Kapitalkald og udlodninger pr. år* (`slides.aarlige_stroemme`, `data.aarlige_stroemme()`:
+  calls below zero and distributions above, stacked per fund in `FOND_FARVER` by fund order,
+  net as a line with labels via `_linjeplot`, the same combo trick as `_j_kurve`; same `fra_aar`
+  as `likviditet_alle`), *TVPI og DPI over tid* (`slides.tvpi_over_tid`, small multiples on one
+  scale from `data.tvpi_historik()`, which ends in `n["tvpi"]`/`n["dpi"]` and marks a quarter
+  `afvigende` when TVPI > 2x and > 2× today's: NAV far above registered paid-in, likely a
+  missing call (PPPE2 Q1–Q2 2024); such quarters are left out, footnoted and warned about at
+  build) and *Resttilsagn og kaldstempo* (`slides.kaldstempo`, `data.kaldstempo()`: resttilsagn,
+  the last 12 months' calls and years at that pace, evergreen funds left out). Excel sheets
+  *Strømme pr. år* and *Kaldstempo*. Considered and left out: what calls paid for (44 % of
+  called capital is CF199 "not split") and fees/carry (only 5 funds report them).
 - *Eksponering* (`slides.valutafordeling`, after *Ændringer pr. fond*): three doughnuts
   (`slides._ring`) in a near-equilateral triangle in the middle of the slide (exposure on top,
   NAV and resttilsagn below, `VF_BASIS` apart; a true equilateral would make the lower rings

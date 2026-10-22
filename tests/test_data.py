@@ -1175,3 +1175,51 @@ def test_likviditet_med_ejendomme_paa_samme_tidsakse_samler_de_tidlige_i_primo()
     assert alle["aar"][0]["nav"] == pytest.approx(uden["aar"][0]["nav"] + 30.0)
     assert alle["aar"][0]["tilsagn"] == pytest.approx(uden["aar"][0]["tilsagn"] + 30.0)
     assert "Ejendom" in alle["foer_nav"] and uden["primo"] == 0
+
+
+def test_aarlige_stroemme_pr_fond_og_aar_med_kursen_paa_dagen():
+    ejd = _lq_fond("Ejendom", "Ejendomme", "DKK")
+    ejd["kapitalstroemme"] = [(date(2015, 5, 1), -30.0, "kald"),
+                              (date(2025, 2, 1), 5.0, "udlodning")]
+    kurs = lambda v, d: 1.0 if v == "DKK" else LQ_KURSER[d]
+    a = data.aarlige_stroemme([_lq_fond("Alfa", "Private equity"), ejd], kurs,
+                              date(2026, 6, 30), fra_aar=2024)
+    assert a["aar"] == [2024, 2025, 2026] and a["foer_start"] == ["Ejendom"]
+    alfa, e = a["fonde"]
+    # kald 40 EUR til 7,0 i 2024 og 20 til 8,0 i 2025; udlodning 10 til 7,5
+    assert alfa["kald"] == [-280.0, -160.0, 0.0] and alfa["udlodning"] == [0.0, 75.0, 0.0]
+    assert e["kald"] == [0.0, 0.0, 0.0] and e["udlodning"] == [0.0, 5.0, 0.0]
+    assert a["netto"] == [-280.0, -80.0, 0.0]
+    # uden fra_aar starter aksen ved den første cash flow
+    assert data.aarlige_stroemme([ejd], kurs, date(2026, 6, 30))["aar"][0] == 2015
+    assert data.aarlige_stroemme([ejd], lambda v, d: None, date(2026, 6, 30)) is None
+
+
+def test_tvpi_historik_ender_i_noegletallene_og_markerer_afvigende_kvartaler():
+    f = dict(nav_dato=date(2026, 6, 30), n=dict(tvpi=1.1, dpi=0.1), historik=[
+        dict(dato=date(2023, 12, 31), nav=0.0, indbetalt=0.0, udloddet=0.0),
+        dict(dato=date(2024, 3, 31), nav=500.0, indbetalt=100.0, udloddet=0.0),
+        dict(dato=date(2025, 12, 31), nav=900.0, indbetalt=1000.0, udloddet=50.0),
+        dict(dato=date(2026, 6, 30), nav=1000.0, indbetalt=1000.0, udloddet=99.0)])
+    h = data.tvpi_historik(f)
+    assert [p["dato"] for p in h] == [date(2024, 3, 31), date(2025, 12, 31), date(2026, 6, 30)]
+    assert h[1]["tvpi"] == pytest.approx(0.95) and h[1]["dpi"] == pytest.approx(0.05)
+    assert (h[-1]["tvpi"], h[-1]["dpi"]) == (1.1, 0.1)          # fondens egne nøgletal
+    # NAV 5x det indbetalte, mens fonden står i 1,1x i dag: et kald mangler formentlig
+    assert [p["afvigende"] for p in h] == [True, False, False]
+
+
+def test_kaldstempo_seneste_12_maaneder_uden_evergreen():
+    kurs = lambda v, d: LQ_KURSER.get(d, 7.46)
+    alfa = _lq_fond("Alfa", "Private equity")
+    alfa["kapitalstroemme"].append((date(2026, 3, 1), -10.0, "kald"))
+    stille = _lq_fond("Stille", "Private equity")         # sidste kald 01.06.2025
+    ever = _lq_fond("Ever", "Ejendomme") | dict(evergreen=True)
+    k = data.kaldstempo([alfa, stille, ever], kurs, date(2026, 6, 30))
+    assert [x["fund_name"] for x in k["fonde"]] == ["Alfa", "Stille"]
+    a, s = k["fonde"]
+    assert (a["resttilsagn"], a["kaldt"]) == (298.4, pytest.approx(74.6))
+    assert a["aar"] == pytest.approx(4.0)
+    assert (s["kaldt"], s["aar"]) == (0.0, None)
+    assert k["total"]["resttilsagn"] == pytest.approx(596.8)
+    assert k["total"]["aar"] == pytest.approx(596.8 / 74.6)

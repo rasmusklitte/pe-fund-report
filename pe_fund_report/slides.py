@@ -8,12 +8,13 @@ import io
 import uuid
 from contextlib import contextmanager
 from copy import deepcopy
+from datetime import timedelta
 from math import ceil
 
 from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
 from pptx.enum.chart import (XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION,
-                             XL_TICK_LABEL_POSITION)
+                             XL_MARKER_STYLE, XL_TICK_LABEL_POSITION)
 from pptx.enum.dml import MSO_LINE_DASH_STYLE
 from pptx.enum.shapes import MSO_SHAPE, PP_PLACEHOLDER
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
@@ -3091,7 +3092,7 @@ def _j_kurve(s, x, y, w, h, kvartaler):
     for tag in ("c:invertIfNegative", "c:spPr"):
         for el in ser.findall(qn(tag)):
             ser.remove(el)
-    lys, kant = str(SAGE_LYS), str(SAGE)
+    lys = str(SAGE_LYS)
     # kurven er en linje for sig: fladens egen kant ville også tegne lodret op til nul i
     # enderne, hvor fladen lukkes
     linje = deepcopy(ser)
@@ -3102,28 +3103,43 @@ def _j_kurve(s, x, y, w, h, kvartaler):
         f'<a:gs pos="100000"><a:srgbClr val="{lys}"><a:alpha val="15000"/></a:srgbClr></a:gs>'
         f'</a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill><a:ln><a:noFill/></a:ln>'
         f'</c:spPr>'))
-    nr = str(len(soejler.series) + 1)
-    linje.find(qn("c:idx")).set("val", nr)
-    linje.find(qn("c:order")).set("val", nr)
-    linje.find(qn("c:tx")).addnext(parse_xml(
-        f'<c:spPr {nsdecls("c", "a")}><a:ln w="19050" cap="rnd"><a:solidFill>'
-        f'<a:srgbClr val="{kant}"/></a:solidFill><a:round/></a:ln></c:spPr>'))
-    linje.find(qn("c:spPr")).addnext(parse_xml(
-        f'<c:marker {nsdecls("c")}><c:symbol val="none"/></c:marker>'))
-    linje.append(parse_xml(f'<c:smooth {nsdecls("c")} val="0"/>'))
-    akser = bar.findall(qn("c:axId"))
-    for tag, ser_, foer in (("c:areaChart", ser, True), ("c:lineChart", linje, False)):
-        plot = parse_xml(f'<{tag} {nsdecls("c")}><c:grouping val="standard"/>'
-                         f'<c:varyColors val="0"/></{tag}>')
-        plot.append(ser_)
-        for akse in akser:
-            plot.append(deepcopy(akse))
-        # fladen bag søjlerne, linjen foran dem
-        bar.addprevious(plot) if foer else bar.addnext(plot)
+    flade = parse_xml(f'<c:areaChart {nsdecls("c")}><c:grouping val="standard"/>'
+                      f'<c:varyColors val="0"/></c:areaChart>')
+    flade.append(ser)
+    for akse in bar.findall(qn("c:axId")):
+        flade.append(deepcopy(akse))
+    bar.addprevious(flade)          # fladen bag søjlerne
     # linjen og fladen er samme serie; kun fladen står i forklaringen
-    diagram.legend._element.find(qn("c:legendPos")).addnext(parse_xml(
-        f'<c:legendEntry {nsdecls("c")}><c:idx val="{nr}"/><c:delete val="1"/></c:legendEntry>'))
+    _linjeplot(diagram, bar, linje, SAGE, len(soejler.series) + 1, i_forklaring=False)
     return diagram
+
+
+def _linjeplot(diagram, bar, ser, farve, nr, i_forklaring=True):
+    """Gør søjleserien ser (taget ud af søjlediagrammet bar, eller en kopi) til en linje på
+    samme akser, tegnet foran søjlerne: python-pptx kan ikke bygge kombinationsdiagrammer.
+    nr er seriens nye nummer, så det ikke falder sammen med søjlernes."""
+    for tag in ("c:invertIfNegative", "c:spPr"):
+        for el in ser.findall(qn(tag)):
+            ser.remove(el)
+    ser.find(qn("c:idx")).set("val", str(nr))
+    ser.find(qn("c:order")).set("val", str(nr))
+    ser.find(qn("c:tx")).addnext(parse_xml(
+        f'<c:spPr {nsdecls("c", "a")}><a:ln w="19050" cap="rnd"><a:solidFill>'
+        f'<a:srgbClr val="{farve}"/></a:solidFill><a:round/></a:ln></c:spPr>'))
+    ser.find(qn("c:spPr")).addnext(parse_xml(
+        f'<c:marker {nsdecls("c")}><c:symbol val="none"/></c:marker>'))
+    ser.append(parse_xml(f'<c:smooth {nsdecls("c")} val="0"/>'))
+    plot = parse_xml(f'<c:lineChart {nsdecls("c")}><c:grouping val="standard"/>'
+                     f'<c:varyColors val="0"/></c:lineChart>')
+    plot.append(ser)
+    for akse in bar.findall(qn("c:axId")):
+        plot.append(deepcopy(akse))
+    bar.addnext(plot)
+    if not i_forklaring and diagram.has_legend:
+        diagram.legend._element.find(qn("c:legendPos")).addnext(parse_xml(
+            f'<c:legendEntry {nsdecls("c")}><c:idx val="{nr}"/>'
+            f'<c:delete val="1"/></c:legendEntry>'))
+    return plot
 
 
 LQ_ETIKET_MIN = 0.08      # et stykke under 8 % af den højeste søjle er for lavt til sin etiket
@@ -3234,6 +3250,213 @@ def likviditet(prs, r, med_ejendomme=False):
     fod.tegn(s, noter_y)
     return s
 
+
+
+# ---------- transaktionerne: tempo, TVPI over tid og kaldstempo ----------
+
+# fondenes farver på Kapitalkald og udlodninger pr. år: husfarverne ordnet, så naboer i
+# stablen skiller sig ud fra hinanden
+FOND_FARVER = [SAGE, TAUPE, TERRA, SAGE_LYS, _rgb(style.PPIM_BROWN), OLIVEN,
+               _rgb(style.PPIM_RED_LIGHT), _rgb(style.PPIM_TAUPE), ROED, _rgb(style.PPIM_BEIGE),
+               SAGE_MID]
+
+
+def _fondsfarver(r):
+    """{fondsnavn: farve}, fast efter fondenes rækkefølge, så en fond har samme farve uanset
+    hvilke fonde der har cash flows i perioden."""
+    return {f["fund_name"]: FOND_FARVER[i % len(FOND_FARVER)] for i, f in enumerate(r["fonde"])}
+
+
+def _aarskategorier(r, aar, fod):
+    """Årenes kategorier; det sidste får en fodnote, når det ikke er et helt år."""
+    kategorier = [str(a) for a in aar]
+    if (r["as_of"].month, r["as_of"].day) != (12, 31):
+        kategorier[-1] += fod.maerke(f"{aar[-1]} er til og med {r['as_of']:%d.%m.%Y}.")
+    return kategorier
+
+
+NETTO_ETIKETTER = (
+    '<c:dLbls {ns}><c:numFmt formatCode="#,##0&quot; mio.&quot;" sourceLinked="0"/>'
+    '<c:spPr><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="85000"/></a:srgbClr>'
+    '</a:solidFill><a:ln><a:noFill/></a:ln></c:spPr>'
+    '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800" b="1"/></a:pPr>'
+    '<a:endParaRPr lang="da-DK"/></a:p></c:txPr><c:dLblPos val="b"/>'
+    '<c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/>'
+    '<c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>')
+
+
+def aarlige_stroemme(prs, r):
+    """Kapitalkald (nedad) og udlodninger (opad) pr. år, stablet pr. fond i fondens faste farve,
+    med årets netto cash flow som linje. Data fra data.aarlige_stroemme(); None uden DKK-tal."""
+    a = r.get("aarlige_stroemme")
+    if not a or not a["fonde"]:
+        return None
+    s = _oversigtsslide(prs, r, "Kapitalkald og udlodninger pr. år",
+                        enhed="hele porteføljen, beløb i mio. DKK")
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    fod.generel("Kapitalkald står under nul og udlodninger over, hver omregnet med "
+                "Nationalbankens kurs på sin dato; linjen er årets netto cash flow.")
+    if a["foer_start"]:
+        fod.generel(f"Ind- og udbetalinger før {a['aar'][0]} ({_navne(a['foer_start'])}) er "
+                    "ikke vist.")
+    kategorier = _aarskategorier(r, a["aar"], fod)
+    fod.generel(_datonoter(r))
+    noter_y = _noter_y(fod.tekst())
+
+    farver = _fondsfarver(r)
+    cd = CategoryChartData(number_format="#,##0.0")
+    cd.categories = kategorier
+    serier = []                 # (farve, i forklaringen)
+    for x in a["fonde"]:
+        if any(x["kald"]):
+            cd.add_series(_kort_fondsnavn(x["fund_name"]), [_mio(v) for v in x["kald"]])
+            serier.append((farver[x["fund_name"]], True))
+    for x in a["fonde"]:
+        if any(x["udlodning"]):
+            # samme navn og farve som kaldene; i forklaringen kun, hvis fonden intet har kaldt
+            cd.add_series(_kort_fondsnavn(x["fund_name"]), [_mio(v) for v in x["udlodning"]])
+            serier.append((farver[x["fund_name"]], not any(x["kald"])))
+    cd.add_series("Netto cash flow", [_mio(v) for v in a["netto"]])
+    diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(X0), Inches(Y_TOP),
+                                 Inches(X1 - X0), Inches(noter_y - 0.08 - Y_TOP), cd).chart
+    _diagramakser(diagram, '#,##0" mio."')
+    diagram.legend.position = XL_LEGEND_POSITION.RIGHT
+    plot = diagram.plots[0]
+    plot.gap_width, plot.overlap = 55, 100
+    for serie, (farve, _) in zip(plot.series, serier):
+        _farv(serie, farve)
+        serie.invert_if_negative = False
+    bar = plot._element
+    netto = bar.findall(qn("c:ser"))[-1]
+    bar.remove(netto)
+    linje = _linjeplot(diagram, bar, netto, SORT, len(serier))
+    # nettoets værdi over hvert år
+    linje.find(qn("c:ser")).find(qn("c:marker")).addnext(
+        parse_xml(NETTO_ETIKETTER.format(ns=nsdecls("c", "a"))))
+    # udlodningerne gentager fondene i forklaringen; de skjules
+    legend = diagram.legend._element
+    for i, (_, med) in reversed(list(enumerate(serier))):
+        if not med:
+            legend.find(qn("c:legendPos")).addnext(parse_xml(
+                f'<c:legendEntry {nsdecls("c")}><c:idx val="{i}"/>'
+                f'<c:delete val="1"/></c:legendEntry>'))
+    fod.tegn(s, noter_y)
+    return s
+
+
+TV_KOL = 5                # fonde pr. række i TVPI over tid
+TV_LUFT = 0.18            # mellem panelerne (tommer)
+TV_TITEL_H = 0.34         # plads til et fondsnavn på to linjer
+
+
+def _panelnavn(navn):
+    """Det korte navn, medmindre det bare er navnet skåret over ("Commercial Real"); så det
+    hele, der må bryde over to linjer."""
+    kort, hele = _kort_fondsnavn(navn), _uden_selskabsform(navn)
+    return hele if kort != hele and hele.startswith(kort) else kort
+
+
+def tvpi_over_tid(prs, r):
+    """Små diagrammer, ét pr. fond: TVPI og DPI pr. kvartal i fondens valuta, på samme skala.
+    Kvartaler, data.tvpi_historik() markerer som afvigende, vises ikke og nævnes i noten."""
+    fonde = [f for f in r["fonde"] if len(f.get("tvpi_historik") or []) > 1]
+    if not fonde:
+        return None
+    s = _oversigtsslide(prs, r, "TVPI og DPI over tid", enhed="pr. kvartal, i fondens valuta")
+    fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger.")
+    fod.generel("TVPI er (udlodninger + NAV) og DPI udlodninger i forhold til indbetalt kapital "
+                "ved hvert kvartals udgang; alle fonde er på samme skala.")
+    afvigende = [(f, p) for f in fonde for p in f["tvpi_historik"] if p["afvigende"]]
+    if afvigende:
+        fod.generel("Ikke vist: " + "; ".join(
+            f"{_kort_fondsnavn(f['fund_name'])} pr. {p['dato']:%d.%m.%Y} ({gange(p['tvpi'])})"
+            for f, p in afvigende) + ", hvor NAV er langt over den registrerede indbetalte "
+            "kapital.")
+    fod.generel(_datonoter(r))
+    noter_y = _noter_y(fod.tekst())
+    # forklaringen: to farvede ord til højre i undertitlen
+    _tekst(s, X1 - 2.0, Y_UNDERTITEL, 1.0, 0.22, "— TVPI", 9.5, fed=True, farve=SAGE, just=H)
+    _tekst(s, X1 - 1.0, Y_UNDERTITEL, 1.0, 0.22, "— DPI", 9.5, fed=True, farve=TERRA, just=H)
+
+    maks = max(p["tvpi"] for f in fonde for p in f["tvpi_historik"] if not p["afvigende"])
+    maks = ceil(maks * 2) / 2                   # op til nærmeste 0,5
+    raekker = ceil(len(fonde) / TV_KOL)
+    pw = (X1 - X0 - TV_LUFT * (TV_KOL - 1)) / TV_KOL
+    ph = (noter_y - 0.06 - Y_TOP - TV_LUFT * (raekker - 1)) / raekker
+    for i, f in enumerate(fonde):
+        x = X0 + (i % TV_KOL) * (pw + TV_LUFT)
+        y = Y_TOP + (i // TV_KOL) * (ph + TV_LUFT)
+        h = f["tvpi_historik"]
+        _tekst(s, x, y, pw - 0.5, TV_TITEL_H, _panelnavn(f["fund_name"])
+               + _datomarkering(r, f["fund_name"]), 8.5, fed=True, anker=MSO_ANCHOR.BOTTOM)
+        _tekst(s, x + pw - 0.5, y, 0.5, TV_TITEL_H, gange(f["n"].get("tvpi")), 8.5, fed=True,
+               farve=SAGE, just=H, anker=MSO_ANCHOR.BOTTOM)
+        cd = CategoryChartData(number_format="0.00")
+        # kun årstallet ved første kvartal; alle kvartaler ville stå oven i hinanden
+        cd.categories = [f"{p['dato']:%Y}" if p["dato"].month <= 3 else "" for p in h]
+        cd.add_series("TVPI", [None if p["afvigende"] else p["tvpi"] for p in h])
+        cd.add_series("DPI", [None if p["afvigende"] else p["dpi"] for p in h])
+        diagram = s.shapes.add_chart(XL_CHART_TYPE.LINE, Inches(x), Inches(y + TV_TITEL_H),
+                                     Inches(pw), Inches(ph - TV_TITEL_H), cd).chart
+        _diagramakser(diagram, '0.0"x"')
+        diagram.has_legend = False
+        diagram.font.size = Pt(7)
+        akse = diagram.value_axis
+        akse.minimum_scale, akse.maximum_scale, akse.major_unit = 0, maks, 0.5
+        # hvert årstal vises og står vandret; ellers springer PowerPoint selv etiketter over
+        kat = diagram.category_axis
+        kat._element.find(qn("c:noMultiLvlLbl")).addprevious(
+            parse_xml(f'<c:tickLblSkip {nsdecls("c")} val="1"/>'))
+        kat.tick_labels.font.size = Pt(7)
+        kat._element.get_or_add_txPr().find(qn("a:bodyPr")).set("rot", "0")
+        for serie, farve in zip(diagram.plots[0].series, (SAGE, TERRA)):
+            serie.smooth = False
+            serie.format.line.color.rgb = farve
+            serie.format.line.width = Pt(1.75)
+            serie.marker.style = XL_MARKER_STYLE.NONE
+    fod.tegn(s, noter_y)
+    return s
+
+
+def kaldstempo(prs, r):
+    """Resttilsagnet pr. fond, de seneste 12 måneders kapitalkald og hvor mange år resttilsagnet
+    rækker ved samme tempo. Data fra data.kaldstempo(); None uden DKK-tal."""
+    k = r.get("kaldstempo")
+    if not k:
+        return None
+    s = _oversigtsslide(prs, r, "Resttilsagn og kaldstempo", enhed="beløb i tusinde DKK")
+    fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
+    kaldt_m = fod.maerke(f"Kapitalkald fra {k['fra'] + timedelta(days=1):%d.%m.%Y} til "
+                         f"{r['as_of']:%d.%m.%Y}, omregnet med Nationalbankens kurs på deres "
+                         "dato (tynd bjælke).")
+    aar_m = fod.maerke("Resttilsagnet divideret med de seneste 12 måneders kald. En simpel "
+                       "fremskrivning: forvalterne kalder ujævnt, og investeringsperioden kan "
+                       "udløbe, før resttilsagnet er kaldt.")
+    fod.generel("Evergreen-fonde og fonde uden resttilsagn er ikke med."
+                if len(k["fonde"]) < len(r["fonde"]) else None)
+    fod.generel(_kursnote(r), _datonoter(r))
+    aar = lambda v: IKKE_OPLYST if v is None else style._dk(v, 1)
+    linjer = sorted(k["fonde"], key=lambda x: -x["resttilsagn"])
+    raekker = [["Fond", "Resttilsagn", "", f"Kaldt seneste 12 mdr.{kaldt_m}",
+                f"År ved samme tempo{aar_m}"]]
+    raekker += [[x["fund_name"] + _datomarkering(r, x["fund_name"]), tusind(x["resttilsagn"]),
+                 "", tusind(x["kaldt"]), aar(x["aar"])] for x in linjer]
+    t = k["total"]
+    raekker.append(["I alt", tusind(t["resttilsagn"]), "", tusind(t["kaldt"]), aar(t["aar"])])
+    bredder = [3.4, 1.2, 2.6, 1.6, 1.58]
+    raekke_h = _raekke_h(len(raekker), maks=0.38)
+    _tabel(s, X0, Y_TOP, X1 - X0, raekker, bredder=bredder, just=[V, H, V, H, H],
+           raekke_h=raekke_h, pt=9, hoved=True, total=True, zebra=True)
+    bx = X0 + (X1 - X0) * sum(bredder[:2]) / sum(bredder) + 0.1
+    bw = (X1 - X0) * bredder[2] / sum(bredder) - 0.2
+    maks = max(x["resttilsagn"] for x in linjer) or 1
+    for i, x in enumerate(linjer, 1):
+        yy = Y_TOP + i * raekke_h
+        _bjaelke(s, bx, yy + raekke_h * 0.22, bw * x["resttilsagn"] / maks, raekke_h * 0.3, SAGE)
+        # de seneste 12 måneders kald som en tynd bjælke under, på samme skala
+        _bjaelke(s, bx, yy + raekke_h * 0.58, bw * x["kaldt"] / maks, raekke_h * 0.16, TERRA)
+    fod.tegn(s, Y_NOTER)
+    return s
 
 # ---------- definitioner ----------
 

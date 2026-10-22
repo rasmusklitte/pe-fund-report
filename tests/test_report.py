@@ -3,7 +3,8 @@ from datetime import date
 
 from pe_fund_report import report, slides
 
-SUPPLERENDE = ["likviditet", "likviditet", "lange_tilsagn", "fordeling", "brancher", "regioner",
+SUPPLERENDE = ["likviditet", "likviditet", "aarlige_stroemme", "tvpi_over_tid", "kaldstempo",
+               "lange_tilsagn", "fordeling", "brancher", "regioner",
                "branchekort_ejendomme", "regionskort_ejendomme", "vaerdibevaegelser",
                "definitioner"]
 

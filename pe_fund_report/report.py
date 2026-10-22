@@ -130,6 +130,9 @@ def _byg_supplerende(r, master=None):
     _saet_ph(s, 1, f"Slides uden for porteføljerapporten pr. {r['as_of']:%d.%m.%Y}")
     slides.likviditet(prs, r)           # samlede investeringer uden ejendomsfondene
     slides.likviditet(prs, r, med_ejendomme=True)  # og med dem
+    slides.aarlige_stroemme(prs, r)     # kald og udlodninger pr. år og fond
+    slides.tvpi_over_tid(prs, r)        # TVPI og DPI pr. kvartal, én pr. fond
+    slides.kaldstempo(prs, r)           # resttilsagn og kaldene de seneste 12 mdr.
     slides.lange_tilsagn(prs, r)
     slides.fordeling(prs, r, "geografi", "Geografisk fordeling efter tilsagn")
     slides.brancher(prs, r)             # cirkeldiagrammerne

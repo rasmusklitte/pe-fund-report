@@ -588,6 +588,47 @@ def _likviditet(wb, r, noegle="likviditet", navn="Likviditet"):
     ark.afslut()
 
 
+def _stroemme_pr_aar(wb, r):
+    """Siden Kapitalkald og udlodninger pr. år: én række pr. fond og år i DKK."""
+    a = r.get("aarlige_stroemme")
+    if not a:
+        return
+    ark = Ark(wb, "Strømme pr. år", [
+        ("Fond", 34, None, None), ("År", 7, None, None), ("Kapitalkald DKK", 15, "tal", None),
+        ("Udlodninger DKK", 15, "tal", None), ("Netto DKK", 15, "tal", None),
+        ("Bemærkning", 60, None, None)])
+    for x in a["fonde"]:
+        for j, aar in enumerate(a["aar"]):
+            ark.raekke([x["fund_name"], aar, x["kald"][j], x["udlodning"][j],
+                        lambda rad, k: f"={k['Kapitalkald DKK']}{rad}+{k['Udlodninger DKK']}{rad}",
+                        "Omregnet med kursen på hver cash flows dato; kald med LP-fortegn"
+                        if j == 0 else None])
+    if a["foer_start"]:
+        ark.raekke([", ".join(a["foer_start"]), None, None, None, None,
+                    f"Cash flows før {a['aar'][0]} er ikke med"])
+    ark.afslut()
+
+
+def _kaldstempo(wb, r):
+    """Siden Resttilsagn og kaldstempo."""
+    k = r.get("kaldstempo")
+    if not k:
+        return
+    ark = Ark(wb, "Kaldstempo", [
+        ("Fond", 34, None, None), ("Resttilsagn DKK", 15, "tal", None),
+        ("Kaldt seneste 12 mdr. DKK", 15, "tal", None), ("År ved samme tempo", 10, "dec", None),
+        ("Bemærkning", 60, None, None)])
+    def aar(rad, kol):
+        kaldt, rest = f'{kol["Kaldt seneste 12 mdr. DKK"]}{rad}', f'{kol["Resttilsagn DKK"]}{rad}'
+        return f'=IF({kaldt}>0,{rest}/{kaldt},"")'
+    for i, x in enumerate(k["fonde"]):
+        ark.raekke([x["fund_name"], x["resttilsagn"], x["kaldt"], aar,
+                    f"Kald fra {k['fra']:%d.%m.%Y} (ekskl.) til rapportdatoen" if i == 0 else None])
+    t = k["total"]
+    ark.raekke(["I alt", t["resttilsagn"], t["kaldt"], aar, None], fed=True)
+    ark.afslut()
+
+
 def _valutakurser(wb, r):
     ark = Ark(wb, "Valutakurser", [
         ("Valuta", 8, None, None), ("Ønsket dato", 12, "dato", None),
@@ -680,6 +721,10 @@ FANER = [
                    "resttilsagn, NAV, DPI, RVPI og TVPI ved hvert årsskifte."),
     ("Likviditet med ejendomme", "Som Likviditet, men for hele porteføljen inkl. "
                                  "ejendomsfondene."),
+    ("Strømme pr. år", "Siden Kapitalkald og udlodninger pr. år: kald og udlodninger pr. fond "
+                       "og år i DKK med kursen på hver cash flows dato."),
+    ("Kaldstempo", "Siden Resttilsagn og kaldstempo: resttilsagn, de seneste 12 måneders kald "
+                   "og år ved samme tempo pr. fond (evergreen-fonde er ikke med)."),
     ("Valutakurser", "Alle DKK-kurser, rapporten har brugt."),
     ("Stamdata", "Geografi, investeringsstrategi, løbetid og forvalter pr. fond."),
     ("Dokumenter", "Alle kildedokumenter med type, periode, godkendelse og link til PDF'en; "
@@ -709,6 +754,8 @@ def skriv(r):
     _eksponering(wb, r, kilder, "regioner")
     _likviditet(wb, r)
     _likviditet(wb, r, "likviditet_alle", "Likviditet med ejendomme")
+    _stroemme_pr_aar(wb, r)
+    _kaldstempo(wb, r)
     _valutakurser(wb, r)
     _stamdata(wb, r)
     _laes_mig(wb, r, [(n, t) for n, t in FANER if n in wb.sheetnames])

@@ -1551,3 +1551,47 @@ def test_likviditet_soejlerne_har_etiketter_og_ingen_forklaring():
     rest, kaldt = tilsagn.plots[0].series
     assert (etiketter(rest)[0], etiketter(kaldt)[0]) == ("432 mio.", "288 mio.")
     assert not tilsagn.has_legend and not tvpi.has_legend
+
+
+def _transaktionsrapport():
+    fonde = [_lq_fond("Alfa", "Private equity"), _lq_fond("Beta Fund II", "Private credit")]
+    kurs = lambda v, d: LQ_KURSER.get(d, 7.46)
+    for f in fonde:
+        f["tvpi_historik"] = [dict(dato=date(2025, 12, 31), tvpi=1.0, dpi=0.0, afvigende=False),
+                              dict(dato=date(2026, 3, 31), tvpi=4.0, dpi=0.0, afvigende=True),
+                              dict(dato=date(2026, 6, 30), tvpi=1.2, dpi=0.1, afvigende=False)]
+        f["n"]["tvpi"] = 1.2
+    return dict(navn="Investor", as_of=date(2026, 6, 30), fonde=fonde,
+                kurser={"EUR": (7.46, date(2026, 6, 30))},
+                aarlige_stroemme=data.aarlige_stroemme(fonde, kurs, date(2026, 6, 30)),
+                kaldstempo=data.kaldstempo(fonde, kurs, date(2026, 6, 30)),
+                datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
+
+
+def test_aarlige_stroemme_har_soejler_pr_fond_og_nettolinje():
+    s = slides.aarlige_stroemme(_prs(), _transaktionsrapport())
+    (diagram,) = [sh.chart for sh in s.shapes if sh.has_chart]
+    plot_area = diagram._chartSpace.chart.plotArea
+    assert plot_area.find(qn("c:lineChart")) is not None
+    # én kaldserie og én udlodningsserie pr. fond; udlodningerne er skjult i forklaringen
+    assert len(plot_area.find(qn("c:barChart")).findall(qn("c:ser"))) == 4
+    assert len(diagram.legend._element.findall(qn("c:legendEntry"))) == 2
+    assert slides.aarlige_stroemme(_prs(), _transaktionsrapport() | dict(
+        aarlige_stroemme=None)) is None
+
+
+def test_tvpi_over_tid_et_panel_pr_fond_uden_afvigende_kvartaler():
+    s = slides.tvpi_over_tid(_prs(), _transaktionsrapport())
+    diagrammer = [sh.chart for sh in s.shapes if sh.has_chart]
+    assert len(diagrammer) == 2
+    tvpi = diagrammer[0].plots[0].series[0]
+    assert list(tvpi.values) == [1.0, None, 1.2]
+    noter = next(x for x in _tekster(s) if x.startswith("Kilde"))
+    assert "Ikke vist: Alfa pr. 31.03.2026 (4,00x)" in noter
+
+
+def test_kaldstempo_tabel_med_total():
+    s = slides.kaldstempo(_prs(), _transaktionsrapport())
+    (tabel,) = [sh.table for sh in s.shapes if sh.has_table]
+    assert tabel.cell(len(tabel.rows) - 1, 0).text == "I alt"
+    assert tabel.cell(1, 4).text == "n/a"           # ingen kald de seneste 12 måneder

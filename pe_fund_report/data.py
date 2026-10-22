@@ -1669,6 +1669,90 @@ def likviditet(fonde, kurs, rapport_dato, uden=LIKVIDITET_UDEN, fra_aar=None):
                             if any(d < start for d, _, _ in f["kapitalstroemme"])])
 
 
+def aarlige_stroemme(fonde, kurs, rapport_dato, fra_aar=None):
+    """Kapitalkald og udlodninger pr. år og fond i DKK, hver med kursen på sin dato.
+
+    Kald har LP-fortegn (< 0). fra_aar: første år på aksen (som likviditet_alle); cash flows
+    før står ikke i årene, og foer_start nævner fondene bag. {aar: [...], fonde:
+    [{fund_name, kald: [...], udlodning: [...]}], netto: [...], foer_start}. None uden cash
+    flows eller med en manglende kurs.
+    """
+    flows = []                          # (år, fondens nummer, DKK, type)
+    for i, f in enumerate(fonde):
+        for d, a, type_ in f["kapitalstroemme"]:
+            k = kurs(f["valuta"], d)
+            if k is None:
+                return None
+            flows.append((d.year, i, a * k, type_))
+    if not flows:
+        return None
+    start = fra_aar or min(y for y, *_ in flows)
+    aar = list(range(start, rapport_dato.year + 1))
+    rk = [dict(fund_name=f["fund_name"], kald=[0.0] * len(aar), udlodning=[0.0] * len(aar))
+          for f in fonde]
+    for y, i, a, type_ in flows:
+        if y >= start:
+            rk[i][type_][y - start] += a
+    return dict(aar=aar, fonde=[x for x in rk if any(x["kald"]) or any(x["udlodning"])],
+                netto=[sum(x["kald"][j] + x["udlodning"][j] for x in rk) for j in range(len(aar))],
+                foer_start=[fonde[i]["fund_name"] for i in sorted({i for y, i, *_ in flows
+                                                                   if y < start})])
+
+
+TVPI_SPRING = 2.0         # et kvartal med TVPI over 2x og over det dobbelte af i dag er afvigende
+
+
+def tvpi_historik(f):
+    """[{dato, tvpi, dpi, afvigende}] pr. kvartal fra fondens historik, i fondens valuta.
+
+    Kvartaler uden indbetalt kapital springes over. Det sidste punkt er fondens egne nøgletal
+    (n["tvpi"], n["dpi"]), så kurven ender, hvor resten af rapporten står. afvigende er et
+    kvartal, hvor TVPI er over TVPI_SPRING og over TVPI_SPRING gange TVPI i dag: NAV er langt
+    over det indbetalte, typisk fordi et kapitalkald mangler eller er registreret senere.
+    """
+    punkter = [dict(dato=h["dato"], tvpi=(h["udloddet"] + h["nav"]) / h["indbetalt"],
+                    dpi=h["udloddet"] / h["indbetalt"])
+               for h in f["historik"] if h["indbetalt"]]
+    if punkter and punkter[-1]["dato"] == f["nav_dato"] and f["n"].get("tvpi") is not None:
+        punkter[-1].update(tvpi=f["n"]["tvpi"], dpi=f["n"]["dpi"])
+    nu = punkter[-1]["tvpi"] if punkter else None
+    for p in punkter:
+        p["afvigende"] = bool(nu) and p["tvpi"] > max(TVPI_SPRING, TVPI_SPRING * nu)
+    return punkter
+
+
+KALDSTEMPO_DAGE = 365     # kaldstempoet er de seneste 12 måneders kald
+
+
+def kaldstempo(fonde, kurs, rapport_dato):
+    """Resttilsagn og de seneste 12 måneders kald pr. fond i DKK, og hvor mange år
+    resttilsagnet rækker ved samme tempo. Evergreen-fonde og fonde uden resttilsagn er ikke med.
+
+    {fonde: [{fund_name, resttilsagn, kaldt, aar}], total: {...}, fra}; aar er None, når der
+    intet er kaldt. None med en manglende kurs eller uden fonde med resttilsagn.
+    """
+    fra = rapport_dato - timedelta(days=KALDSTEMPO_DAGE)
+    linjer = []
+    for f in fonde:
+        rest = f["n"].get("resttilsagn_dkk")
+        if f.get("evergreen") or not rest or rest <= 0:
+            continue
+        kaldt = 0.0
+        for d, a, type_ in f["kapitalstroemme"]:
+            if type_ == "kald" and fra < d <= rapport_dato:
+                k = kurs(f["valuta"], d)
+                if k is None:
+                    return None
+                kaldt -= a * k
+        linjer.append(dict(fund_name=f["fund_name"], resttilsagn=rest, kaldt=kaldt,
+                           aar=rest / kaldt if kaldt > 0 else None))
+    if not linjer:
+        return None
+    rest, kaldt = sum(x["resttilsagn"] for x in linjer), sum(x["kaldt"] for x in linjer)
+    return dict(fonde=linjer, fra=fra, total=dict(resttilsagn=rest, kaldt=kaldt,
+                                                  aar=rest / kaldt if kaldt > 0 else None))
+
+
 def sammendrag(fonde, total_dkk, irr=None):
     """Porteføljens hovedtal til executive summary.
 
@@ -1955,6 +2039,14 @@ def investor_rapport(investor_code, as_of=None):
     omregn_udvikling_til_dkk(fonde, kurs)
     irr_i_dkk = irr_dkk(fonde, kurs)
     lq = likviditet(fonde, kurs, rapport_dato)      # uden ejendomsfondene
+    for f in fonde:
+        f["tvpi_historik"] = tvpi_historik(f)
+        for p in f["tvpi_historik"]:
+            if p["afvigende"]:
+                f["advarsler"].append(
+                    f"TVPI pr. {p['dato']:%d.%m.%Y} er {p['tvpi']:.2f}x "
+                    f"(i dag {f['n']['tvpi']:.2f}x) - NAV er langt over det indbetalte; mangler "
+                    "et kapitalkald? Kvartalet vises ikke på TVPI og DPI over tid")
     return dict(investor=investor_code, navn=investor_navn(investor_code),
                 as_of=rapport_dato, fonde=fonde, total=total(fonde),
                 kurser=kurser, total_dkk=total_dkk, irr_dkk=irr_i_dkk,
@@ -1976,6 +2068,9 @@ def investor_rapport(investor_code, as_of=None):
                 # med ejendomsfondene, på samme tidsakse som sliden uden
                 likviditet_alle=likviditet(fonde, kurs, rapport_dato, uden=None,
                                            fra_aar=_likviditet_start(lq)),
+                aarlige_stroemme=aarlige_stroemme(fonde, kurs, rapport_dato,
+                                                  fra_aar=_likviditet_start(lq)),
+                kaldstempo=kaldstempo(fonde, kurs, rapport_dato),
                 perioder=rapport_perioder, udvikling=portefoelje_udvikling(fonde),
                 fortegnsafvigelser=fortegnsafvigelser(fonde),
                 vaerdibevaegelser=vaerdibevaegelser(fonde, kurser),
