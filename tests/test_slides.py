@@ -1518,6 +1518,9 @@ def test_likviditet_viser_fem_tal_og_tre_diagrammer():
     j = next(sh.chart for sh in s.shapes if sh.has_chart)
     plot_area = j._chartSpace.chart.plotArea
     assert plot_area.find(qn("c:areaChart")) is not None
+    # kurven er en linje for sig, så fladens kant ikke tegner lodret op til nul i enderne
+    assert plot_area.find(qn("c:lineChart")) is not None
+    assert plot_area.find(qn("c:areaChart")).find(".//" + qn("a:ln")).find(qn("a:noFill")) is not None
     assert slides.likviditet(_prs(), r | dict(likviditet=None)) is None
 
 

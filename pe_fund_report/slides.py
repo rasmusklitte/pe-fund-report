@@ -3092,21 +3092,37 @@ def _j_kurve(s, x, y, w, h, kvartaler):
         for el in ser.findall(qn(tag)):
             ser.remove(el)
     lys, kant = str(SAGE_LYS), str(SAGE)
-    # lys salvie ved nul, der toner ud mod bunden, så søjlerne står tydeligt foran den; kurven
-    # selv er en mørk kant
+    # kurven er en linje for sig: fladens egen kant ville også tegne lodret op til nul i
+    # enderne, hvor fladen lukkes
+    linje = deepcopy(ser)
+    # lys salvie ved nul, der toner ud mod bunden, så søjlerne står tydeligt foran den
     ser.find(qn("c:tx")).addnext(parse_xml(
         f'<c:spPr {nsdecls("c", "a")}><a:gradFill rotWithShape="1"><a:gsLst>'
         f'<a:gs pos="0"><a:srgbClr val="{lys}"><a:alpha val="90000"/></a:srgbClr></a:gs>'
         f'<a:gs pos="100000"><a:srgbClr val="{lys}"><a:alpha val="15000"/></a:srgbClr></a:gs>'
-        f'</a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>'
-        f'<a:ln w="19050"><a:solidFill><a:srgbClr val="{kant}"/></a:solidFill></a:ln>'
+        f'</a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill><a:ln><a:noFill/></a:ln>'
         f'</c:spPr>'))
-    flade = parse_xml(f'<c:areaChart {nsdecls("c")}><c:grouping val="standard"/>'
-                      f'<c:varyColors val="0"/></c:areaChart>')
-    flade.append(ser)
-    for akse in bar.findall(qn("c:axId")):
-        flade.append(deepcopy(akse))
-    bar.addprevious(flade)
+    nr = str(len(soejler.series) + 1)
+    linje.find(qn("c:idx")).set("val", nr)
+    linje.find(qn("c:order")).set("val", nr)
+    linje.find(qn("c:tx")).addnext(parse_xml(
+        f'<c:spPr {nsdecls("c", "a")}><a:ln w="19050" cap="rnd"><a:solidFill>'
+        f'<a:srgbClr val="{kant}"/></a:solidFill><a:round/></a:ln></c:spPr>'))
+    linje.find(qn("c:spPr")).addnext(parse_xml(
+        f'<c:marker {nsdecls("c")}><c:symbol val="none"/></c:marker>'))
+    linje.append(parse_xml(f'<c:smooth {nsdecls("c")} val="0"/>'))
+    akser = bar.findall(qn("c:axId"))
+    for tag, ser_, foer in (("c:areaChart", ser, True), ("c:lineChart", linje, False)):
+        plot = parse_xml(f'<{tag} {nsdecls("c")}><c:grouping val="standard"/>'
+                         f'<c:varyColors val="0"/></{tag}>')
+        plot.append(ser_)
+        for akse in akser:
+            plot.append(deepcopy(akse))
+        # fladen bag søjlerne, linjen foran dem
+        bar.addprevious(plot) if foer else bar.addnext(plot)
+    # linjen og fladen er samme serie; kun fladen står i forklaringen
+    diagram.legend._element.find(qn("c:legendPos")).addnext(parse_xml(
+        f'<c:legendEntry {nsdecls("c")}><c:idx val="{nr}"/><c:delete val="1"/></c:legendEntry>'))
     return diagram
 
 
