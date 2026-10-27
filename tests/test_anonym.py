@@ -110,11 +110,11 @@ def test_anonymiser_skalerer_beloeb_i_noter():
 
 def test_beloebsskala():
     with slides.beloebsskala(2.0):
-        assert slides.tusind(1_234_567) == "2.469"
+        assert slides.beloeb(1_234_567) == "2,5"
         assert slides.million(1_500_000) == "3"
         assert slides.kroner(1_000) == "2.000"
-        assert slides._kt(1_000) == 2
-    assert slides.tusind(1_234_567) == "1.235" and slides._kt(1_000) == 1
+        assert slides._mio(1_000_000) == 2
+    assert slides.beloeb(1_234_567) == "1,2" and slides._mio(1_000_000) == 1
 
 
 def test_laek_finder_navne_i_tabel_diagram_og_noter():

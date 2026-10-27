@@ -48,8 +48,10 @@ payments in DKK side by side (a payment missing on one side is a grey 0), the fi
 next to the IRR in Aleta's export and in the deck, with the gap in bp. Aleta's IRR is exactly XIRR over its own transactions in DKK with
 `marketValue` on Aleta's date; `forklar()` checks that and recomputes ours on Aleta's dates.
 
-`ruff check .` currently reports 14 pre-existing findings (C408 `dict()` literals, DTZ011
-`date.today()`) in `data.py` and the tests — that is the baseline, not a regression you caused.
+`ruff check .` passes clean. The rule set is pinned in `pyproject.toml` (`[tool.ruff.lint]`:
+bugs and slips, not style), so a newer ruff doesn't change what is checked; `dict(...)`,
+lambdas bound to names, `zip()` without `strict=` and import order are left out on purpose.
+A new finding is one you caused.
 
 ## Architecture
 
@@ -293,7 +295,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   groups stay in the data and in the Excel *Brancher* sheet. *Branchefordeling – hele porteføljen*
   (`slides.branchekort`) draws the same sectors as a squarified treemap (`slides._treemap`, pure,
   areas proportional to the values) of native rectangles, with »Øvrige« for
-  sectors under `BR_MIN`; each box shows name, tDKK and %, shrinking to name + % or % only when
+  sectors under `BR_MIN`; each box shows name, mio. DKK and %, shrinking to name + % or % only when
   small. *Geografisk eksponering – hele porteføljen* (`slides.regionskort`) is the same idea with one
   box per region in the pie's colours. Every box must say what it is: `slides._gulv` lifts
   the area of boxes under `KORT_MINDST` (3 %) of their treemap so they can carry a label (the
@@ -360,8 +362,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   own categories (`KATEGORIER`) are only a fallback.
 - **Branche column.** Company tables (header "Branche") and company cards show the GICS sector (`SEKTORER`) from
   `rpt.v_portfolio_holding.industry_code` as `industri`; `sektor` is the GP's own label, kept for
-  Excel and the property funds' valuation basis. Unreviewed classifications are counted in the
-  fund page's source note.
+  Excel and the property funds' valuation basis.
 - **Quarter and year to date.** `data.perioder()` gives the quarter and year windows ending at the
   report date. `data.udvikling()` sets `f["udvikling"][periode]` per fund from `historik` and
   `kapitalstroemme`: NAV primo (latest NAV on or before the start; a gap falls back to an older
@@ -393,7 +394,7 @@ investor "Investor"; logos, descriptions, company info, fund size, ownership sha
 reconciliation are removed (the user's choice; vintage and term stay). Amounts are multiplied by
 one hidden random factor away from 1 (`report._skjult_faktor`) **at the display layer**
 (`slides.beloebsskala`), so ratios, TVPI, IRR and % are exact: every place that prints an amount
-must go through `tusind` / `million` / `kroner` / `_kt`, and amounts `data.py` writes into note
+must go through `beloeb` / `million` / `kroner` / `_mio`, and amounts `data.py` writes into note
 text are scaled by regex in `anonym`. No Excel workbook is written. `anonym.laek()` searches all
 text in the finished deck (tables, charts, notes pages) for the original names and codes, and
 `byg()` raises without saving if any is left — a new name field in `data.fond()` must be added to
@@ -438,7 +439,7 @@ and the benchmark bar carry the notes for their part. The † date mark stays as
 Identifiers, docstrings and comments are **Danish** (`fond`, `tilsagn`, `indbetalt`, `udloddet`,
 `beholdninger`, `_saet_ph`); only the shared `style.py`/`deck.py` API and database columns are
 English. Report text is Danish, numbers use Danish formatting via `style._dk` (wrapped by
-`slides.tusind/pct/gange`), and missing values render as `"n/a"` (`slides.IKKE_OPLYST`), never as
+`slides.beloeb/pct/gange`; amounts are in mio. with one decimal, »mio. DKK«), and missing values render as `"n/a"` (`slides.IKKE_OPLYST`), never as
 a blank or a zero.
 
 ## Data rules

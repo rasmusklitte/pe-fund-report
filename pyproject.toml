@@ -36,3 +36,10 @@ markers = ["db: læser databasen (test_aleta.py); fravælg med -m \"not db\""]
 line-length = 100
 # style.py and deck.py are shared house-style modules, kept identical to the other PE repos
 extend-exclude = ["pe_fund_report/style.py", "pe_fund_report/deck.py"]
+
+[tool.ruff.lint]
+# pinned, so a newer ruff doesn't change what is checked: bugs and slips, not style.
+# dict(...) (C408), lambdas bound to names (E731), zip() without strict= (B905) and
+# import order (I) are left out on purpose
+select = ["F", "E4", "E7", "E9", "B", "PLE", "RUF034"]
+ignore = ["E731", "B905"]

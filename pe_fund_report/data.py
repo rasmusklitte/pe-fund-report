@@ -111,6 +111,12 @@ def _dato(v):
     return pd.Timestamp(v).date()
 
 
+def _mio_tekst(v, valuta):
+    """Et beløb til en notes tekst, som decket viser beløb: "4,5 mio. EUR"."""
+    tal = f"{v / 1_000_000:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{tal} mio. {valuta}"
+
+
 def xirr(flows):
     """flows: [(dato, beløb)], act/365, bisektion. None hvis der ikke er fortegnsskifte."""
     flows = [(d, a) for d, a in flows if a]
@@ -891,8 +897,8 @@ def fond(inv, as_of, info):
         mod_tilsagn = gp_indbetalt
         # forvalterens tal står i nøgletallene; noten siger kun, hvad kaldene summerer til
         noter.append(Note(f"Indbetalt kapital følger forvalterens opgørelse; de modtagne "
-                          f"kapitalkald summerer til {cf_indbetalt / 1000:,.0f} t{inv.currency}."
-                          .replace(",", "."), "indbetalt"))
+                          f"kapitalkald summerer til {_mio_tekst(cf_indbetalt, inv.currency)}.",
+                          "indbetalt"))
 
     estimerede, advarsler = estimerede_cashflows(info, inv.investor_code, cf, nav_dato)
     est = [(_dato(e["dato"]), float(e["beloeb"])) for e in estimerede]
@@ -928,8 +934,8 @@ def fond(inv, as_of, info):
             # Definitioner forklarer ejerandelen for en evergreen-fond, så der er ingen note
             andel = float(nav.nav.iloc[-1]) / fonds_nav
 
-    # hele beløb: rabat og equalization er typisk skæve beløb (82.500), som tusinder
-    # runder forkert
+    # hele beløb: rabat og equalization er typisk skæve beløb (82.500), som mio. med
+    # én decimal runder forkert
     hel = lambda v: f"{v:,.0f}".replace(",", ".") + f" {inv.currency}"
     if udligning_betalt or udligning_modtaget:
         dele = []
@@ -978,19 +984,15 @@ def fond(inv, as_of, info):
     if recallable:
         # fondssiden viser tilsagn, indbetalt og resttilsagn side om side; uden denne note
         # ser de tre tal ud til ikke at gå op
-        # tusindseparatoren laves for sig; .replace(",", ".") på hele sætningen ville også
-        # ramme kommaet foran "som"
-        beloeb = f"{recallable / 1000:,.0f}".replace(",", ".")
-        noter.append(Note(f"Resttilsagnet indeholder genkaldelige udlodninger på {beloeb} "
-                          f"t{inv.currency}.", "resttilsagn"))
+        noter.append(Note(f"Resttilsagnet indeholder genkaldelige udlodninger på "
+                          f"{_mio_tekst(recallable, inv.currency)}.", "resttilsagn"))
 
     if not senere.empty:
         dele = []
         for kl, tekst in (("CONTRIBUTION", "kapitalkald"), ("DISTRIBUTION", "udlodning")):
             s = senere[senere.flow_class == kl]
             if not s.empty:
-                dele.append(f"{tekst} {abs(s.amount.sum()) / 1000:,.0f} t{inv.currency}"
-                            .replace(",", ".")
+                dele.append(f"{tekst} {_mio_tekst(abs(s.amount.sum()), inv.currency)}"
                             + f" ({', '.join(f'{d:%d.%m.%Y}' for d in sorted(set(s.value_date)))})")
         if dele:
             noter.append(Note("Efter NAV-datoen: " + " og ".join(dele) + " – ikke medregnet.",
@@ -1094,7 +1096,7 @@ def gennemlysning(fonde):
                 uden_beholdninger=[f["fund_name"] for f in fonde if not f.get("beholdninger")])
 
 
-NAV_SYNLIG = 500          # mindste forskel mellem NAV og dagsværdi, der ses i tusinder
+NAV_SYNLIG = 50_000       # mindste forskel mellem NAV og dagsværdi, der ses i mio. (0,1)
 
 
 def nav_afstemning(nav, nav_dato, beh, fonds_nav=None, fonds_nav_ex_carry=None):

@@ -469,7 +469,7 @@ def _skriv_irr(ws, linjer, transaktioner, dato):
     ws.merge_cells("A1:J1")
     ws.row_dimensions[1].height = 60
     ws.column_dimensions["A"].width = 11
-    for j, (navn, bredde) in enumerate(IRR_KOLONNER, start=2):
+    for j, (_, bredde) in enumerate(IRR_KOLONNER, start=2):
         ws.column_dimensions[get_column_letter(j)].width = bredde
     opslag = {(x["fond"], x["kontrol"]): x for x in linjer}
     i = 3

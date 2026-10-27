@@ -336,7 +336,8 @@ def _noegletal(wb, r, kilder, ks, nav_rad, irr_blokke):
                            f"/{k['Indbetalt']}{rad},\"\")",
             n["irr"], n["fondsstoerrelse"],
             # evergreen: andelen af fondens NAV (fondssiden siger det samme i noten)
-            lambda rad, k, fn=n.get("fonds_nav"): (
+            # fn som standardværdi binder denne fonds tal, ikke den sidste fond i løkken
+            lambda rad, k, fn=n.get("fonds_nav"): (  # noqa: B008
                 f"=IFERROR({k['NAV']}{rad}/{fn},\"\")" if fn
                 else f"=IFERROR({k['Tilsagn']}{rad}/{k['Fondsstørrelse']}{rad},\"\")"),
             kurs, lambda rad, k: f"=IFERROR({k['NAV']}{rad}*{k['DKK-kurs']}{rad},\"\")",
