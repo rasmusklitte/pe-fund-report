@@ -291,6 +291,55 @@ def _irr_dkk(wb, r):
     ark.afslut()
 
 
+def _pme(wb, r):
+    """KS-PME og Direct Alpha: hver fonds IRR-cash flows forrentet med indekset til NAV-datoen
+    (i fondens valuta), og porteføljens DKK-cash flows forrentet til rapportdatoen."""
+    p = r.get("pme") or {}
+    blokke = [(f["fund_code"], f["fund_name"], f["valuta"], f["pme"]) for f in r["fonde"]
+              if (f.get("pme") or {}).get("linjer")]
+    if p.get("linjer"):
+        blokke.append(("I ALT", "Porteføljen" + (" (uden " + ", ".join(p["udeladte"]) + ")"
+                                                 if p["udeladte"] else ""), "DKK", p))
+    if not blokke:
+        return
+    ark = Ark(wb, "PME", [("Fondskode", 11, None, None), ("Fond", 34, None, None),
+                          ("Dato", 11, "dato", None), ("Valuta", 7, None, None),
+                          ("Beløb", 15, "tal", None), ("Indeks", 11, "kurs", None),
+                          ("Indeks slut", 11, "kurs", None), ("Faktor", 9, "kurs", None),
+                          ("Forrentet", 15, "tal", None), ("Type", 10, None, None),
+                          ("KS-PME i rapporten", 10, "gange", None),
+                          ("Kontrol: KS-PME", 10, "gange", "kontrol"),
+                          ("Direct Alpha i rapporten", 10, "pct", None),
+                          ("Kontrol: Direct Alpha med XIRR", 10, "pct", "kontrol")])
+    for kode, navn, valuta, res in blokke:
+        foerste, sidste = ark.rad + 1, ark.rad + len(res["linjer"])
+        fv, dato = (f"${ark.k[kol]}${foerste}:${ark.k[kol]}${sidste}"
+                    for kol in ("Forrentet", "Dato"))
+        for i, x in enumerate(res["linjer"]):
+            ark.raekke([kode, navn, x["dato"], valuta, x["beloeb"], x["niveau"], res["slutniveau"],
+                        lambda rad, k: f"={k['Indeks slut']}{rad}/{k['Indeks']}{rad}",
+                        lambda rad, k: f"={k['Beløb']}{rad}*{k['Faktor']}{rad}", x["type"],
+                        res["ks_pme"] if i == 0 else None,
+                        f'=SUMIF({fv},">0")/-SUMIF({fv},"<0")' if i == 0 else None,
+                        res["direct_alpha"] if i == 0 else None,
+                        # rapportens tal som startgæt: XIRR's standard på 10 % konvergerer
+                        # ikke altid, når alfa er negativ
+                        (lambda rad, k, fv=fv, dato=dato: f'=IFERROR(XIRR({fv},{dato},'
+                         f'{k["Direct Alpha i rapporten"]}{rad}),"")') if i == 0 else None])
+    ark.afslut()
+    fl = p.get("forloeb")
+    if not fl:
+        return
+    ark = Ark(wb, "PME over tid", [("Dato", 11, "dato", None), ("NAV", 15, "tal", None),
+                                   ("Indekskonto", 15, "tal", None),
+                                   ("Netto indbetalt", 15, "tal", None),
+                                   ("Mod indekset", 15, "tal", None)])
+    for x in fl:
+        ark.raekke([x["dato"], x["nav"], x["indekskonto"], x["netto_indbetalt"],
+                    lambda rad, k: f"={k['NAV']}{rad}-{k['Indekskonto']}{rad}"])
+    ark.afslut()
+
+
 def _noegletal(wb, r, kilder, ks, nav_rad, irr_blokke):
     ark = Ark(wb, "Nøgletal", [
         ("Fondskode", 11, None, None), ("Fond", 34, None, None), ("Valuta", 7, None, None),
@@ -440,6 +489,39 @@ def _udvikling(wb, r, ks, nav_rad):
                         sum_("NAV primo DKK"), sum_("Kapitalkald DKK"), sum_("Udlodninger DKK"),
                         sum_("Værdiændring DKK"), sum_("Valutakursændring DKK"),
                         sum_("NAV ultimo DKK"), None, None, None, None], fed=True)
+    ark.afslut()
+
+
+def _regnskabstal(wb, r):
+    """Siderne Regnskabstal: bevægelsesnoten i DKK pr. fond og periode, med kontrolkolonne."""
+    if not any((r.get("regnskabstal") or {}).values()):
+        return
+    beloeb = [("NAV primo", "primo"), ("Indbetalt", "tilgang"), ("Udloddet", "afgang"),
+              ("Værdiændring", "vaerdi"), ("Heraf gebyrer", "gebyrer"), ("Heraf carry", "carry"),
+              ("Valutakursændring", "kurs"), ("NAV ultimo", "ultimo"),
+              ("Resttilsagn", "resttilsagn"), ("Kildeskat tilbageholdt", "kildeskat")]
+    ark = Ark(wb, "Regnskabstal", [
+        ("Fondskode", 11, None, None), ("Fond", 34, None, None), ("Periode", 12, None, None),
+        ("Primodato", 11, "dato", None), ("Ultimodato", 11, "dato", None),
+        *((navn, 14, "tal", None) for navn, _ in beloeb),
+        ("NAV primo som rapporteret", 14, "tal", None),
+        ("Kontrol: NAV ultimo - bevægelserne", 15, "tal", "kontrol")])
+    kontrol = lambda rad, k: (f"={k['NAV ultimo']}{rad}-{k['NAV primo']}{rad}"
+                              f"-{k['Indbetalt']}{rad}-{k['Udloddet']}{rad}"
+                              f"-{k['Værdiændring']}{rad}-{k['Valutakursændring']}{rad}")
+    koder = {f["fund_name"]: f for f in r["fonde"]}
+    for p, rt in r["regnskabstal"].items():
+        if not rt:
+            continue
+        for x in rt["fonde"]:
+            f = koder[x["fund_name"]]
+            ark.raekke([f["fund_code"], f["fund_name"], PERIODER[p],
+                        f["udvikling"][p]["primo_dato"], f["nav_dato"],
+                        *(x[n] for _, n in beloeb), x["primo_rapporteret"], kontrol])
+        antal = len(rt["fonde"])
+        sum_ = lambda kol, n=antal: (lambda rad, k: f"=SUM({k[kol]}{rad - n}:{k[kol]}{rad - 1})")
+        ark.raekke(["I alt", "Porteføljen i DKK", PERIODER[p], rt["fra"], rt["til"],
+                    *(sum_(navn) for navn, _ in beloeb), None, kontrol], fed=True)
     ark.afslut()
 
 
@@ -630,6 +712,93 @@ def _kaldstempo(wb, r):
     ark.afslut()
 
 
+def _prognose(wb, r):
+    """Siderne Forventede kapitalkald og udlodninger og Prognose pr. fond: hver fonds kvartaler
+    i hvert scenarie i fondens valuta, med kæden fra resttilsagn og NAV som formler, og
+    porteføljen pr. år i DKK summeret fra dem med kontrol mod rapportens tal."""
+    p = r.get("prognose")
+    if not p:
+        return
+    navne = dict(p["scenarier"])
+    ark = Ark(wb, "Prognose", [
+        ("Fond", 34, None, None), ("Scenarie", 14, None, None), ("Profil", 15, None, None),
+        ("Valuta", 7, None, None), ("Kvartal", 11, "dato", None), ("År", 7, None, None),
+        ("Alder", 7, "dec", None), ("Kvartalets længde (år)", 9, "kurs", None),
+        ("Nyt leveår", 7, None, None), ("Kaldsrate (årlig)", 9, "pct", None),
+        ("Resttilsagn primo", 15, "tal", None),
+        ("Resttilsagn ved leveårets start", 15, "tal", None),
+        ("Kald", 15, "tal", None), ("NAV primo", 15, "tal", None),
+        ("Vækstfaktor", 9, "kurs", None), ("Udlodningsrate i kvartalet", 9, "pct", None),
+        ("Udlodning", 15, "tal", None), ("NAV ultimo", 15, "tal", None),
+        ("Resttilsagn ultimo", 15, "tal", None), ("Kurs", 9, "kurs", None),
+        ("Kald DKK", 15, "tal", None), ("Udlodning DKK", 15, "tal", None),
+        ("NAV ultimo DKK", 15, "tal", None), ("Resttilsagn ultimo DKK", 15, "tal", None),
+        ("NAV ultimo i rapporten", 15, "tal", None),
+        ("Kontrol: NAV ultimo - rapporten", 12, "tal", "kontrol")])
+    for f in r["fonde"]:
+        g = f.get("prognose")
+        if not g:
+            continue
+        kurs = (r["kurser"].get(f["valuta"]) or (None,))[0]
+        for noegle, x in g["scenarier"].items():
+            for i, q in enumerate(x["kvartaler"]):
+                foerste = i == 0
+
+                def forrige(kol, vaerdi, foerste=foerste):
+                    # første kvartal starter i rapportens tal, de næste i kvartalet før
+                    return vaerdi if foerste else (lambda rad, k: f"={k[kol]}{rad - 1}")
+                aarsstart = ((lambda rad, k: f"={k['Resttilsagn primo']}{rad}") if foerste else
+                             (lambda rad, k: f"=IF({k['Nyt leveår']}{rad}=1,"
+                                             f"{k['Resttilsagn primo']}{rad},"
+                                             f"{k['Resttilsagn ved leveårets start']}{rad - 1})"))
+                ark.raekke([
+                    f["fund_name"], navne[noegle], g["profil"], f["valuta"], q["dato"],
+                    q["dato"].year, q["alder"], q["aar"], 1 if q["nyt_aar"] else 0,
+                    q["kaldsrate"], forrige("Resttilsagn ultimo", q["rest_primo"]), aarsstart,
+                    lambda rad, k: (f"=MIN({k['Resttilsagn primo']}{rad},"
+                                    f"{k['Resttilsagn ved leveårets start']}{rad}"
+                                    f"*{k['Kaldsrate (årlig)']}{rad}"
+                                    f"*{k['Kvartalets længde (år)']}{rad})"),
+                    forrige("NAV ultimo", q["nav_primo"]), q["vaekstfaktor"],
+                    q["udlodningsrate"],
+                    lambda rad, k: (f"={k['NAV primo']}{rad}*{k['Vækstfaktor']}{rad}"
+                                    f"*{k['Udlodningsrate i kvartalet']}{rad}"),
+                    lambda rad, k: (f"={k['NAV primo']}{rad}*{k['Vækstfaktor']}{rad}"
+                                    f"+{k['Kald']}{rad}-{k['Udlodning']}{rad}"),
+                    lambda rad, k: f"={k['Resttilsagn primo']}{rad}-{k['Kald']}{rad}",
+                    kurs,
+                    lambda rad, k: f"={k['Kald']}{rad}*{k['Kurs']}{rad}",
+                    lambda rad, k: f"={k['Udlodning']}{rad}*{k['Kurs']}{rad}",
+                    lambda rad, k: f"={k['NAV ultimo']}{rad}*{k['Kurs']}{rad}",
+                    lambda rad, k: f"={k['Resttilsagn ultimo']}{rad}*{k['Kurs']}{rad}",
+                    q["nav"],
+                    lambda rad, k: f"={k['NAV ultimo']}{rad}-{k['NAV ultimo i rapporten']}{rad}"])
+    ark.afslut()
+
+    pa = ark
+    aar = Ark(wb, "Prognose pr. år", [
+        ("Scenarie", 14, None, None), ("År", 7, None, None), ("Kald DKK", 15, "tal", None),
+        ("Udlodning DKK", 15, "tal", None), ("Netto DKK", 15, "tal", None),
+        ("NAV ultimo DKK", 15, "tal", None), ("Resttilsagn ultimo DKK", 15, "tal", None),
+        ("Netto i rapporten", 15, "tal", None),
+        ("Kontrol: netto - rapporten", 12, "tal", "kontrol"), ("Bemærkning", 60, None, None)])
+    for noegle, navn in p["scenarier"]:
+        for j, a in enumerate(p["aar"][noegle]):
+            def summ(kol, a=a, navn=navn, ultimo=False):
+                # NAV og resttilsagn ved årets udgang: kun kvartalet, der slutter 31.12.
+                kriterie = f',{pa.kol("Kvartal")},DATE({a["aar"]},12,31)' if ultimo else ""
+                return lambda rad, k: (f'=SUMIFS({pa.kol(kol)},{pa.kol("Scenarie")},"{navn}",'
+                                       f'{pa.kol("År")},{a["aar"]}{kriterie})')
+            aar.raekke([navn, a["aar"], summ("Kald DKK"), summ("Udlodning DKK"),
+                        lambda rad, k: f"={k['Udlodning DKK']}{rad}-{k['Kald DKK']}{rad}",
+                        summ("NAV ultimo DKK", ultimo=True),
+                        summ("Resttilsagn ultimo DKK", ultimo=True), a["netto"],
+                        lambda rad, k: f"={k['Netto DKK']}{rad}-{k['Netto i rapporten']}{rad}",
+                        "Med rapportdatoens kurs for alle år" if j == 0 else None])
+    if p["uden_kurs"]:
+        aar.raekke([None] * 9 + [f"Uden {', '.join(p['uden_kurs'])}: ingen DKK-kurs"])
+    aar.afslut()
+
 def _eksponering_over_tid(wb, r):
     """Siden Kapitalkald, resttilsagn og eksponering over tid: én række pr. kvartal i DKK."""
     e = r.get("eksponering_over_tid")
@@ -653,6 +822,25 @@ def _eksponering_over_tid(wb, r):
     if e["foer_start"]:
         ark.raekke([None] * 6 + [f"Kald før første kvartal ({', '.join(e['foer_start'])}) er "
                                  f"med i Akk. kaldt fra start: {e['primo']:,.0f}"])
+    ark.afslut()
+
+
+def _ejendomme(wb, r, kilder):
+    """Siden Ejendommene bag NAV: ejendomsfondenes ejendomme i hver rapport, hele fondens
+    værdier, som forvalteren opgør dem."""
+    fonde = [f for f in r["fonde"] if f["kilder"].get("ejendomme")]
+    if not fonde:
+        return
+    ark = Ark(wb, "Ejendomme", [
+        ("Fondskode", 11, None, None), ("Fond", 30, None, None),
+        ("Rapportdato", 11, "dato", None), ("Ejendom", 26, None, None),
+        ("Værdigrundlag", 36, None, None), ("Værdi, hele fonden", 16, "tal", None),
+        ("Dokument-id", 11, None, "kilde"), ("Kildedokument", 50, None, "kilde")])
+    for f in fonde:
+        for x in f["kilder"]["ejendomme"]:
+            ark.raekke([f["fund_code"], f["fund_name"], x["dato"], x["navn"], x["grundlag"],
+                        x["vaerdi"], kilder.id_(x["document_id"]),
+                        kilder.fil(x["document_id"])])
     ark.afslut()
 
 
@@ -724,6 +912,10 @@ FANER = [
     ("Udvikling", "Kvartalet og år til dato pr. fond og for porteføljen: fra NAV primo til "
                   "ultimo, i fondens valuta og i DKK."),
     ("Værdibro", "Fra indbetalt kapital til NAV pr. fond, med kontrolrække."),
+    ("Regnskabstal", "Siderne Regnskabstal i de supplerende slides: fra NAV primo til ultimo "
+                     "i DKK pr. fond og periode, gebyrer og carry fra Kapitalkonto (tom, hvor "
+                     "forvalteren ikke opdeler), resttilsagn og kildeskat, med kontrol af, at "
+                     "bevægelserne går op."),
     ("NAV", "Alle NAV-tal brugt i rapporten, pr. fond og kvartal."),
     ("Kapitalstrømme", "Alle kapitalkald, udlodninger, udligninger og kildeskat, inkl. skønnede "
                        "kapitalkald; kolonnen I nøgletal viser, hvad der indgår."),
@@ -733,6 +925,12 @@ FANER = [
             "kontrollen."),
     ("IRR DKK", "Porteføljens IRR i DKK: alle fondes cash flows omregnet med Nationalbankens "
                 "kurs på dagen og NAV i DKK som sidste cash flow, med XIRR-kontrol."),
+    ("PME", "Siderne Porteføljen og Fondene mod markedet: hver fonds IRR-cash flows "
+            "forrentet med benchmarkindekset (yfinance, omregnet til fondens valuta) til NAV-"
+            "datoen, og porteføljens DKK-cash flows til rapportdatoen, med kontrol af KS-PME og "
+            "Direct Alpha (XIRR)."),
+    ("PME over tid", "Siden Porteføljen mod markedet: porteføljens NAV og indekskontoen (de "
+                     "samme cash flows i benchmarkindekset) pr. kvartalsslut i DKK."),
     ("Beholdninger", "Fondenes beholdninger ultimo og primo, hele fonden og investors andel. "
                      "For feederne (Gennem udfyldt) er det den underliggende fonds positioner, og "
                      "ejerandelen er feederens NAV / den underliggende fonds samlede dagsværdi."),
@@ -752,6 +950,15 @@ FANER = [
                        "og år i DKK med kursen på hver cash flows dato."),
     ("Kaldstempo", "Siden Resttilsagn og kaldstempo: resttilsagn, de seneste 12 måneders kald "
                    "og år ved samme tempo pr. fond (evergreen-fonde er ikke med)."),
+    ("Prognose", "Siderne Forventede kapitalkald og udlodninger og Prognose pr. fond i de "
+                 "supplerende slides: hver fonds kvartaler i hvert scenarie i fondens valuta, "
+                 "fra resttilsagn og NAV pr. rapportdatoen. Satserne kommer fra profilerne i "
+                 "config/cashflow_profiler.yaml; kald, udlodning og NAV er formler, med kontrol "
+                 "mod rapportens NAV."),
+    ("Prognose pr. år", "Porteføljen pr. år og scenarie i DKK, summeret fra fanen Prognose, "
+                        "med kontrol af netto cash flow mod rapportens tal."),
+    ("Ejendomme", "Siden Ejendommene bag NAV i de supplerende slides: ejendomsfondenes "
+                  "ejendomme i hver rapport med værdigrundlag, hele fondens værdier."),
     ("Valutakurser", "Alle DKK-kurser, rapporten har brugt."),
     ("Stamdata", "Geografi, investeringsstrategi, løbetid og forvalter pr. fond."),
     ("Dokumenter", "Alle kildedokumenter med type, periode, godkendelse og link til PDF'en; "
@@ -772,9 +979,11 @@ def skriv(r):
     _tilsagn(wb, r, kilder)
     irr_blokke = _irr(wb, r)
     _irr_dkk(wb, r)
+    _pme(wb, r)
     _noegletal(wb, r, kilder, ks, nav_rad, irr_blokke)
     _vaerdibro(wb, r)
     _udvikling(wb, r, ks, nav_rad)
+    _regnskabstal(wb, r)
     _beholdninger(wb, r, kilder)
     _vaerdibevaegelser(wb, r)
     _eksponering(wb, r, kilder, "brancher")
@@ -784,6 +993,8 @@ def skriv(r):
     _stroemme_pr_aar(wb, r)
     _kaldstempo(wb, r)
     _eksponering_over_tid(wb, r)
+    _prognose(wb, r)
+    _ejendomme(wb, r, kilder)
     _valutakurser(wb, r)
     _stamdata(wb, r)
     _laes_mig(wb, r, [(n, t) for n, t in FANER if n in wb.sheetnames])

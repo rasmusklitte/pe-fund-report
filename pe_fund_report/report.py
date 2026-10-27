@@ -131,13 +131,21 @@ def _byg_supplerende(r, master=None):
     s = _ny_slide(prs, L_FORSIDE)
     _saet_ph(s, 0, f"{r['navn']} – supplerende slides")
     _saet_ph(s, 1, f"Slides uden for porteføljerapporten pr. {r['as_of']:%d.%m.%Y}")
+    slides.regnskabstal(prs, r, "kvartal")      # bevægelsesnoten til investors regnskab
+    slides.regnskabstal(prs, r, "aar")
     slides.likviditet(prs, r)           # samlede investeringer uden ejendomsfondene
+    slides.pme_portefoelje(prs, r)      # porteføljen mod indekskontoen i ACWI
+    slides.pme_fonde(prs, r)            # hver fonds IRR mod samme cash flows i ACWI
     slides.aarlige_stroemme(prs, r)     # kald og udlodninger pr. år og fond
     slides.tvpi_over_tid(prs, r)        # TVPI og DPI pr. kvartal, én pr. fond
     slides.kaldstempo(prs, r)           # resttilsagn og kaldene de seneste 12 mdr.
     slides.eksponering_over_tid(prs, r)     # kald, resttilsagn og NAV + resttilsagn pr. kvartal
+    slides.prognose(prs, r)                 # forventede kald og udlodninger pr. år
+    slides.prognose_nav(prs, r)             # forventet NAV og resttilsagn pr. år
+    slides.prognose_pr_fond(prs, r)         # prognosen pr. fond og profilerne bag den
     slides.bevaegelser_i_dybden(prs, r)     # de tre største værdibevægelser nærmere
     slides.koncentration(prs, r)            # de største positioner: koncentration og risiko
+    slides.ejendomme_i_dybden(prs, r)       # ejendomsfondenes ejendomme over tid
     slides.lange_tilsagn(prs, r)
     slides.fordeling(prs, r, "geografi", "Geografisk fordeling efter tilsagn")
     slides.brancher(prs, r)             # cirkeldiagrammerne
@@ -147,7 +155,7 @@ def _byg_supplerende(r, master=None):
 
     s = _ny_slide(prs, L_SKILLE[2])
     _saet_ph(s, 0, "Appendiks")
-    slides.definitioner(prs, r)
+    slides.definitioner(prs, r, supplerende=True)
     _ny_slide(prs, L_SLUT)
     slides.sidefod(prs, r["navn"])
     return prs

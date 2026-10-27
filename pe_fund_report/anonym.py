@@ -161,6 +161,8 @@ def anonymiser(r, skala):
         f.pop("kilder", None)
         f.pop("aleta", None)        # Aleta er investorens eget system og røber investoren
         f.pop("aleta_kontrol", None)
+        # hele fondens NAV over for investors NAV giver ejerandelen tilbage
+        f.pop("ejendomsforloeb", None)
         _fjern_identitet(f)
         f["manager"] = nv.forvaltere.get(rigtig.get("manager"))
     pseudonymer = {n.lower() for n in [INVESTOR, *nv.kort.values()]}

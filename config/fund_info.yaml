@@ -22,6 +22,9 @@
 # virksomheder     -> pr. porteføljeselskab. Nøglen skal matche "name" i rpt.v_portfolio_holding
 #                     præcis. beskrivelse/ejerandel/stemmer er alle valgfrie; ejerandel og
 #                     stemmer angives som andel (0,58 = 58 %). Vises på virksomhedsprofilerne.
+# prognose         -> fondens afvigelser fra sin profil i config/cashflow_profiler.yaml, fx
+#                     prognose: {profil: Secondaries, bow: 1.2}. Felterne er profilens
+#                     (kaldsrater, kald_til_aar, vaekst, bow, udbytte, loebetid_aar).
 
 CATACAP3:
   status: ok

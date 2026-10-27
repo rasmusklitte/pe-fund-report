@@ -103,8 +103,8 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   `report._byg_supplerende()`, written on every build next to the report as
   `<deck>_supplerende_slides.pptx` (named from the intended path, not a `_v2`; skip with
   `--uden-supplerende`; anonymized too, and leak-checked with the report before either is
-  saved; no Excel of its own). It holds a cover, *Samlede investeringer* without the property
-  funds (`slides.likviditet`, below), the three transaction slides (below), *Lange tilsagn*, the geography-by-commitment
+  saved; no Excel of its own). It holds a cover, *Regnskabstal* (below), *Samlede investeringer* without the property
+  funds (`slides.likviditet`, below), *Porteføljen mod markedet* and *Fondene mod markedet* (PME, below), the three transaction slides (below), the cash flow forecast (below), *Lange tilsagn*, the geography-by-commitment
   slide (`fordeling(..., "geografi", ...)`; its data also feeds the executive summary's
   fallback), the pies *Branchefordeling* / *Geografisk eksponering* (`slides.brancher` /
   `regioner`), the two "ejendomme for sig" treemaps (`branchekort_ejendomme` /
@@ -112,6 +112,18 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   *Definitioner* and the end slide. When a
   slide is removed from the report, move its call here rather than only commenting it out.
   Client notes in the report must not refer to these pages by name.
+- *Regnskabstal – kvartalet* / *– år til dato* (`slides.regnskabstal(prs, r, periode)`, first
+  in the supplerende deck; investors asked for figures for their own accounts): the movement
+  note per fund in **t.DKK** (`slides.tusinde`; fees of a few thousand would read -0,0 in mio.):
+  NAV primo + indbetalt + udloddet (negative) + værdiændring + valutakursændring = NAV ultimo,
+  with »heraf gebyrer« (`data.GEBYRKONTI`, CA210–230) and »heraf carry« (CA400) in light
+  italics, and resttilsagn as the contingent liability. Data from `data.regnskabstal()` (pure,
+  `r["regnskabstal"]`) over `f["udvikling"]` in DKK, so it agrees with *Ændringer pr. fond*;
+  fees and carry from `data.omkostninger()` over the capital account (ITD difference, else
+  YTD; `None`, shown n/a, when the GP doesn't split, e.g. only CA290), converted at the
+  report-date rate like the value change. Notes only when they occur: a primo NAV the GP has
+  restated (`nav_rapporteret` ≠ `nav`), withholding tax (CF280) in the period on the
+  distribution cell. In Q1 there is one slide. Excel sheet *Regnskabstal* with a check column.
 - *Samlede investeringer* (`slides.likviditet`, modelled on a Hewema page the user supplied): the
   portfolio **without the property funds** (`segment == "Ejendomme"`, `data.LIKVIDITET_UDEN`:
   they are evergreen and drag the liquidity picture; the user's choice, also for the five figures
@@ -200,6 +212,55 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   a fund without look-through uses its own NAV history (`_fondsforloeb`). Everything is at the
   report-date rate, so the bars carry no FX. Company descriptions come from `f["virksomheder"]`
   at draw time, so the anonymized deck has none. No Excel sheet.
+  Then *<fund> – ejendommene bag NAV* (`slides.ejendomme_i_dybden`, the user's request: HOME
+  and its properties; one slide per property fund with property lines, today only Home.Earth;
+  CRED has none). It is the whole fund in the fund's currency, from `data.ejendomsforloeb()` (pure) in
+  `f["ejendomsforloeb"]`, over `data._ejendomshistorik()`, which calls `_ejendomme` for every
+  holdings report (with the fund metrics `GROSS_ASSET_VALUE`, `ENTITY_VALUE`, `NET_DEBT`, `CASH`,
+  `FUND_NAV`, `NAV_PER_UNIT`): tiles (the GP's GAV, fondens NAV, belåningsgrad = net debt / GAV
+  — NAV/GAV without net debt — NAV per unit over 12 months, the investor's share); the
+  properties per report as stacked columns with the fund's NAV and the net debt as lines
+  (`_linjeplot`); a table of today's properties with stage (`data.ejendomsstadie`, from the
+  largest value basis: Udlejning / Under opførelse / Projekt), value basis, Δ against the report
+  a year earlier (»Ny« if absent) and share of GAV, then the bridge `slides._ejendomsbro`: GAV +
+  Selskabsværdi (PEV) − Nettogæld = the fund's NAV (a rest beyond `ED_REST` as »Øvrige poster«;
+  without PEV/net debt one row *Gæld m.m., netto*, NAV − GAV). When the properties don't sum to
+  the GP's GAV once rounded, a note says it is rounding. Quarters the GP did not report are named
+  in the note. Debt per property and rent are only in the GP's PDF, so they are not shown (the
+  user's choice: database only). Dropped in the
+  anonymized deck: the whole fund's NAV next to the investor's gives the ownership back. Excel
+  sheet *Ejendomme* (`f["kilder"]["ejendomme"]`: the properties and the fund metrics in
+  `data.EJENDOMSFAKTA` per report).
+- **Cash flow forecast** (three slides in the supplerende deck after *Kapitalkald, resttilsagn og
+  eksponering over tid*, the user's request; profile parameters from config, three scenarios,
+  supplerende deck + Excel first). The model is Takahashi–Alexander (Yale), pure in
+  `prognose.py`: per fund, quarter by quarter from the report date in the fund's currency,
+  calls = resttilsagn at the start of the fund's year of life × that year's `kaldsrater` entry,
+  spread evenly over the year and stopping at `kald_til_aar` (what is left is never called:
+  »Ikke kaldt«; a 100 % rate would call everything at once, far above the actual pace on
+  *Kaldstempo*); NAV grows by `vaekst`; distributions = NAV × max(`udbytte`, (age / life)^`bow`),
+  everything at the end of the life; evergreen funds only pay `udbytte`. Age runs from the
+  first call (`data._foerste_kald`, else mid-vintage), life is `f["loebetid_aar"]` (term +
+  extensions, `data.loebetid_aar`) or the profile's `loebetid_aar`. Profiles live in
+  `config/cashflow_profiler.yaml` (`paths.PROGNOSE`, `data.prognoseprofiler()`), one per
+  segment (`data.segment()`'s text, else `standard`), with `horisont_aar` and `scenarier`
+  (basis first and unchanged; `svag`/`staerk` add to `vaekst` and multiply `bow`, `udbytte`,
+  `kaldsrater`). A fund can deviate with `prognose: {profil: ..., bow: ...}` in
+  `fund_info.yaml` (`f["prognose_afvigelser"]`; an unknown field or profile raises).
+  `data.prognose_paa_fondene()` sets `f["prognose"]` and returns `r["prognose"]`: the
+  portfolio per year in DKK at the report-date rate (flat FX, said in the note), the next
+  12 months / 3 years, pooled TVPI at the end, per-fund lines and the profiles used.
+  *Forventede kapitalkald og udlodninger* (`slides.prognose`): five tiles, calls below zero and
+  distributions above stacked per fund in `FOND_FARVER` with net per scenario as lines (other
+  scenarios dashed, `_linjeplot(..., stiplet=True)`), legend at the bottom. *Forventet NAV og
+  resttilsagn* (`slides.prognose_nav`, the user split it off): tiles with NAV per scenario and
+  resttilsagn at the end of year `PG_FREM` and what is never called, over NAV + resttilsagn per
+  year end as areas with the other scenarios' NAV dashed. *Prognose pr. fond*
+  (`slides.prognose_pr_fond`): the base scenario per fund for the first `PG_AAR` years, »Ikke
+  kaldt« and TVPI at the end, then the profiles' parameters. Excel sheets *Prognose* (every
+  fund × scenario × quarter, the chain as formulas, control against the report's NAV) and
+  *Prognose pr. år* (SUMIFS back to it, control of net). Terms in `DEFINITIONER`
+  (»Cash flow-prognose«, »Prognoseprofil«, in `KUN_SUPPLERENDE`).
 - *Eksponering* (`slides.valutafordeling`, after *Ændringer pr. fond*): three doughnuts
   (`slides._ring`) in a near-equilateral triangle in the middle of the slide (exposure on top,
   NAV and resttilsagn below, `VF_BASIS` apart; a true equilateral would make the lower rings
@@ -286,7 +347,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   the slide says "foreløbig klassifikation" and `byg()` warns. The geography pie has one slice per
   region, in the first colour of its family (`GEO_FARVER`). Excel sheets *Brancher* and *Geografi*
   recompute each line as share × NAV. The method is in the slides' source notes, not in
-  `DEFINITIONER`, which is full. The geography slides (pie, treemaps, feeder pages) show only the
+  `DEFINITIONER`. The geography slides (pie, treemaps, feeder pages) show only the
   three regions: `slides._kun_regioner()` empties `under`, so the subregions live on only in the
   data and the Excel *Geografi* sheet. Don't alias SQL columns `top` (reserved word in T-SQL). The
   region codes are the database's (`NORTH_AMERICA`, `EUROPE`, `ROW`); a new code in
@@ -380,7 +441,47 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   (`valuta`: the fund-currency value change agrees with the return; `dietz`: a negative capital
   base), and `slides._fortegnsnote` footnotes the return cell.
 - The *Definitioner* slide before the end slide prints `slides.DEFINITIONER`, plain text that
-  describes how `data.py` calculates each figure. Change a calculation, update its definition.
+  describes how `data.py` calculates each figure. Change a calculation, update its definition. When
+  the list no longer fits one slide, `_def_sider()` splits it evenly over the fewest slides that
+  fit (»Definitioner (fortsat)«); `definitioner()` returns the slides. The report's page lists only terms the
+  report shows: terms used only in the supplerende deck (KS-PME, Direct Alpha, Indekskonto, Gebyrer) are in
+  `slides.KUN_SUPPLERENDE` and printed only with `definitioner(..., supplerende=True)`.
+- **PME** (two slides in the supplerende deck after *Samlede investeringer*, the user's
+  choice; redesigned with free hands). Everything rests on one idea, the *indekskonto*: every
+  call buys the benchmark, every distribution sells it, so the account has exactly the fund's
+  cash flows. *Porteføljen mod markedet* (`slides.pme_portefoelje`): five figures (Merværdi mod
+  ACWI = NAV − the account's value, footnoted as such, KS-PME, Direct Alpha, IRR, IRR med ACWI) over one
+  native line chart per quarter end: NAV, the index account and net paid-in (dashed), from
+  `r["pme"]["forloeb"]` (`data.pme_forloeb`; NAV via `_stilling` at the quarter-end rate, the
+  last quarter the report's own `nav_dkk`). *Fondene mod markedet* (`slides.pme_fonde`): one
+  row per fund sorted by Direct Alpha (no-PME funds last, portfolio in DKK at the bottom), a
+  dumbbell of the fund's IRR (olive above / red below) against the account's IRR (hollow dot)
+  on one axis in 5 %-point steps, then KS-PME, Direct Alpha and »Merværdi mod ACWI« with the
+  unit in every cell (»+21,6 mio. DKK«, `_mio_valuta`; the user asked that the unit be clear)
+  and the method in the column's footnote (`PME_MERVAERDI`). When the index moved ≥
+  `PME_KVARTAL_NOTE` (5 %) in DKK in the last quarter, both slides say so (GP valuations lag the market; `r["pme"]["indeks_kvartal"]`).
+  One benchmark for all funds for now, the iShares MSCI ACWI ETF (`ACWI`,
+  USD; `indeks.BENCHMARK_*`; segment-specific benchmarks are to come, the user's plan). The
+  levels are yfinance's dividend-adjusted closes, cached in `data/indeks/ACWI.csv` (market data,
+  kept in git so a report rebuilds with the same figures): `indeks.indeksserie()` calls yfinance
+  only when the file ends more than `HELLIGDAGE` days before the latest quarter end that has
+  passed, and then writes the history up to that quarter end and no further, so the next fetch
+  comes only after the next quarter end (the user's rule: don't overload yfinance). A failed
+  fetch uses the file with an `ADVARSEL`; without a file there is no PME and the slides are
+  skipped. The maths is pure in `pme.py`: `opslag` (last level on or before a date, `None` after
+  the series by more than its tolerance), `omregnet`, `indekskonto` (the account's value per
+  date) and `pme(flows, navs, slut, indeks)`: every flow compounded by I_T/I_t, KS-PME =
+  compounded positive / compounded negative, Direct Alpha = `data.xirr` over them, `merverdi`
+  (sum of the compounded flows incl. NAV), `indeks_nav` and `indeks_irr` (Long-Nickels; `None`
+  when distributions have emptied the account). Per fund (`data.pme_paa_fondene`, `f["pme"]`,
+  `n["ks_pme"]`/`n["direct_alpha"]`) over `irr_flows` to its NAV date in the fund's currency,
+  the index converted with the Nationalbanken rate on each date (`data._kursserie`, one query
+  per currency); the portfolio (`data.pme_portefoelje`, `r["pme"]`) over the DKK flows of
+  `irr_dkk()` to the report date with the index in DKK. A fund whose flows start before the
+  index (CRED, 2005; ACWI starts 28.03.2008) gets `n/a` and is left out of the portfolio figures,
+  whose IRR is then recomputed on the same funds; on the funds slide that is said once, in the
+  row's footnote. Excel sheets *PME* (the compounded flows as formulas, KS-PME and Direct Alpha
+  with XIRR, the report's figure as the starting guess, as controls) and *PME over tid*.
 - `deck.py` + `style.py` are the shared PPIM house-style modules, **kept byte-identical to the
   other PE repos** (`pe-analysis`, `pe-quarterly-report`, …). They are excluded from ruff in
   `pyproject.toml`. Do not refactor them here; port a change to the other repos or not at all.

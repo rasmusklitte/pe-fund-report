@@ -17,6 +17,7 @@ dependencies = [
     "python-pptx",
     "PyYAML",
     "SQLAlchemy>=2",
+    "yfinance",
 ]
 
 [project.optional-dependencies]

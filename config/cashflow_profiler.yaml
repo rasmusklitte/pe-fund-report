@@ -1,0 +1,87 @@
+# Profiler til cash flow-prognosen (pe_fund_report/prognose.py), én pr. segment, som
+# data.segment() skriver det. Modellen er Takahashi og Alexander (Yale, 2002):
+#
+#   kald        = resttilsagn ved årets start × kaldsrate(alder), fordelt jævnt over året,
+#                 indtil kald_til_aar
+#   NAV*        = NAV × (1 + vaekst)          (pr. kvartal: (1 + vaekst)^¼)
+#   udlodning   = NAV* × max(udbytte, (alder / løbetid)^bow), hele NAV ved løbetidens udgang
+#   NAV         = NAV* + kald - udlodning
+#
+# kaldsrater    -> andelen af resttilsagnet, der kaldes i fondens 1., 2., 3. ... leveår (fra
+#                  første kapitalkald); det sidste tal gælder for årene efter.
+# kald_til_aar  -> fondens alder, hvorefter intet kaldes (investeringsperioden plus
+#                  opfølgningsinvesteringer); det, der står tilbage, kaldes aldrig. Udeladt:
+#                  til løbetidens udgang.
+# vaekst        -> NAV's årlige vækst før udlodninger (brøk: 0.12 = 12 %).
+# bow           -> hvor sent udlodningerne kommer: højere = senere.
+# udbytte       -> mindste årlige udlodning i forhold til NAV (renter, husleje); evergreen-
+#                  fondene udlodder kun dette.
+# loebetid_aar  -> bruges kun, når databasen ikke har løbetiden (term_years + extension_years).
+#
+# En fond kan afvige fra sin profil i fund_info.yaml:
+#   PPPE2:
+#     prognose: {profil: Secondaries, bow: 1.2}
+# Profilerne er markedsnære standardantagelser, ikke forvalternes egne skøn.
+
+horisont_aar: 10          # prognosen løber til 31.12. i rapportåret + horisont_aar
+
+profiler:
+  Private equity:
+    kaldsrater: [0.25, 0.33, 0.40, 0.40, 0.40]
+    kald_til_aar: 8
+    vaekst: 0.12
+    bow: 2.5
+    udbytte: 0.0
+    loebetid_aar: 12
+  Fund of funds:
+    kaldsrater: [0.15, 0.20, 0.25, 0.30, 0.30]
+    kald_til_aar: 10
+    vaekst: 0.11
+    bow: 2.5
+    udbytte: 0.0
+    loebetid_aar: 13
+  Secondaries:
+    kaldsrater: [0.40, 0.45, 0.45]
+    kald_til_aar: 6
+    vaekst: 0.11
+    bow: 1.5
+    udbytte: 0.05
+    loebetid_aar: 10
+  Private credit:
+    kaldsrater: [0.30, 0.40, 0.40]
+    kald_til_aar: 6
+    vaekst: 0.08
+    bow: 1.5
+    udbytte: 0.06
+    loebetid_aar: 8
+  Ejendomme:              # evergreen: ingen afvikling, kun den løbende udlodning
+    kaldsrater: [0.50]
+    vaekst: 0.06
+    bow: 2.5
+    udbytte: 0.04
+    loebetid_aar: 15
+  standard:               # segmenter uden egen profil
+    kaldsrater: [0.25, 0.33, 0.40, 0.40, 0.40]
+    kald_til_aar: 8
+    vaekst: 0.10
+    bow: 2.5
+    udbytte: 0.0
+    loebetid_aar: 12
+
+# Scenarierne ændrer basisprofilen: vaekst lægges til (procentpoint som brøk), bow, udbytte
+# og kaldsrater ganges (kaldsraterne højst 1). Basis står først og ændrer intet.
+scenarier:
+  basis:
+    navn: Basis
+  svag:
+    navn: Svagt marked     # lavere vækst og senere udlodninger; kaldene som i basis
+    vaekst: -0.06
+    bow: 1.3
+    udbytte: 0.75
+    kaldsrater: 1.0
+  staerk:
+    navn: Stærkt marked
+    vaekst: 0.04
+    bow: 0.8
+    udbytte: 1.0
+    kaldsrater: 1.0

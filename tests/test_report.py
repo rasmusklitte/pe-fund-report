@@ -3,8 +3,9 @@ from datetime import date
 
 from pe_fund_report import report, slides
 
-SUPPLERENDE = ["likviditet", "aarlige_stroemme", "tvpi_over_tid", "kaldstempo",
-               "eksponering_over_tid", "bevaegelser_i_dybden", "koncentration", "lange_tilsagn",
+SUPPLERENDE = ["regnskabstal", "likviditet", "pme_portefoelje", "pme_fonde", "aarlige_stroemme", "tvpi_over_tid", "kaldstempo",
+               "eksponering_over_tid", "prognose", "prognose_nav", "prognose_pr_fond", "bevaegelser_i_dybden", "koncentration",
+               "ejendomme_i_dybden", "lange_tilsagn",
                "fordeling", "brancher", "regioner", "branchekort_ejendomme",
                "regionskort_ejendomme", "definitioner"]
 
@@ -15,10 +16,12 @@ def test_supplerende_slides_rummer_dem_uden_for_rapporten(monkeypatch):
         monkeypatch.setattr(slides, navn,
                             lambda prs, r, *a, navn=navn, **k: kaldt.append((navn, a, k)))
     prs = report._byg_supplerende(dict(navn="Motortramp", as_of=date(2026, 6, 30)))
-    assert [navn for navn, *_ in kaldt] == SUPPLERENDE
+    # regnskabstallene for kvartalet og for året
+    assert [navn for navn, *_ in kaldt] == ["regnskabstal"] + SUPPLERENDE
+    assert kaldt[:2] == [("regnskabstal", ("kvartal",), {}), ("regnskabstal", ("aar",), {})]
     assert ("fordeling", ("geografi", "Geografisk fordeling efter tilsagn"), {}) in kaldt
     # likviditeten uden ejendomsfondene; med dem står i rapporten
-    assert kaldt[0] == ("likviditet", (), {})
+    assert kaldt[2] == ("likviditet", (), {})
     # forside, Appendiks-skilleside og slutside; slidesne selv er erstattet ovenfor
     assert len(prs.slides._sldIdLst) == 3
     forside = [sh.text_frame.text for sh in prs.slides[0].shapes if sh.has_text_frame]

@@ -100,6 +100,14 @@ def test_anonymiser_fjerner_identitet_overalt():
     assert "dokumenter" not in ny and "kursopslag" not in ny
 
 
+def test_anonymiser_fjerner_ejendomsforloebet():
+    # hele fondens NAV ved siden af investors ville give ejerandelen tilbage
+    r = _rapport()
+    r["fonde"][0]["ejendomsforloeb"] = dict(fonds_nav=4e8, ejendomme=[dict(navn="Nærheden")])
+    ny, _ = anonym.anonymiser(r, 2.0)
+    assert "ejendomsforloeb" not in ny["fonde"][0]
+
+
 def test_anonymiser_skalerer_beloeb_i_noter():
     ny, _ = anonym.anonymiser(_rapport(), 2.0)
     note = ny["fonde"][0]["noter"][0]

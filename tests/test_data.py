@@ -629,6 +629,70 @@ def test_fortegnsafvigelser_skelner_valuta_fra_dietz():
                                                ("Dietz", "aar", "dietz")]
 
 
+def _ka(*linjer):
+    return pd.DataFrame([dict(period_end=d, basis=b, account_code=k, amount=a)
+                         for d, b, k, a in linjer],
+                        columns=["period_end", "basis", "account_code", "amount"])
+
+
+def test_omkostninger_fra_itd_ytd_og_uden_opdeling():
+    ultimo, q1, aar = date(2026, 6, 30), date(2026, 3, 31), date(2025, 12, 31)
+    itd = _ka((aar, "ITD", "CA210", -100.0), (aar, "ITD", "CA220", -5.0),
+              (aar, "ITD", "CA400", -20.0), (ultimo, "ITD", "CA210", -130.0),
+              (ultimo, "ITD", "CA220", -6.0), (ultimo, "ITD", "CA400", -50.0))
+    assert data.omkostninger(itd, aar, ultimo) == dict(gebyrer=-31.0, carry=-30.0)
+    # kun YTD (CataCap): året er YTD, kvartalet YTD ultimo minus YTD primo
+    ytd = _ka((q1, "YTD", "CA400", 45.0), (ultimo, "YTD", "CA400", -345.0))
+    assert data.omkostninger(ytd, aar, ultimo) == dict(gebyrer=None, carry=-345.0)
+    assert data.omkostninger(ytd, q1, ultimo) == dict(gebyrer=None, carry=-390.0)
+    # resultatet er ikke opdelt (Home.Earth)
+    assert data.omkostninger(_ka((aar, "ITD", "CA290", 5.0), (ultimo, "ITD", "CA290", 9.0)),
+                             aar, ultimo) == dict(gebyrer=None, carry=None)
+    # ny fond uden kapitalkonto før primo: ITD ultimo er hele bevægelsen
+    assert data.omkostninger(_ka((ultimo, "ITD", "CA210", -8.0)), aar, ultimo)["gebyrer"] == -8.0
+    # ITD ultimo, men ingen opgørelse på primodatoen: kan ikke opgøres
+    assert data.omkostninger(_ka((date(2025, 9, 30), "ITD", "CA210", -1.0),
+                                 (ultimo, "ITD", "CA210", -8.0)), aar, ultimo)["gebyrer"] is None
+
+
+def _rt_fond(navn, valuta, ka, skat=(), rettet=None):
+    f = _udv_fond(navn, valuta, 100.0, 10.0, 120.0)
+    p = f["udvikling"]["kvartal"]["primo_dato"]
+    f.update(nav_dato=date(2026, 6, 30), n=dict(resttilsagn_dkk=40.0), kilder=dict(
+        kapitalkonto=ka,
+        cash_flows=pd.DataFrame(dict(value_date=[d for d, _ in skat] or [date(2026, 5, 1)],
+                                     flow_class=["WITHHOLDING_TAX"] * len(skat) or ["DISTRIBUTION"],
+                                     amount=[a for _, a in skat] or [1.0])),
+        nav=pd.DataFrame(dict(period_end=[p], nav=[100.0],
+                              nav_rapporteret=[rettet if rettet is not None else 100.0]))))
+    return f
+
+
+def test_regnskabstal_bevaegelsesnote_pr_fond_og_i_alt():
+    q1, ultimo = date(2026, 3, 31), date(2026, 6, 30)
+    kurser = {q1: 7.0, date(2026, 5, 16): 7.2, date(2026, 5, 20): 7.3, ultimo: 7.5}
+    kurs = lambda v, d: 1.0 if v == "DKK" else kurser.get(d)
+    a = _rt_fond("A", "DKK", _ka((q1, "ITD", "CA210", -2.0), (ultimo, "ITD", "CA210", -3.0),
+                                 (q1, "ITD", "CA400", 0.0), (ultimo, "ITD", "CA400", -4.0)),
+                 rettet=98.0)
+    b = _rt_fond("B", "EUR", _ka((ultimo, "ITD", "CA290", 1.0)),
+                 skat=[(date(2026, 5, 20), -2.0)])
+    data.omregn_udvikling_til_dkk([a, b], kurs)
+    rt = data.regnskabstal([a, b], kurs)["kvartal"]
+    fa, fb = rt["fonde"]
+    for x in (fa, fb, rt["i_alt"]):
+        assert x["primo"] + x["tilgang"] + x["afgang"] + x["vaerdi"] + x["kurs"] == \
+            pytest.approx(x["ultimo"])
+    assert (fa["gebyrer"], fa["carry"], fa["primo_rapporteret"]) == (-1.0, -4.0, 98.0)
+    assert (fb["gebyrer"], fb["carry"], fb["primo_rapporteret"]) == (None, None, None)
+    assert fb["kildeskat"] == pytest.approx(2.0 * 7.3) and fa["kildeskat"] == 0
+    assert rt["i_alt"]["gebyrer"] == -1.0 and rt["i_alt"]["resttilsagn"] == 80.0
+    assert rt["udeladte_gebyrer"] == ["B"] and rt["udeladte_carry"] == ["B"]
+    # uden kurs ingen regnskabstal for perioden
+    assert data.regnskabstal([a, b], lambda v, d: 1.0 if v == "DKK" else None) == \
+        {"kvartal": None}
+
+
 def test_portefoelje_udvikling_er_none_uden_kurs():
     a = _udv_fond("A", "USD", 10.0, 0.0, 11.0)
     data.omregn_udvikling_til_dkk([a], lambda v, d: None)
@@ -1338,3 +1402,45 @@ def test_koncentration_giver_forloeb_foelsomhed_og_andel_i_fonden():
     assert (c["stoerste"], c["top5"], c["store"]) == (pytest.approx(0.275),
                                                       pytest.approx(0.525), 3)
     assert data.koncentration([], None, {}, {}, []) is None
+
+
+def test_ejendomsstadie_efter_stoerste_vaerdigrundlag():
+    assert data.ejendomsstadie(["property based on third party valuation",
+                                "assets measured at cost"]) == "Udlejning"
+    assert data.ejendomsstadie(["project costs to date", "development profit"]) == "Under opførelse"
+    assert data.ejendomsstadie(["acquisition costs to date"]) == "Projekt"
+    assert data.ejendomsstadie(["valued at cost"]) == "Projekt"
+    assert data.ejendomsstadie([]) == "Projekt"
+
+
+def _ejd_rapport(dato, ejendomme, nav, pr_andel):
+    return dict(dato=dato, fakta=dict(FUND_NAV=nav, NAV_PER_UNIT=pr_andel), raekker=[
+        dict(navn=n, dagsvaerdi=v, sektor="Ekstern vurdering", grundlag_koder=[k])
+        for n, v, k in ejendomme])
+
+
+def test_ejendomsforloeb_sammenligner_et_aar_tilbage_og_finder_huller():
+    ekst, proj = "property based on third party valuation", "project costs to date"
+    e = data.ejendomsforloeb([
+        _ejd_rapport(date(2024, 6, 30), [("A", 50.0, ekst)], 30.0, 0.5),
+        _ejd_rapport(date(2025, 6, 30), [("A", 60.0, ekst), ("B", 10.0, proj)], 40.0, 0.6),
+        _ejd_rapport(date(2025, 9, 30), [("A", 62.0, ekst), ("B", 20.0, proj)], 45.0, 0.62),
+        _ejd_rapport(date(2026, 6, 30), [("A", 70.0, ekst), ("B", 25.0, proj),
+                                          ("C", 5.0, "valued at cost")], 50.0, 0.66)])
+    assert e["gav"] == 100.0 and e["fonds_nav"] == 50.0
+    assert e["sammenligning_dato"] == date(2025, 6, 30) and e["helt_aar"]
+    assert (e["gav_12m"], e["fonds_nav_12m"], e["nav_pr_andel_12m"]) == (70.0, 40.0, 0.6)
+    a, b, c = e["ejendomme"]
+    assert (a["vaerdi_12m"], a["stadie"], a["andel_af_gav"]) == (60.0, "Udlejning", 0.7)
+    assert b["stadie"] == "Under opførelse"
+    assert c["vaerdi_12m"] is None and c["stadie"] == "Projekt"     # ny siden
+    assert e["huller"] == [date(2024, 9, 30), date(2024, 12, 31), date(2025, 3, 31),
+                           date(2025, 12, 31), date(2026, 3, 31)]
+    assert [q["gav"] for q in e["kvartaler"]] == [50.0, 70.0, 82.0, 100.0]
+
+
+def test_ejendomsforloeb_uden_rapport_et_aar_tilbage():
+    e = data.ejendomsforloeb([_ejd_rapport(date(2026, 6, 30), [("A", 5.0, "x")], 3.0, None)])
+    assert e["sammenligning_dato"] is None and not e["helt_aar"]
+    assert e["ejendomme"][0]["vaerdi_12m"] is None and e["huller"] == []
+    assert data.ejendomsforloeb([]) is None

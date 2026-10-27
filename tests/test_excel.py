@@ -74,6 +74,7 @@ def _rapport(tmp_path, monkeypatch):
     r["irr_dkk"] = data.irr_dkk([f], lambda v, d: 1.0)
     f["n"].update(tilsagn_dkk=200.0, resttilsagn_dkk=100.0, indbetalt_dkk=100.0, udloddet_dkk=5.0)
     r["likviditet"] = data.likviditet([f], lambda v, d: 1.0, NAV_DATO)
+    r["regnskabstal"] = data.regnskabstal([f], lambda v, d: 1.0)
     return excel.skriv(r)
 
 
@@ -94,6 +95,17 @@ def test_noegletal_er_formler_med_kontrol_mod_kapitalstroemmene(tmp_path, monkey
     kontrol = ws.cell(2, _kolonne(ws, "Kontrol: indbetalt iflg. kapitalkald")).value
     assert "SUMIFS('Kapitalstrømme'!$I:$I" in kontrol and '"CONTRIBUTION"' in kontrol
     assert ws.cell(2, _kolonne(ws, "Kontrol: IRR med XIRR")).value.startswith("=IFERROR(XIRR(IRR!")
+
+
+def test_regnskabstal_har_kontrol_af_bevaegelserne(tmp_path, monkeypatch):
+    ws = _rapport(tmp_path, monkeypatch)["Regnskabstal"]
+    assert [ws.cell(r, 3).value for r in range(2, ws.max_row + 1)] == \
+        ["Kvartalet", "Kvartalet", "År til dato", "År til dato"]
+    k = _kolonne(ws, "Kontrol: NAV ultimo - bevægelserne")
+    assert ws.cell(2, k).value.startswith("=") and "-" in ws.cell(2, k).value
+    assert ws.cell(3, _kolonne(ws, "NAV ultimo")).value == "=SUM(M2:M2)"
+    assert ws.cell(4, _kolonne(ws, "NAV primo")).value == 100.0       # år til dato fra 31.12
+    assert ws.cell(2, _kolonne(ws, "Heraf gebyrer")).value is None   # ikke oplyst
 
 
 def test_irr_i_dkk_har_omregning_som_formel_og_xirr_kontrol(tmp_path, monkeypatch):
@@ -136,3 +148,26 @@ def test_likviditet_har_kvartaler_og_aarsskifter_med_formler(tmp_path, monkeypat
     assert ws.cell(3, _kolonne(ws, "Akkumuleret netto DKK")).value == "=F2+E3"
     aar = next(rad for rad in range(2, ws.max_row + 1) if ws.cell(rad, 1).value == "Årsskifte")
     assert ws.cell(aar, _kolonne(ws, "TVPI")).value == f'=IFERROR((K{aar}+L{aar})/J{aar},"")'
+
+
+def test_prognose_er_en_kaede_af_formler_med_kontrol():
+    from openpyxl import Workbook
+    from test_prognose import KURSER, OPSAETNING, T, _fonde
+    fonde = _fonde()
+    r = dict(fonde=fonde, kurser=KURSER,
+             prognose=data.prognose_paa_fondene(fonde, KURSER, T, OPSAETNING))
+    wb = Workbook()
+    excel._prognose(wb, r)
+    ws = wb["Prognose"]
+    k = {c.value: c.column_letter for c in ws[1]}
+    # første kvartal starter i rapportens tal, de næste i kvartalet før
+    assert ws[f"{k['Resttilsagn primo']}2"].value == 40.0
+    assert ws[f"{k['Resttilsagn primo']}3"].value == f"={k['Resttilsagn ultimo']}2"
+    assert ws[f"{k['NAV primo']}3"].value == f"={k['NAV ultimo']}2"
+    assert ws[f"{k['NAV ultimo']}2"].value == (f"={k['NAV primo']}2*{k['Vækstfaktor']}2"
+                                               f"+{k['Kald']}2-{k['Udlodning']}2")
+    # fondene i hvert scenarie efter hinanden
+    assert ws.max_row - 1 == 2 * 2 * 42
+    pr_aar = wb["Prognose pr. år"]
+    assert pr_aar.cell(2, 1).value == "Basis" and pr_aar.cell(2, 2).value == 2026
+    assert pr_aar.cell(2, 3).value.startswith("=SUMIFS('Prognose'!")

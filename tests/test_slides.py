@@ -491,15 +491,16 @@ def test_fordeling_fortsaetter_paa_ny_slide_naar_tabellen_er_for_lang():
 
 
 def test_definitioner_viser_alle_begreber_inden_for_fladen():
-    s = slides.definitioner(_prs(), _rapport([]))
-    t = _tekster(s)
+    sider = slides.definitioner(_prs(), _rapport([]), supplerende=True)
+    t = [x for s in sider for x in _tekster(s)]
     assert "Definitioner" in t
+    assert ("Definitioner (fortsat)" in t) == (len(sider) > 1)
     for begreb, tekst in slides.DEFINITIONER:
         assert begreb in t and tekst in t, begreb
-    venstre, hoejre = slides._def_halvdele(slides.DEFINITIONER)
-    for spalte in (venstre, hoejre):
-        hoejde = sum(slides._def_hoejde(b, t) + slides.DEF_LUFT for b, t in spalte)
-        assert slides.Y_TOP + hoejde <= slides.Y_NOTER + 0.4     # over Petersen & Partners-linjen
+    for defs in slides._def_sider(slides.DEFINITIONER):
+        for spalte in slides._def_halvdele(defs):
+            hoejde = sum(slides._def_hoejde(b, t) + slides.DEF_LUFT for b, t in spalte)
+            assert slides.Y_TOP + hoejde <= slides.Y_NOTER + 0.4     # over Petersen & Partners-linjen
 
 
 def test_sammendrag_viser_noegletal_hoejdepunkter_og_fordeling():
@@ -616,6 +617,57 @@ def test_aendringer_pr_fond_har_en_raekke_pr_fond_og_i_alt():
     assert raekker[-1][4] == "+1,7"
     assert len(raekker[0]) == 2 + 4 * 2 + 3
     assert raekker[0][4] == "Værdi-\x0bændring¹" and raekker[0][5] == "Afkast²"
+
+
+def _rt_rapport():
+    r = _udv_rapport()
+
+    def linje(navn, valuta, gebyrer, carry, kildeskat=0.0, rettet=None):
+        return dict(fund_name=navn, valuta=valuta, primo=1e7, tilgang=1e6, afgang=-2e5,
+                    vaerdi=5e5, kurs=1e5, ultimo=1.14e7, gebyrer=gebyrer, carry=carry,
+                    resttilsagn=3e6, kildeskat=kildeskat, primo_rapporteret=rettet)
+    linjer = [linje("Alfa Fund I K/S", "DKK", -25_000.0, -40_000.0, rettet=9.9e6),
+              linje("Beta Fund II A/S", "USD", None, None, kildeskat=12_000.0)]
+    i_alt = {k: sum(x[k] or 0 for x in linjer) for k in data.REGNSKABSFELTER}
+    i_alt.update(gebyrer=-25_000.0, carry=-40_000.0)
+    r["regnskabstal"] = {p: dict(fra=r["perioder"][p][0], til=r["perioder"][p][1], fonde=linjer,
+                                 i_alt=i_alt, udeladte_gebyrer=["Beta Fund II A/S"],
+                                 udeladte_carry=["Beta Fund II A/S"])
+                         for p in ("kvartal", "aar")}
+    return r
+
+
+def test_regnskabstal_viser_bevaegelsesnoten_i_tusinder():
+    r = _rt_rapport()
+    s = slides.regnskabstal(_prs(), r, "aar")
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    raekker = [[c.text for c in rk.cells] for rk in tabel.rows]
+    assert raekker[0][6] == "heraf\x0bgebyrer" and raekker[0][-1] == "Resttilsagn"
+    alfa, beta, i_alt = raekker[1], raekker[2], raekker[3]
+    assert alfa[:10] == ["Alfa Fund I", "DKK", "10.000¹", "+1.000", "-200", "+500", "-25", "-40",
+                         "+100", "11.400"]
+    assert beta[4] == "-200²" and beta[6:8] == ["n/a", "n/a"]
+    assert i_alt[6:8] == ["-25³", "-40³"] and i_alt[-1] == "6.000"
+    t = _tekster(s)
+    assert "Regnskabstal – år til dato" in t and "År til dato (2026)" in t
+    noter = next(x for x in t if x.startswith("Kilde"))
+    assert "¹ Forvalteren har rettet NAV primo; oprindeligt rapporteret 9.900." in noter
+    assert "² Kildeskat tilbageholdt af udlodningerne: 12." in noter
+    assert "³ I alt summerer de fonde, der oplyser beløbet." in noter
+    assert "eventualforpligtelse" in noter
+    assert tabel.cell(1, 6).text_frame.paragraphs[0].runs[0].font.italic
+    _indenfor_fladen(s, "Regnskabstal – år til dato")
+
+
+def test_regnskabstal_i_foerste_kvartal_er_en_slide():
+    r = _rt_rapport()
+    assert slides.regnskabstal(_prs(), r, "kvartal") is not None
+    r["perioder"] = data.perioder(date(2026, 3, 31))
+    assert slides.regnskabstal(_prs(), r, "aar") is None
+    s = slides.regnskabstal(_prs(), r, "kvartal")
+    assert "Regnskabstal" in _tekster(s) and "Kvartalet og år til dato (Q1 26)" in _tekster(s)
+    r["regnskabstal"] = {"kvartal": None, "aar": None}
+    assert slides.regnskabstal(_prs(), r, "kvartal") is None
 
 
 def test_aendringer_pr_fond_maerker_afkast_med_modsat_fortegn_og_skiller_perioderne():
@@ -1789,3 +1841,210 @@ def test_koncentration_fliser_og_et_kort_pr_position():
     assert sum("urealiseret gevinst" in x for x in t) == 1
     _indenfor_fladen(s, "Største positioner – koncentration og risiko")
     assert slides.koncentration(_prs(), _udv_rapport()) is None
+
+
+def test_ejendomme_i_dybden_fliser_soejler_og_tabel_ned_til_nav():
+    ekst = "property based on third party valuation"
+    rapporter = [
+        dict(dato=date(2025, 6, 30), fakta=dict(FUND_NAV=40e6, NAV_PER_UNIT=0.6), raekker=[
+            dict(navn="Ejendom A", dagsvaerdi=60e6, sektor="Ekstern vurdering",
+                 grundlag_koder=[ekst])]),
+        dict(dato=date(2026, 6, 30), fakta=dict(FUND_NAV=50e6, NAV_PER_UNIT=0.66), raekker=[
+            dict(navn="Ejendom A", dagsvaerdi=70e6, sektor="Ekstern vurdering",
+                 grundlag_koder=[ekst]),
+            dict(navn="Ejendom B", dagsvaerdi=30e6, sektor="Projektomkostninger",
+                 grundlag_koder=["project costs to date"])])]
+    f = dict(fund_name="Bolig K/S", valuta="EUR", nav_dato=date(2026, 6, 30),
+             n=dict(andel=0.05), ejendomsforloeb=data.ejendomsforloeb(rapporter))
+    r = _rapport([f])
+    s = slides.ejendomme_i_dybden(_prs(), r)[0]
+    t = _tekster(s)
+    assert "Bolig K/S – ejendommene bag NAV" in t
+    for label, v in (("GAV", "100,0"), ("Fondens NAV", "50,0"), ("NAV i % af GAV", "50,0 %"),
+                     ("NAV pr. andel, 12 mdr.", "+10,0 %"),
+                     ("Investor A/Ss andel af NAV", "5,00 %")):
+        assert t[t.index(label) + 1] == v
+    celler = [[c.text for c in rk.cells] for sh in s.shapes if sh.has_table
+              for rk in sh.table.rows]
+    assert celler[1] == ["Ejendom A", "Udlejning", "Ekstern vurdering", "70,0", "+10,0", "70,0 %"]
+    assert celler[2][1] == "Under opførelse" and celler[2][4] == "Ny"
+    assert celler[-3][:5] == ["Ejendomme (GAV)", "", "", "100,0", "+40,0"]
+    assert celler[-2][0] == "Gæld m.m., netto²" and celler[-2][3] == "-50,0"
+    assert celler[-1][:5] == ["Fondens NAV", "", "", "50,0", "+10,0"]
+    diagram = next(sh.chart for sh in s.shapes if sh.has_chart)
+    assert [x.name for p in diagram.plots for x in p.series] == [
+        "Ejendom A", "Ejendom B", "Fondens NAV"]
+    _indenfor_fladen(s, "Bolig K/S – ejendommene bag NAV")
+    assert slides.ejendomme_i_dybden(_prs(), _rapport([dict(f, ejendomsforloeb=None)])) is None
+
+
+def test_ejendomme_i_dybden_med_selskabsvaerdi_og_nettogaeld():
+    ekst = "property based on third party valuation"
+
+    def rapport(dato, a, gav, pev, nd, nav):
+        return dict(dato=dato, raekker=[dict(navn="Ejendom A", dagsvaerdi=a,
+                                             sektor="Ekstern vurdering", grundlag_koder=[ekst])],
+                    fakta=dict(GROSS_ASSET_VALUE=gav, ENTITY_VALUE=pev, NET_DEBT=nd,
+                               CASH=5e6, FUND_NAV=nav, NAV_PER_UNIT=0.7))
+    e = data.ejendomsforloeb([rapport(date(2025, 6, 30), 80e6, 80e6, 10e6, 40e6, 50e6),
+                              rapport(date(2026, 6, 30), 99.96e6, 100e6, 20e6, 60e6, 60e6)])
+    f = dict(fund_name="Bolig K/S", valuta="EUR", nav_dato=date(2026, 6, 30),
+             n=dict(andel=None), ejendomsforloeb=e)
+    s = slides.ejendomme_i_dybden(_prs(), _rapport([f]))[0]
+    t = _tekster(s)
+    assert t[t.index("Belåningsgrad (LTV)¹") + 1] == "60,0 %"
+    assert "Investor A/Ss andel af NAV" not in t
+    celler = [[c.text for c in rk.cells] for sh in s.shapes if sh.has_table
+              for rk in sh.table.rows]
+    # forvalterens GAV; ejendommene summerer til 100,0 også, så ingen afrundingsnote
+    assert [rk[0] for rk in celler[-4:]] == ["Ejendomme (GAV)", "Selskabsværdi (PEV)³",
+                                            "Nettogæld⁴", "Fondens NAV"]
+    assert [rk[3:5] for rk in celler[-4:]] == [["100,0", "+20,0"], ["20,0", "+10,0"],
+                                              ["-60,0", "-20,0"], ["60,0", "+10,0"]]
+    assert "fratrukket likvider (5,0)" in " ".join(t)
+    diagram = next(sh.chart for sh in s.shapes if sh.has_chart)
+    assert [x.name for p in diagram.plots for x in p.series][-2:] == ["Fondens NAV", "Nettogæld"]
+    # en rest ud over afrunding står som Øvrige poster
+    rest = slides._ejendomsbro(dict(e, fonds_nav=65e6), slides.Fodnoter())
+    assert rest[-1] == ("Øvrige poster", 5e6, None)
+
+
+def _pme_rapport():
+    a = _tpt_fond("Fond A", 100.0)
+    a["n"].update(ks_pme=1.18, direct_alpha=0.034, irr=0.12)
+    a["pme"] = dict(ks_pme=1.18, direct_alpha=0.034, indeks_irr=0.09, merverdi=12_000_000.0)
+    b = _tpt_fond("Fond B", 100.0)
+    b["n"].update(ks_pme=0.80, direct_alpha=-0.06, irr=0.05)
+    b["pme"] = dict(ks_pme=0.80, direct_alpha=-0.06, indeks_irr=0.14, merverdi=-3_000_000.0)
+    gammel = _tpt_fond("Fond C", 100.0)
+    gammel["n"].update(ks_pme=None, direct_alpha=None)
+    gammel["pme"] = dict(grund="Fondens første cash flow (31.03.2005) ligger før indeksets start.")
+    r = _tpt_rapport([gammel, b, a])
+    r["pme"] = dict(indeks="MSCI ACWI (iShares ETF)", ks_pme=0.94, direct_alpha=-0.025,
+                    irr=0.139, indeks_irr=0.168, merverdi=-19_800_000.0, udeladte=["Fond C"],
+                    indeks_kvartal=0.142,
+                    forloeb=[dict(dato=date(2026, 3, 31), nav=266e6, indekskonto=254e6,
+                                  netto_indbetalt=193e6),
+                             dict(dato=date(2026, 6, 30), nav=285e6, indekskonto=305e6,
+                                  netto_indbetalt=205e6)])
+    return r
+
+
+def test_pme_fonde_sorteret_efter_direct_alpha_med_i_alt_nederst():
+    s = slides.pme_fonde(_prs(), _pme_rapport())
+    t = _tekster(s)
+    assert "Fondene mod markedet" in t and "KS-PME" in t and "Merværdi\vmod ACWI³" in t
+    assert "IRR: fonden mod de samme cash flows i ACWI²" in t
+    raekker = [x for x in t if x.startswith(("Fond A", "Fond B", "Fond C", "I alt"))]
+    assert [x[:6] for x in raekker] == ["Fond A", "Fond B", "Fond C", "I alt"]
+    assert "Fond C¹" in t
+    assert "1,18x" in t and "+3,4 %" in t and "+12,0 mio. DKK" in t and "-3,0 mio. DKK" in t
+    assert "0,94x" in t and "-2,5 %" in t and "-19,8 mio. DKK" in t
+    assert "12,0 %" in t and "9,0 %" in t and "13,9 %" in t and "16,8 %" in t
+    noter = next(x for x in t if x.startswith("Kilde"))
+    assert "MSCI ACWI (iShares ETF)" in noter and "før indeksets start" in noter
+    assert "Indekset steg 14,2 % i DKK i seneste kvartal" in noter
+    # siges én gang: ved rækken, ikke også som generel note
+    assert "Fond C er ikke med" not in noter
+    assert "heller ikke med i i alt-rækken" in noter
+
+
+def test_pme_portefoelje_viser_tal_og_kurver():
+    s = slides.pme_portefoelje(_prs(), _pme_rapport())
+    t = _tekster(s)
+    assert "Porteføljen mod markedet" in t
+    assert "-19,8 mio. DKK" in t and "0,94x" in t and "-2,5 %" in t and "16,8 %" in t
+    assert "Merværdi mod ACWI¹" in t
+    noter = next(x for x in t if x.startswith("Kilde"))
+    assert "¹ Merværdi mod ACWI: fondens NAV minus indekskontoens værdi" in noter
+    assert "IRR med ACWI²" in t and "² IRR med ACWI er IRR af de samme kapitalkald" in noter
+    assert "ikke forskellen mellem de to IRR'er" in noter
+    assert "Fond C er ikke med i porteføljens tal" in noter
+    diagram = next(sh.chart for sh in s.shapes if sh.has_chart)
+    assert [x.name for x in diagram.plots[0].series] == ["NAV", "Indekskonto (ACWI)",
+                                                          "Netto indbetalt"]
+
+
+def test_pme_springes_over_uden_indeks():
+    r = _pme_rapport()
+    for f in r["fonde"]:
+        f["n"]["ks_pme"] = None
+    r["pme"] = {}
+    assert slides.pme_fonde(_prs(), r) is None and slides.pme_portefoelje(_prs(), r) is None
+
+
+def test_pme_kolonner_fylder_indholdsbredden():
+    assert sum(b for _, b, _ in slides.PME_KOL) == pytest.approx(
+        sum(b for _, b, _ in slides.LT_KOL))
+
+
+# ---------- cash flow-prognosen ----------
+
+def _prognoserapport():
+    from test_prognose import KURSER, OPSAETNING, _fonde
+    fonde = _fonde()
+    return dict(navn="Investor", as_of=date(2026, 6, 30), fonde=fonde, kurser=KURSER,
+                prognose=data.prognose_paa_fondene(fonde, KURSER, date(2026, 6, 30), OPSAETNING),
+                datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
+
+
+def test_prognose_fliser_soejler_pr_fond_og_scenarier_som_linjer():
+    r = _prognoserapport()
+    s = slides.prognose(_prs(), r)
+    t = _tekster(s)
+    for label in ("Kald næste 12 mdr.", "Kald næste 3 år", "Udlodninger næste 3 år",
+                  "Netto næste 3 år"):
+        assert label in t
+    assert t[t.index("Kald næste 12 mdr.") + 1] == slides.beloeb(
+        r["prognose"]["naeste"]["basis"]["kald_12m"])
+    (stroemme,) = [sh.chart for sh in s.shapes if sh.has_chart]
+    plot_area = stroemme._chartSpace.chart.plotArea
+    # netto pr. scenarie som linjer; det andet scenarie er stiplet
+    linjer = plot_area.findall(qn("c:lineChart"))
+    assert len(linjer) == 2
+    assert sum(len(x.findall(".//" + qn("a:prstDash"))) for x in linjer) == 1
+    assert list(stroemme.plots[0].categories)[:2] == ["2026¹", "2027"]
+    noter = next(x for x in t if x.startswith("Kilde"))
+    assert "Svagt marked: vækst −6 procentpoint, bow × 1,30" in noter
+    assert "¹ 2026 er fra 01.07.2026." in noter
+    _indenfor_fladen(s, "Forventede kapitalkald og udlodninger")
+    assert slides.prognose(_prs(), r | dict(prognose=None)) is None
+
+
+def test_prognose_nav_flader_scenarier_og_fliser():
+    r = _prognoserapport()
+    s = slides.prognose_nav(_prs(), r)
+    t = _tekster(s)
+    p = r["prognose"]
+    # tallene ultimo 2029, tre år efter det første (halve) år
+    assert t[t.index("NAV 2029, basis") + 1] == slides.beloeb(p["aar"]["basis"][3]["nav"])
+    assert t[t.index("NAV 2029, svagt marked") + 1] == slides.beloeb(
+        p["aar"]["svag"][3]["nav"])
+    assert "Resttilsagn 2029" in t and "Kaldes ikke²" in t
+    (nav,) = [sh.chart for sh in s.shapes if sh.has_chart]
+    plot_area = nav._chartSpace.chart.plotArea
+    # NAV og resttilsagn som flader, det svage markeds NAV som stiplet linje
+    assert len(plot_area.find(qn("c:areaChart")).findall(qn("c:ser"))) == 2
+    assert plot_area.find(qn("c:lineChart")).find(".//" + qn("a:prstDash")) is not None
+    _indenfor_fladen(s, "Forventet NAV og resttilsagn")
+    assert slides.prognose_nav(_prs(), r | dict(prognose=None)) is None
+
+
+def test_prognose_pr_fond_tabel_og_profiler():
+    r = _prognoserapport()
+    r["fonde"][0]["prognose_afvigelser"] = {"bow": 1.0}
+    r["prognose"] = data.prognose_paa_fondene(r["fonde"], r["kurser"], r["as_of"],
+                                              __import__("test_prognose").OPSAETNING)
+    s = slides.prognose_pr_fond(_prs(), r)
+    fonde, profiler = [sh.table for sh in s.shapes if sh.has_table]
+    hoved = [c.text for c in fonde.rows[0].cells]
+    assert hoved[:4] == ["Fond", "Profil", "Resttilsagn", "Kald 2026¹"]
+    assert hoved[-2:] == ["Ikke kaldt²", "TVPI³"]
+    assert fonde.cell(1, 1).text == "Private equity⁴"       # egne antagelser
+    assert fonde.cell(len(fonde.rows) - 1, 0).text == "I alt"
+    assert [profiler.cell(i, 0).text for i in range(1, 3)] == ["Private equity", "Ejendomme"]
+    assert profiler.cell(1, 1).text == "25 · 33 · 40 %"
+    assert profiler.cell(2, 2).text == "ingen"              # evergreen kalder uden grænse
+    noter = next(x for x in _tekster(s) if x.startswith("Kilde"))
+    assert "⁴ Alfa har egne antagelser: bow 1,0." in noter
+    _indenfor_fladen(s, "Prognose pr. fond")
