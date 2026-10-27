@@ -8,7 +8,7 @@
 # Kun MSCI ACWI vises for tiden; MSCI World står udkommenteret til senere brug. Hvert indeks,
 # der står her, får sit eget bånd under kortene.
 
-dato: 2026-09-30
+dato: 2026-06-30
 indeks:
   MSCI ACWI:
     INFORMATION_TECHNOLOGY: 33.21

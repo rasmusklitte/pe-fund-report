@@ -23,11 +23,30 @@ it. PowerPoint locks the file while it is open, so `report._gem()`
 falls back to `_v2`, `_v3`, … rather than failing — don't reach for `--out` to dodge a lock.
 
 `tests/test_aleta.py` compares the Motortramp report at 30.06.2026 with Aleta's export
-(`tests/motortramp_aleta_data.xlsx`), one test per fund × check (`tests/aleta.py`: `FONDE` maps
-Aleta's `securityCode` to our fund code, `KONTROLLER` holds the tolerances). It is marked `db` and
+(`data/aleta/MOTORTRAMP/noegletal_<Aleta's date>.xlsx`), one test per fund × check (`tests/aleta.py`:
+`KONTROLLER` holds the tolerances; reading the exports, `FONDE` (Aleta's `securityCode` → our fund
+code) and the transaction pairing live in `pe_fund_report/aleta.py`, which the deck uses too). It is marked `db` and
 skips when the database can't be reached. Failures there are differences to look into, not
 necessarily bugs. Aleta's amounts are in DKK (except
-`nav`), so they are compared with the report's own `n["..._dkk"]`.
+`nav`). Aleta's export is always dated the first day of the following month (`aleta.aleta_dato`:
+30.06 → 01.07), so NAV, tilsagn and resttilsagn are compared as the report's fund-currency amount
+× the Nationalbanken rate on that date; paid-in and distributions use the report's own
+`n["..._dkk"]` (each flow's own date). Status is `ok` (equal once rounded, or under 1 % — `OK_GRAENSE` — of
+the allowed difference), `lille afvigelse` (within tolerance, yellow in the workbook, test passes) or `afviger`.
+The checks themselves (`KONTROLLER`, `_vurder`, `afstem()`) live in `pe_fund_report/aleta.py`, so the deck
+and the tests give the same status; `tests/aleta.py` adds only `forklar()` and the workbook.
+`aleta.forklar()` writes the cause of a deviation in *Bemærkning* only where the figures confirm
+it (NAV before carry = CA890, equalisation left out of paid-in, Aleta's own FX rate, ratios from
+Aleta's DKK amounts, IRR recomputed in DKK / with NAV before carry, the GP's IRR); otherwise blank.
+`aleta.afstem_transaktioner()` pairs Aleta's transactions (`data/aleta/MOTORTRAMP/private_markets_transactions_*.xlsx`, formerly `pm_transactions_*`,
+the newest by the export date at the end of the name) with the report's `kapitalstroemme` per fund, type and date (same-day accounts
+summed): `ens`, `anden dato` (same amount within `MAX_DAGE`, yellow, passes), `andet beløb` /
+`kun i Aleta` / `kun i rapporten` (red, `test_transaktioner[fond]` fails), `efter rapportdatoen`
+(grey). Sheet *Transaktioner*. Sheet *IRR* (`tests/aleta._skriv_irr`): per fund, the paired
+payments in DKK side by side (a payment missing on one side is a grey 0), the final value
+(Aleta's `marketValue`, our NAV × the rate on Aleta's date) and an Excel XIRR for each side,
+next to the IRR in Aleta's export and in the deck, with the gap in bp. Aleta's IRR is exactly XIRR over its own transactions in DKK with
+`marketValue` on Aleta's date; `forklar()` checks that and recomputes ours on Aleta's dates.
 
 `ruff check .` currently reports 14 pre-existing findings (C408 `dict()` literals, DTZ011
 `date.today()`) in `data.py` and the tests — that is the baseline, not a regression you caused.
@@ -63,26 +82,32 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   noted, also on slides that do not show the figure it affects (the user's rule). `data.py` phrases caveats the same way — "forvalteren oplyser ikke …",
   not "ikke indlæst i databasen".
 - `report.py` assembles the slide order and saves; `cli.py` is only argument parsing. Order:
-  cover, executive summary, udvikling | *Porteføljeoversigt* section: *Investeringer*
-  (`tilsagn_paa_tvaers`), ændringer pr. fond, *Eksponering* (`valutafordeling`), segment,
+  cover, executive summary, udvikling, *Samlede investeringer* incl. property funds
+  (`likviditet(..., med_ejendomme=True)`, slide 4, the user's choice) | *Porteføljeoversigt*
+  section: *Investeringer* (`tilsagn_paa_tvaers`), *Største værdibevægelser*
+  (`slides.vaerdibevaegelser`, slide 7, the user's choice; one total row at the top, above the two lists:
+  the whole portfolio's value change incl. FX from `r["udvikling"]` per period, as on the
+  *Ændringer pr. fond* total row, nothing more — the user's choice; a *Type* column says what each
+  line is, `data.beholdningstype()` from the holding's section: Selskab, Fond, Secondary or
+  Co-investering), ændringer pr. fond, *Eksponering* (`valutafordeling`), segment,
   *Branchefordeling – hele porteføljen* (`branchekort`), branche pr. aktivklasse,
   *Geografisk eksponering – hele porteføljen* (`regionskort`), geografi pr. aktivklasse,
   største positioner, gennemlysning |
   *Fondsoversigter* section: the portfolio overview table, then each fund page and its company
-  cards | *Appendiks* section: definitions, the GICS overview (`slides.gics_oversigt`: the 11
+  cards | *Appendiks* section: definitions, *Nøgletal afstemt med Aleta* (below), *IRR sammenlignet med Aleta* (below), the GICS overview (`slides.gics_oversigt`: the 11
   sectors with a Danish description in `GICS_BESKRIVELSER` and their industry groups from
   `data.GICS_STRUKTUR`, in the sector colours) | end slide.
 - **Supplerende slides.** Slides taken out of the report go into a second deck,
   `report._byg_supplerende()`, written on every build next to the report as
   `<deck>_supplerende_slides.pptx` (named from the intended path, not a `_v2`; skip with
   `--uden-supplerende`; anonymized too, and leak-checked with the report before either is
-  saved; no Excel of its own). It holds a cover, *Samlede investeringer* (`slides.likviditet`,
-  below), *Lange tilsagn*, the geography-by-commitment
+  saved; no Excel of its own). It holds a cover, *Samlede investeringer* without the property
+  funds (`slides.likviditet`, below), the three transaction slides (below), *Lange tilsagn*, the geography-by-commitment
   slide (`fordeling(..., "geografi", ...)`; its data also feeds the executive summary's
   fallback), the pies *Branchefordeling* / *Geografisk eksponering* (`slides.brancher` /
   `regioner`), the two "ejendomme for sig" treemaps (`branchekort_ejendomme` /
-  `regionskort_ejendomme`, replaced in the report by the whole-portfolio treemaps), *Største
-  værdibevægelser* (`slides.vaerdibevaegelser`), then *Definitioner* and the end slide. When a
+  `regionskort_ejendomme`, replaced in the report by the whole-portfolio treemaps), then
+  *Definitioner* and the end slide. When a
   slide is removed from the report, move its call here rather than only commenting it out.
   Client notes in the report must not refer to these pages by name.
 - *Samlede investeringer* (`slides.likviditet`, modelled on a Hewema page the user supplied): the
@@ -94,15 +119,45 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   end, commitment, resttilsagn (same rules as `n["resttilsagn"]`, cut at the date by
   `_kaldt_pr`), NAV (latest `historik` NAV; before a fund's first NAV, its net paid-in, noted)
   and pooled DPI/RVPI, all at the year-end rate; the last year is the report's own
-  `tilsagn_dkk`/`resttilsagn_dkk`/`nav_dkk`. The J-curve is one native combo chart: a column
+  `tilsagn_dkk`/`resttilsagn_dkk`/`nav_dkk`. The two bar charts carry value labels and a legend
+  at the bottom (`_stablede_soejler`; the invisible TVPI-total series is deleted from it). The J-curve is one native combo chart: a column
   chart whose last series `_j_kurve` moves into a `c:areaChart` sharing its axes (python-pptx
   cannot build combo charts). House colours, not the example's teal (Real Estate's colour).
-  Excel sheet *Likviditet* lists the series. A second slide right after it
-  (`likviditet(prs, r, med_ejendomme=True)`, `r["likviditet_alle"]`, sheet *Likviditet med
+  Excel sheet *Likviditet* lists the series; this slide is in the supplerende deck. A second
+  slide, in the report as slide 4 (`likviditet(prs, r, med_ejendomme=True)`, `r["likviditet_alle"]`, sheet *Likviditet med
   ejendomme*) includes the property funds on the **same time axis** (`fra_aar`, the first year
   of the slide without them): earlier cash flows (CRED from 2005) are summed into `primo`, where
   the cumulative curve starts, and named in the note (`foer_start`). Year ends only look up a
   rate for funds that existed by then (no USD rate exists for 2005).
+- *IRR sammenlignet med Aleta* (`slides.irr_mod_aleta`, appendix): the report's IRR against
+  the investor's own system, Aleta, per fund. `pe_fund_report/aleta.py` reads the exports in
+  `data/aleta/<INVESTOR>/` (`noegletal_<date>.xlsx`, dated Aleta's day = the first of the month
+  after the report date, and the newest `*transactions_*.xlsx` by the date in its name); `data.investor_rapport()`
+  calls `aleta.paa_fondene()`, which sets `f["aleta"]` from `irr_sammenligning()`: our IRR, in DKK
+  (each flow at its own date's Nationalbanken rate, NAV at Aleta's date), the same flows moved to
+  Aleta's dates, Aleta's IRR and the gap, plus short amount-free reasons; the slide shows our
+  IRR in the fund's currency, our IRR in DKK (`irr_dkk`), Aleta's (always DKK), the gap in
+  percentage points (`forskel` = our DKK IRR − Aleta's, so like for like; the user's choice) and
+  the reasons, each only where the figures confirm it (earlier or later dates, a different
+  amount, NAV before carry, equalisation left out, Aleta's own FX rates). The FX effect is read
+  between the two report columns, not repeated as a reason. Below the table, a short
+  explanation of the methods, a sentence on FX for the non-DKK currencies, and — when dates
+  differ — the user's own sentence (Aleta books a call on the
+  bank's date, the report on the date in the deposit notice and the register of owners). Never
+  write »kaldsbrev« in the deck (the user: not a word). Without an export for the investor and date the slide is skipped; the anonymized deck
+  drops `f["aleta"]` (Aleta would identify the client).
+- *Nøgletal afstemt med Aleta* (`slides.aleta_afstemning`, appendix, before the IRR slide): the
+  workbook's *Oversigt* redrawn in house style (the user found the workbook look poor): one row
+  per fund, zebra rows, columns grouped under »Beløb« and »Nøgletal« with a vertical rule, one
+  dot per cell in `ALETA_MARKERING`'s colours (olive = ens, terracotta = within tolerance,
+  clear red #C0392B = outside, not the muted ROED, which looks like terracotta), and a legend with counts under the table (»Ens / Lille afvigelse / Større afvigelse«; the
+  tolerances are not printed, the user's choice, and a note on FX effects in paid-in and
+  distributions appears only when a non-DKK fund deviates there); IRR included and compared as our DKK IRR
+  (`aleta._irr_i_dkk`, from `f["aleta"]["irr_dkk"]`, so `paa_fondene()` sets `f["aleta"]` before
+  `kontrolstatus()`; the test and workbook compare the same), without Valuta, Vintage and
+  Transaktioner (the user's choice; `ALETA_AFSTEM_GRUPPER`). Data from `aleta.kontrolstatus()` in
+  `f["aleta_kontrol"]`, set by `paa_fondene()` with the Nationalbanken rates on Aleta's date;
+  skipped without an export, dropped in the anonymized deck.
 - Three more transaction slides follow in the supplerende deck (the user gave free hands):
   *Kapitalkald og udlodninger pr. år* (`slides.aarlige_stroemme`, `data.aarlige_stroemme()`:
   calls below zero and distributions above, stacked per fund in `FOND_FARVER` by fund order,
@@ -113,8 +168,36 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   missing call (PPPE2 Q1–Q2 2024); such quarters are left out, footnoted and warned about at
   build) and *Resttilsagn og kaldstempo* (`slides.kaldstempo`, `data.kaldstempo()`: resttilsagn,
   the last 12 months' calls and years at that pace, evergreen funds left out). Excel sheets
-  *Strømme pr. år* and *Kaldstempo*. Considered and left out: what calls paid for (44 % of
+  *Strømme pr. år* and *Kaldstempo*. After it, *Kapitalkald, resttilsagn og eksponering over
+  tid* (`slides.eksponering_over_tid`, the user gave free hands): the whole portfolio incl.
+  property funds per quarter end from `data.eksponering_over_tid()` (pure; same `fra_aar`,
+  earlier calls in `primo`): five tiles, NAV and resttilsagn as stacked areas (the top edge is
+  the exposure) with cumulative calls as a line, and calls per quarter as columns on the same
+  axis below, every quarter labelled »Q1 24« (the user's choice; slanted beyond `EO_VANDRET`
+  quarters). NAV/resttilsagn per date come from `data._stilling()`, shared with `likviditet()`;
+  the last quarter is the report's own `*_dkk`. Excel sheet *Eksponering over tid*. Considered and left out: what calls paid for (44 % of
   called capital is CF199 "not split") and fees/carry (only 5 funds report them).
+  Then two card slides (the user gave free hands; `slides._kortskelet` / `_kortbund`, one card
+  per holding with its value per quarter over `data.DYK_KVARTALER` quarter ends as drawn bars —
+  light where nothing changed from the quarter before, a terracotta tick for cost — a small
+  table and a few generated sentences; the legend sits by the subtitle). *Bag de største
+  værdibevægelser* (`slides.bevaegelser_i_dybden`, `data.bevaegelser_i_dybden()`, pure): the
+  quarter's `DYK_ANTAL` (3) largest lines of `vaerdibevaegelser` by absolute size, each split
+  into Δ fair value, distributed and invested (they sum to the movement), multiple primo →
+  ultimo, and its contribution to the portfolio return (movement / the portfolio's Modified
+  Dietz denominator, `r["udvikling"][p]["naevner"]`). *Største positioner – koncentration og
+  risiko* (`slides.koncentration`, `data.koncentration()`, pure): tiles for the largest, top 5,
+  top 15 and the count ≥ `RISIKO_STOR` (5 %) of NAV, and cards for the `RISIKO_ANTAL` (4)
+  largest positions of `stoerste_positioner` with cost, multiple, share of the funds' holdings,
+  value change over 12 months, the date the value last changed and what a `RISIKO_FALD` (25 %)
+  fall costs the portfolio; the sentence about unrealised gain appears from `RISIKO_MULTIPLE`
+  (3x). The history comes from `data._beholdningsrapporter()` (one read per fund of every
+  holdings report back to the first quarter, scaled by today's ownership like
+  `beholdninger_primo`, the same line builder `_beholdningslinjer` / `_skaler` as
+  `_beholdninger`), followed back through renames by `_linjeforloeb` (`_par`, case-insensitive);
+  a fund without look-through uses its own NAV history (`_fondsforloeb`). Everything is at the
+  report-date rate, so the bars carry no FX. Company descriptions come from `f["virksomheder"]`
+  at draw time, so the anonymized deck has none. No Excel sheet.
 - *Eksponering* (`slides.valutafordeling`, after *Ændringer pr. fond*): three doughnuts
   (`slides._ring`) in a near-equilateral triangle in the middle of the slide (exposure on top,
   NAV and resttilsagn below, `VF_BASIS` apart; a true equilateral would make the lower rings
@@ -178,7 +261,8 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   drawn bar and an "i alt" row. A position is the investor's share of the holding's fair value
   (ownership × fair value, as on the fund pages) in DKK at the report-date rate, shown as % of the
   investor's total NAV (the user's choice; holdings don't sum to NAV because of the funds' cash
-  and carry). Funds without comparable holdings — property funds, unscaled or no holdings — are
+  and carry). The Type column uses the same notation as *Største værdibevægelser*
+  (`data.beholdningstype`: Selskab, Fond, Secondary, Co-investering; the user's rule). Funds without comparable holdings — property funds, unscaled or no holdings — are
   ranked as one line at their NAV ("Fond (ikke gennemlyst)", light bar), also the user's choice.
 - **Portfolio IRR in DKK** (`data.irr_dkk()`, pure, in `r["irr_dkk"]`): every fund's IRR cash
   flows converted at the Nationalbanken rate on their own date (same as `amount_dkk` in
@@ -287,8 +371,8 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   `vaerdibevaegelser()` (pure) compares holdings with `beholdninger_primo`. Holding names are
   not stable between GP reports, so `_par()`/`_forkortelse_af()` pair renamed lines, and
   anything unpaired goes in `usammenlignelige` instead of being counted as a gain or loss. The
-  slides are `udvikling` (after the executive summary) and `aendringer_pr_fond`;
-  `vaerdibevaegelser` is in the supplerende slides. *Ændringer pr. fond* has vertical lines between
+  slides are `udvikling` (after the executive summary), `vaerdibevaegelser` and
+  `aendringer_pr_fond`. *Ændringer pr. fond* has vertical lines between
   the quarter, the year and "Pr. <date>". Its value change is in DKK incl. FX while the return is
   Modified Dietz in the fund's currency, so the two can have opposite signs:
   `data.fortegnsafvigelser()` (pure) finds those cells in `r["fortegnsafvigelser"]` with the cause

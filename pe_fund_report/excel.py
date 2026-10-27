@@ -537,7 +537,7 @@ def _vaerdibevaegelser(wb, r):
                         "afhændet, omdøbt eller købt før perioden"])
     for p, fonde in vb["uaendrede"].items():
         for fond in fonde:
-            ark.raekke([None, fond, None, None, f"Ingen nye beholdningstal for {PERIODER[p].lower()}"])
+            ark.raekke([None, fond, None, None, f"Værdierne af selskaberne er ikke opdateret for {PERIODER[p].lower()}"])
     ark.afslut()
 
 
@@ -626,6 +626,32 @@ def _kaldstempo(wb, r):
                     f"Kald fra {k['fra']:%d.%m.%Y} (ekskl.) til rapportdatoen" if i == 0 else None])
     t = k["total"]
     ark.raekke(["I alt", t["resttilsagn"], t["kaldt"], aar, None], fed=True)
+    ark.afslut()
+
+
+def _eksponering_over_tid(wb, r):
+    """Siden Kapitalkald, resttilsagn og eksponering over tid: én række pr. kvartal i DKK."""
+    e = r.get("eksponering_over_tid")
+    if not e:
+        return
+    ark = Ark(wb, "Eksponering over tid", [
+        ("Kvartal", 11, "dato", None), ("NAV DKK", 15, "tal", None),
+        ("Resttilsagn DKK", 15, "tal", None), ("Eksponering DKK", 15, "tal", None),
+        ("Kapitalkald DKK", 15, "tal", None), ("Akk. kaldt DKK", 15, "tal", None),
+        ("Bemærkning", 70, None, None)])
+    for i, q in enumerate(e["kvartaler"]):
+        sidste = q is e["kvartaler"][-1]
+        ark.raekke([q["dato"], q["nav"], q["resttilsagn"],
+                    lambda rad, k: f"={k['NAV DKK']}{rad}+{k['Resttilsagn DKK']}{rad}",
+                    q["kald"],
+                    (lambda rad, k: f"={e['primo']}+{k['Kapitalkald DKK']}{rad}") if i == 0 else
+                    (lambda rad, k: f"={k['Akk. kaldt DKK']}{rad - 1}+{k['Kapitalkald DKK']}{rad}"),
+                    "Rapportens egne tal (nav_dkk, resttilsagn_dkk)" if sidste else
+                    "Kald med kursen på deres dato, NAV og resttilsagn med kursen ved "
+                    "kvartalets udgang" if i == 0 else None])
+    if e["foer_start"]:
+        ark.raekke([None] * 6 + [f"Kald før første kvartal ({', '.join(e['foer_start'])}) er "
+                                 f"med i Akk. kaldt fra start: {e['primo']:,.0f}"])
     ark.afslut()
 
 
@@ -756,6 +782,7 @@ def skriv(r):
     _likviditet(wb, r, "likviditet_alle", "Likviditet med ejendomme")
     _stroemme_pr_aar(wb, r)
     _kaldstempo(wb, r)
+    _eksponering_over_tid(wb, r)
     _valutakurser(wb, r)
     _stamdata(wb, r)
     _laes_mig(wb, r, [(n, t) for n, t in FANER if n in wb.sheetnames])

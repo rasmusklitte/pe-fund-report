@@ -82,10 +82,13 @@ def _byg_deck(r, master=None):
     _saet_ph(s, 1, f"Porteføljerapport pr. {r['as_of']:%d.%m.%Y}")
     slides.sammendrag(prs, r)
     slides.udvikling(prs, r)            # springes over uden DKK-kurser for alle fonde
+    # samlede investeringer med ejendomsfondene; uden dem står i de supplerende slides
+    slides.likviditet(prs, r, med_ejendomme=True)
 
     s = _ny_slide(prs, L_SKILLE[0])
     _saet_ph(s, 0, "Porteføljeoversigt")
     slides.tilsagn_paa_tvaers(prs, r)
+    slides.vaerdibevaegelser(prs, r)
     slides.aendringer_pr_fond(prs, r)
     slides.valutafordeling(prs, r)      # springes over uden DKK-kurser for alle fonde
     # geografien efter tilsagn, cirkeldiagrammerne og ejendomme for sig står i de supplerende
@@ -99,8 +102,6 @@ def _byg_deck(r, master=None):
     # i fondens valuta, så den springes over, hvis fondene har forskellige valutaer; Største
     # positioner ovenfor er den samme gennemlysning i DKK
     slides.gennemlysning(prs, r)
-    # Største værdibevægelser står i de supplerende slides og i dataudtrækkets fane
-    # Værdibevægelser
 
     s = _ny_slide(prs, L_SKILLE[1])
     _saet_ph(s, 0, "Fondsoversigter")
@@ -112,6 +113,8 @@ def _byg_deck(r, master=None):
     s = _ny_slide(prs, L_SKILLE[2])
     _saet_ph(s, 0, "Appendiks")
     slides.definitioner(prs, r)
+    slides.aleta_afstemning(prs, r)     # nøgletallene mod Aleta; kun med Aletas udtræk
+    slides.irr_mod_aleta(prs, r)        # kun med Aletas udtræk for investoren og datoen
     slides.gics_oversigt(prs, r)        # GICS-sektorerne og deres branchegrupper
     _ny_slide(prs, L_SLUT)
     slides.sidefod(prs, r["navn"])      # til sidst, så sidetallene er endelige
@@ -129,17 +132,18 @@ def _byg_supplerende(r, master=None):
     _saet_ph(s, 0, f"{r['navn']} – supplerende slides")
     _saet_ph(s, 1, f"Slides uden for porteføljerapporten pr. {r['as_of']:%d.%m.%Y}")
     slides.likviditet(prs, r)           # samlede investeringer uden ejendomsfondene
-    slides.likviditet(prs, r, med_ejendomme=True)  # og med dem
     slides.aarlige_stroemme(prs, r)     # kald og udlodninger pr. år og fond
     slides.tvpi_over_tid(prs, r)        # TVPI og DPI pr. kvartal, én pr. fond
     slides.kaldstempo(prs, r)           # resttilsagn og kaldene de seneste 12 mdr.
+    slides.eksponering_over_tid(prs, r)     # kald, resttilsagn og NAV + resttilsagn pr. kvartal
+    slides.bevaegelser_i_dybden(prs, r)     # de tre største værdibevægelser nærmere
+    slides.koncentration(prs, r)            # de største positioner: koncentration og risiko
     slides.lange_tilsagn(prs, r)
     slides.fordeling(prs, r, "geografi", "Geografisk fordeling efter tilsagn")
     slides.brancher(prs, r)             # cirkeldiagrammerne
     slides.regioner(prs, r)
     slides.branchekort_ejendomme(prs, r)        # ejendommene for sig
     slides.regionskort_ejendomme(prs, r)
-    slides.vaerdibevaegelser(prs, r)
 
     s = _ny_slide(prs, L_SKILLE[2])
     _saet_ph(s, 0, "Appendiks")

@@ -10,11 +10,11 @@ from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches
+from test_data import LQ_KURSER, _lq_fond
 
 from pe_fund_report import data, slides
 from pe_fund_report.deck import L_FORSIDE, L_SKILLE, L_SLUT, L_TEKST, _ny_slide, _ryd_slides
 from pe_fund_report.paths import MASTER
-from test_data import LQ_KURSER, _lq_fond
 
 
 def test_danske_talformater():
@@ -644,20 +644,39 @@ def test_aendringer_pr_fond_maerker_afkast_med_modsat_fortegn_og_skiller_periode
 def test_vaerdibevaegelser_viser_stigninger_og_fald():
     r = _udv_rapport()
     r["vaerdibevaegelser"] = dict(
-        linjer=[dict(navn="Selskab A", fond="Alfa Fund I K/S", kvartal=3e5, aar=4e5),
-                dict(navn="Selskab B", fond="Alfa Fund I K/S", kvartal=-1e5, aar=None),
-                dict(navn="Selskab C", fond="Alfa Fund I K/S", aar=1e5)],
+        linjer=[dict(navn="Selskab A", fond="Alfa Fund I K/S", type="Selskab", kvartal=3e5,
+                     aar=4e5),
+                dict(navn="Fond B", fond="Alfa Fund I K/S", type="Secondary", kvartal=-1e5,
+                     aar=None),
+                dict(navn="Selskab C", fond="Alfa Fund I K/S", type="Selskab", aar=1e5)],
         uaendrede={"kvartal": ["Beta Fund II A/S"]},
         usammenlignelige={"aar": [("Alfa Fund I K/S", "Gammel")]},
         uskalerede=[], uden_beholdninger=[], dato=date(2026, 6, 30))
     s = slides.vaerdibevaegelser(_prs(), r)
     t = _tekster(s)
     assert "Største stigninger i Q2 26" in t and "Største fald i Q2 26" in t
-    assert "Selskab A" in t and "+300" in t and "Selskab B" in t and "-100" in t
+    # typen af den underliggende investering i egen kolonne
+    assert t.count("Type") == 2 and "Selskab" in t and "Secondary" in t
+    assert any("Værdierne af porteføljeselskaberne er ikke opdateret i kvartalet" in x for x in t)
+    assert "Selskab A" in t and "+300" in t and "Fond B" in t and "-100" in t
     assert "Selskab C" not in t           # ingen bevægelse i kvartalet
     noter = t[-1]
     assert "Beta Fund II A/S" in noter and "Gammel" in noter
+    # én række med hele porteføljens værdiændring + valuta, som på Ændringer pr. fond
+    assert _tabelraekker(s) == [["Værdiændring i alt, hele porteføljen",
+                                 "Kvartalet (Q2 26): +1.700", "År til dato (2026): +1.700"]]
     _indenfor_fladen(s, "Største værdibevægelser i porteføljen")
+
+
+def test_vaerdibevaegelser_uden_dkk_udvikling_har_ingen_totalraekke():
+    r = _udv_rapport()
+    r["udvikling"] = {"kvartal": None, "aar": None}
+    r["vaerdibevaegelser"] = dict(
+        linjer=[dict(navn="Selskab A", fond="Alfa Fund I K/S", kvartal=3e5)],
+        uaendrede={}, usammenlignelige={}, uskalerede=[], uden_beholdninger=[],
+        dato=date(2026, 6, 30))
+    s = slides.vaerdibevaegelser(_prs(), r)
+    assert not any(sh.has_table for sh in s.shapes)
 
 
 # ---------- gennemlysning af feedere ----------
@@ -1465,10 +1484,12 @@ def test_fodnoter_nummererer_i_raekkefoelge_og_genbruger_samme_tekst():
 # ---------- største positioner ----------
 
 def _positionsrapport():
+    sektion = {"selskaber": "CURRENT", "fonde": "FUND", "ejendomme": "PROPERTY"}
     fond = lambda navn, valuta, nav, raekker, type_="selskaber": dict(
         fund_name=navn, valuta=valuta, nav_dato=date(2026, 6, 30), n=dict(nav_dkk=nav),
         beholdninger=dict(type=type_, skaleret=True, dato=date(2026, 6, 30), via=None,
-                          raekker=[dict(navn=n, dagsvaerdi=v) for n, v in raekker]))
+                          raekker=[dict(navn=n, dagsvaerdi=v, type=sektion[type_])
+                                   for n, v in raekker]))
     fonde = [fond("Seed Capital Denmark IV", "DKK", 500_000.0,
                   [("FLATPAY", 200_000.0), ("Landfolk", 50_000.0)]),
              fond("K Alternativ Private Equity 2021 K/S", "DKK", 300_000.0,
@@ -1487,9 +1508,10 @@ def test_stoerste_positioner_viser_rangeret_tabel_med_fondslinjer():
     assert "Største positioner" in t
     tabel = next(sh.table for sh in s.shapes if sh.has_table)
     raekker = [[tabel.cell(i, j).text for j in range(6)] for i in range(len(tabel.rows))]
-    assert raekker[1] == ["1", "FLATPAY", "Porteføljeselskab", "SCD IV", "200", "20,0 %"]
+    # samme typer som på Største værdibevægelser (data.beholdningstype)
+    assert raekker[1] == ["1", "FLATPAY", "Selskab", "SCD IV", "200", "20,0 %"]
     assert raekker[2][1:4] == ["Home.Earth", "Fond (ikke gennemlyst)³", "–"]
-    assert raekker[3][1:4] == ["ACF VIII", "Underliggende fond", "KAPE 2021"]
+    assert raekker[3][1:4] == ["ACF VIII", "Fond", "KAPE 2021"]
     assert raekker[-1][1] == "De 4 største i alt" and raekker[-1][4] == "570"
     # fondene står i rækkerne, så noten nævner dem ikke
     assert any("Fonden har ingen beholdninger, der kan gennemlyses" in x for x in t)
@@ -1535,7 +1557,7 @@ def test_likviditet_med_ejendomme_siger_det_i_undertitlen():
     assert not any("indgår ikke" in x for x in t)
 
 
-def test_likviditet_soejlerne_har_etiketter_og_ingen_forklaring():
+def test_likviditet_soejlerne_har_etiketter_og_forklaring():
     lq = data.likviditet([_lq_fond("Alfa", "Private equity")], lambda v, d: LQ_KURSER[d],
                          date(2026, 6, 30))
     r = dict(navn="Investor", as_of=date(2026, 6, 30), likviditet=lq,
@@ -1550,7 +1572,11 @@ def test_likviditet_soejlerne_har_etiketter_og_ingen_forklaring():
     # 2024: resttilsagn 60 EUR og kaldt 40 EUR til 7,2
     rest, kaldt = tilsagn.plots[0].series
     assert (etiketter(rest)[0], etiketter(kaldt)[0]) == ("432 mio.", "288 mio.")
-    assert not tilsagn.has_legend and not tvpi.has_legend
+    # forklaring på begge; den usynlige totalserie er slettet fra TVPI-forklaringen
+    assert tilsagn.has_legend and tvpi.has_legend
+    slettet = tvpi.legend._element.findall(qn("c:legendEntry"))
+    assert [e.find(qn("c:idx")).get("val") for e in slettet] == ["2"]
+    assert not tilsagn.legend._element.findall(qn("c:legendEntry"))
 
 
 def _transaktionsrapport():
@@ -1590,8 +1616,174 @@ def test_tvpi_over_tid_et_panel_pr_fond_uden_afvigende_kvartaler():
     assert "Ikke vist: Alfa pr. 31.03.2026 (4,00x)" in noter
 
 
+def test_eksponering_over_tid_fliser_flader_linje_og_kald_pr_kvartal():
+    kurs = lambda v, d: LQ_KURSER.get(d, 7.5)
+    e = data.eksponering_over_tid([_lq_fond("Alfa", "Private equity")], kurs, date(2026, 6, 30))
+    r = dict(navn="Investor", as_of=date(2026, 6, 30), eksponering_over_tid=e,
+             datotjek=dict(ens=True, foraeldede=[], skaeve_beholdninger=[]))
+    s = slides.eksponering_over_tid(_prs(), r)
+    t = _tekster(s)
+    for label in ("Eksponering", "NAV", "Resttilsagn", "Kaldt kapital i alt",
+                  "Kaldt seneste 12 mdr."):
+        assert label in t
+    # den første flise er NAV + resttilsagn i dag
+    assert t[t.index("Eksponering") + 1] == slides.tusind(522.2 + 298.4)
+    flader, kald = [sh.chart for sh in s.shapes if sh.has_chart]
+    plot_area = flader._chartSpace.chart.plotArea
+    # NAV og resttilsagn stablet, den kaldte kapital som linje på samme akser
+    assert len(plot_area.find(qn("c:areaChart")).findall(qn("c:ser"))) == 2
+    assert plot_area.find(qn("c:lineChart")) is not None
+    assert len(list(kald.plots[0].series[0].values)) == len(e["kvartaler"]) == 10
+    assert not kald.has_title and not kald.has_legend
+    # en etiket pr. kvartal
+    assert list(kald.plots[0].categories)[:5] == ["Q1 24", "Q2 24", "Q3 24", "Q4 24", "Q1 25"]
+    noter = next(x for x in t if x.startswith("Kilde"))
+    assert "Før den første NAV indgår Alfa" in noter
+    _indenfor_fladen(s, "Kapitalkald, resttilsagn og eksponering over tid")
+    assert slides.eksponering_over_tid(_prs(), r | dict(eksponering_over_tid=None)) is None
+
+
 def test_kaldstempo_tabel_med_total():
     s = slides.kaldstempo(_prs(), _transaktionsrapport())
     (tabel,) = [sh.table for sh in s.shapes if sh.has_table]
     assert tabel.cell(len(tabel.rows) - 1, 0).text == "I alt"
     assert tabel.cell(1, 4).text == "n/a"           # ingen kald de seneste 12 måneder
+
+
+# ---------- IRR mod Aleta ----------
+
+def _aleta_fond(navn, valuta, aarsager, metode_ok=True):
+    return {"fund_name": navn, "valuta": valuta, "aleta": {
+        "irr": 0.10, "irr_dkk": 0.101, "irr_aletas_datoer": 0.0975, "aleta": 0.0974,
+        "forskel": 0.0036, "aarsager": aarsager, "metode_ok": metode_ok,
+        "dato": date(2026, 7, 1)}}
+
+
+def test_irr_mod_aleta():
+    aarsag = "2 betalinger har en tidligere dato hos Aleta"
+    r = _rapport([_aleta_fond("Alfa Fund I K/S", "EUR", [aarsag]),
+                  {"fund_name": "Beta Fund II A/S", "valuta": "DKK"}])
+    s = slides.irr_mod_aleta(_prs(), r)
+    raekker = _tabelraekker(s)
+    assert len(raekker) == 2                # Beta har ingen Aleta-tal
+    assert raekker[0] == ["Fond", "Valuta", "Rapporten,\vfondens valuta", "Rapporten,\vDKK",
+                          "Aleta,\vDKK", "Forskel,\v%-point", "", "Årsag til forskellen"]
+    assert raekker[1][:6] == ["Alfa Fund I K/S", "EUR", "10,00 %", "10,10 %", "9,74 %", "+0,36"]
+    assert raekker[1][7].startswith("2 betalinger")
+    t = " ".join(_tekster(s))
+    assert "(eftervist for alle fonde)" in t and "kaldsbrev" not in t
+    assert "datoen, som fremgår af banken" in t and "deposit notice og ejerbog" in t
+    assert "forskellen er mellem de to IRR i DKK" in t
+    assert ("For fondene i EUR er forskellen mellem rapportens IRR i fondens valuta og i DKK "
+            "valutakursens udvikling" in t and "kronen er bundet til euroen" in t)
+    assert "under 0,05 %-point for 1 af 1 fonde" in t
+    _indenfor_fladen(s, "IRR sammenlignet med Aleta")
+
+
+def test_aleta_afstemning_viser_status_med_irr_uden_vintage_og_transaktioner():
+    status = {k: "ok" for k, _ in slides.ALETA_AFSTEM_KOL} | {
+        "Vintage": "afviger", "NAV DKK": "lille afvigelse", "TVPI": "afviger"}
+    alfa = _aleta_fond("Alfa Fund I K/S", "EUR", []) | {"aleta_kontrol": status}
+    r = _rapport([alfa, {"fund_name": "Beta Fund II A/S", "valuta": "DKK"}])
+    s = slides.aleta_afstemning(_prs(), r)
+    raekker = _tabelraekker(s)
+    assert len(raekker) == 2                # Beta har ingen Aleta-tal
+    hoved = [x.replace("\v", " ") for x in raekker[0]]
+    assert hoved[0] == "Fond" and len(hoved) == 12 and hoved[-1] == "IRR"
+    assert not any(k in x for x in hoved for k in ("Vintage", "Transaktioner", "Valuta"))
+    assert raekker[1][0] == "Alfa Fund I K/S"
+    assert set(raekker[1][1:]) == {"●"}
+    # prikkens farve viser status: NAV DKK (kolonne 2) er inden for, TVPI (sidste) uden for
+    (tabel,) = [sh.table for sh in s.shapes if sh.has_table]
+    farve = lambda j: tabel.cell(1, j).text_frame.paragraphs[0].runs[0].font.color.rgb
+    assert farve(1) == slides.ALETA_MARKERING["ok"][0]
+    assert farve(2) == slides.ALETA_MARKERING["lille afvigelse"][0]
+    assert farve(10) == slides.ALETA_MARKERING["afviger"][0]
+    t = " ".join(_tekster(s))
+    assert "Aletas tal pr. 01.07.2026" in t and "NAV, tilsagn og resttilsagn i EUR" in t
+    assert "Beløb" in t and "Nøgletal" in t                 # gruppeoverskrifterne
+    # grænserne står ikke på sliden; valutapointen kun med en afvigelse i indbetalt/udloddet
+    assert "0,5 %" not in t and "valutakurseffekter" not in t
+    assert "Ens (9 af 11)" in t and "Større afvigelse (1 af 11)" in t
+    alfa["aleta_kontrol"] = status | {"Indbetalt DKK": "lille afvigelse"}
+    t = " ".join(_tekster(slides.aleta_afstemning(_prs(), r)))
+    assert "valutakurseffekter i indbetalt og udloddet kapital" in t
+    _indenfor_fladen(s, "Nøgletal afstemt med Aleta")
+    assert slides.aleta_afstemning(_prs(), _rapport([{"fund_name": "Beta", "valuta": "DKK"}])) is None
+
+
+def test_irr_mod_aleta_uden_aleta():
+    assert slides.irr_mod_aleta(_prs(), _rapport([{"fund_name": "Beta", "valuta": "DKK"}])) is None
+
+
+def _punkt(dato, fv, kost, udl=0.0):
+    return dict(dato=dato, rapport=dato, dagsvaerdi=fv, kostpris=kost, udloddet=udl, tvpi=None)
+
+
+def test_bevaegelser_i_dybden_et_kort_pr_bevaegelse():
+    r = _udv_rapport()
+    datoer = data.kvartalsdatoer(date(2026, 6, 30), 3)
+    alfa = r["fonde"][0]
+    alfa["beholdninger"] = dict(raekker=[dict(navn="Selskab A", closing=date(2023, 1, 15),
+                                              vintage=None, sektor=None)])
+    alfa["virksomheder"] = {"Selskab A": dict(beskrivelse="Laver maling.")}
+    kort = [dict(navn="Selskab A", fond="Alfa Fund I K/S", type="Selskab", kvartal=3e5, aar=4e5,
+                 bidrag=0.015, primo=_punkt(datoer[1], 1e6, 5e5),
+                 ultimo=_punkt(datoer[2], 1.3e6, 5e5),
+                 dele=dict(dagsvaerdi=3e5, udloddet=0.0, kostpris=0.0),
+                 forloeb=[None, _punkt(datoer[1], 1e6, 5e5), _punkt(datoer[2], 1.3e6, 5e5)]),
+            dict(navn="Fond B", fond="Alfa Fund I K/S", type="Fond", kvartal=-1e5, aar=None,
+                 bidrag=None, primo=_punkt(datoer[1], 1e6, 8e5),
+                 ultimo=_punkt(datoer[2], 1e6, 9e5),
+                 dele=dict(dagsvaerdi=0.0, udloddet=0.0, kostpris=1e5),
+                 forloeb=[_punkt(d, 1e6, 8e5) for d in datoer])]
+    r["bevaegelser_i_dybden"] = dict(kort=kort, afkast=0.02, fra=datoer[1], til=datoer[2],
+                                     datoer=datoer)
+    s = slides.bevaegelser_i_dybden(_prs(), r)
+    t = _tekster(s)
+    assert "Bag de største værdibevægelser" in t
+    assert "+300" in t and "-100" in t
+    assert "Selskab · AF I · Closing 01.2023" in t
+    assert any("Bidrag til porteføljens afkast: +1,50 procentpoint¹" in x for x in t)
+    tekst_a = next(x for x in t if x.startswith("Forvalteren har opskrevet"))
+    assert "30,0 % af dagsværdien primo." in tekst_a and tekst_a.endswith("Laver maling.")
+    assert any("renset for investeringer og udlodninger" in x for x in t)
+    # kvartalerne under søjlerne, også før beholdningen fandtes
+    assert t.count("Q4 25") == 2
+    _indenfor_fladen(s, "Bag de største værdibevægelser")
+    assert slides.bevaegelser_i_dybden(_prs(), _udv_rapport()) is None
+
+
+def test_koncentration_fliser_og_et_kort_pr_position():
+    r = _udv_rapport()
+    datoer = data.kvartalsdatoer(date(2026, 6, 30), 2)
+    alfa = r["fonde"][0]
+    alfa["beholdninger"] = dict(raekker=[dict(navn="Selskab A", closing=None, vintage=2022)])
+
+    def kort(navn, art, fonde, dkk, andel, multiple, siden=None, **kw):
+        return dict(navn=navn, art=art, type="Selskab", fonde=fonde, via=None, dkk=dkk,
+                    andel=andel, kostpris=dkk / multiple, multiple=multiple, aendring_12m=0.1,
+                    uaendret_siden=siden, uaendret_hele=False, fald=andel * 0.25,
+                    andel_i_fonden=None if art == "fond" else 0.5,
+                    forloeb=[_punkt(d, dkk, dkk / multiple) for d in datoer], **kw)
+    r["koncentration"] = dict(
+        kort=[kort("Selskab A", "porteføljeselskab", ["Alfa Fund I K/S"], 5e6, 0.25, 4.0,
+                   siden=date(2025, 12, 31)),
+              kort("Beta Fund II A/S", "fond", ["Beta Fund II A/S"], 2e6, 0.10, 1.2)],
+        nav_dkk=2e7, datoer=datoer, stoerste=0.25, top5=0.5, antal_top5=5, top=0.7,
+        antal_top=15, store=3)
+    s = slides.koncentration(_prs(), r)
+    t = _tekster(s)
+    assert "Største positioner – koncentration og risiko" in t
+    for label, v in (("Største position", "25,0 %"), ("5 største", "50,0 %"),
+                     ("15 største", "70,0 %"), ("Positioner over 5 % af NAV", "3")):
+        assert t[t.index(label) + 1] == v
+    assert "Selskab · AF I · Vintage 2022" in t
+    assert "Fond (ikke gennemlyst)¹" in t
+    celler = [c.text for sh in s.shapes if sh.has_table for rk in sh.table.rows for c in rk.cells]
+    assert "31.12.2025" in celler and "i kvartalet" in celler and "2,5 % af NAV" in celler
+    assert "Andel af fonden²" in celler and celler.count("–") == 1     # ikke for fonden
+    # en høj multiple: værdien er mest urealiseret gevinst
+    assert sum("urealiseret gevinst" in x for x in t) == 1
+    _indenfor_fladen(s, "Største positioner – koncentration og risiko")
+    assert slides.koncentration(_prs(), _udv_rapport()) is None

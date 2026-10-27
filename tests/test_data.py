@@ -666,6 +666,15 @@ def test_vaerdibevaegelser_parrer_omdoebte_og_udelader_afhaendede():
     linjer = {x["navn"]: x["kvartal"] for x in vb["linjer"]}
     assert linjer == {"ASF VII": (90 + 5 - 85) - (100 - 80), "Ny Fond I": 2.0}
     assert vb["usammenlignelige"] == {"kvartal": [("KAPE", "Gammel Fond I")]}
+    # linjer uden sektion er selskaber
+    assert {x["type"] for x in vb["linjer"]} == {"Selskab"}
+
+
+def test_beholdningstype_efter_sektionen_i_forvalterens_oversigt():
+    for sektion, type_ in [("FUND", "Fond"), ("PRIMARY", "Fond"), ("SECONDARY", "Secondary"),
+                           ("CO_INVESTMENT", "Co-investering"), ("CURRENT", "Selskab"),
+                           ("UNREALISED", "Selskab"), (None, "Selskab")]:
+        assert data.beholdningstype(dict(type=sektion)) == type_
 
 
 def test_vaerdibevaegelser_markerer_fond_med_uaendrede_tal():
@@ -1209,6 +1218,38 @@ def test_tvpi_historik_ender_i_noegletallene_og_markerer_afvigende_kvartaler():
     assert [p["afvigende"] for p in h] == [True, False, False]
 
 
+def test_eksponering_over_tid_pr_kvartal_med_kaldene_akkumuleret():
+    kurs = lambda v, d: 1.0 if v == "DKK" else LQ_KURSER.get(d, 7.5)
+    alfa = _lq_fond("Alfa", "Private equity")
+    e = data.eksponering_over_tid([alfa], kurs, date(2026, 6, 30))
+    q = e["kvartaler"]
+    assert (q[0]["dato"], q[-1]["dato"], len(q)) == (date(2024, 3, 31), date(2026, 6, 30), 10)
+    # første kvartal: kald 40 EUR til 7,0; før den første NAV står fonden til det betalte,
+    # resttilsagn 60, begge med kursen ved kvartalets udgang
+    assert (q[0]["kald"], q[0]["kaldt"]) == (280.0, 280.0)
+    assert (q[0]["nav"], q[0]["resttilsagn"], q[0]["eksponering"]) == (300.0, 450.0, 750.0)
+    assert e["foer_nav"] == ["Alfa"]
+    # Q2 2025: kald 20 til 8,0; udlodningen tæller ikke som kald
+    assert (q[5]["kald"], q[5]["kaldt"], q[6]["kald"]) == (160.0, 440.0, 0.0)
+    # det sidste kvartal er rapportens egne tal, og den kaldte kapital er indbetalt_dkk
+    assert (q[-1]["nav"], q[-1]["resttilsagn"]) == (522.2, 298.4)
+    assert q[-1]["eksponering"] == pytest.approx(820.6)
+    assert q[-1]["kaldt"] == alfa["n"]["indbetalt_dkk"] and e["seneste_12_mdr"] == 0.0
+    assert data.eksponering_over_tid([alfa], lambda v, d: None, date(2026, 6, 30)) is None
+
+
+def test_eksponering_over_tid_samler_kald_foer_aksen_i_primo():
+    kurs = lambda v, d: 1.0 if v == "DKK" else LQ_KURSER.get(d, 7.5)
+    ejd = _lq_fond("Ejendom", "Ejendomme", "DKK")
+    ejd["kapitalstroemme"] = [(date(2015, 5, 1), -30.0, "kald")]
+    e = data.eksponering_over_tid([_lq_fond("Alfa", "Private equity"), ejd], kurs,
+                                  date(2026, 6, 30), fra_aar=2024)
+    assert (e["primo"], e["foer_start"]) == (30.0, ["Ejendom"])
+    assert e["kvartaler"][0]["dato"] == date(2024, 3, 31)
+    assert e["kvartaler"][0]["kaldt"] == 30.0 + 280.0
+    assert e["kvartaler"][-1]["kaldt"] == 30.0 + 440.0
+
+
 def test_kaldstempo_seneste_12_maaneder_uden_evergreen():
     kurs = lambda v, d: LQ_KURSER.get(d, 7.46)
     alfa = _lq_fond("Alfa", "Private equity")
@@ -1223,3 +1264,77 @@ def test_kaldstempo_seneste_12_maaneder_uden_evergreen():
     assert (s["kaldt"], s["aar"]) == (0.0, None)
     assert k["total"]["resttilsagn"] == pytest.approx(596.8)
     assert k["total"]["aar"] == pytest.approx(596.8 / 74.6)
+
+
+# ---------- de største bevægelser og positioner nærmere ----------
+
+def _rapporter(*oversigter):
+    """{rapportdato: linjer} af (dato, [(navn, dagsværdi, kostpris, udloddet)])."""
+    return {d: [dict(navn=n, dagsvaerdi=fv, kostpris=k, udloddet=u, vintage=2020, tvpi=None)
+                for n, fv, k, u in linjer] for d, linjer in oversigter}
+
+
+def test_kvartalsdatoer_ender_paa_rapportdatoen():
+    assert data.kvartalsdatoer(date(2026, 6, 30), 3) == [
+        date(2025, 12, 31), date(2026, 3, 31), date(2026, 6, 30)]
+    assert data.kvartalsdatoer(date(2026, 5, 15), 2) == [date(2026, 3, 31), date(2026, 5, 15)]
+
+
+def test_linjeforloeb_foelger_omdoebning_og_gentager_seneste_oversigt():
+    rap = _rapporter((date(2025, 12, 31), [("AlpInvest Secondaries Fund VII", 100.0, 80.0, 0.0)]),
+                     (date(2026, 6, 30), [("ASF VII", 120.0, 85.0, 5.0)]))
+    p = data._linjeforloeb("asf vii", rap, data.kvartalsdatoer(date(2026, 6, 30), 4))
+    assert p[0] is None                         # før den første oversigt
+    assert p[1]["dagsvaerdi"] == 100.0          # under det gamle navn
+    assert p[2]["rapport"] == date(2025, 12, 31)    # ingen ny oversigt i Q1
+    assert p[3]["udloddet"] == 5.0
+    assert data.uaendret(p[2], p[1]) and not data.uaendret(p[3], p[2])
+
+
+def test_bevaegelser_i_dybden_deler_bevaegelsen_op_og_vaelger_de_stoerste():
+    rap = _rapporter((date(2026, 3, 31), [("A", 100.0, 80.0, 0.0), ("B", 50.0, 50.0, 0.0),
+                                          ("C", 10.0, 10.0, 0.0)]),
+                     (date(2026, 6, 30), [("A", 130.0, 90.0, 5.0), ("B", 30.0, 50.0, 0.0),
+                                          ("C", 11.0, 10.0, 0.0)]))
+    vb = dict(linjer=[dict(navn=n, fond="F", type="Selskab", kvartal=v * 7.5)
+                      for n, v in (("A", 25.0), ("B", -20.0), ("C", 1.0))])
+    b = data.bevaegelser_i_dybden(
+        [dict(fund_name="F", valuta="EUR")], vb, {"kvartal": dict(naevner=1000.0, afkast=0.03)},
+        {"F": rap}, {"EUR": (7.5, None)}, data.perioder(date(2026, 6, 30)),
+        data.kvartalsdatoer(date(2026, 6, 30), 2), antal=2)
+    # de største efter absolut størrelse
+    assert [k["navn"] for k in b["kort"]] == ["A", "B"]
+    a = b["kort"][0]
+    # dagsværdien steg 30, der blev udloddet 5 og investeret 10: bevægelsen er 25, i DKK
+    assert a["dele"] == {"dagsvaerdi": 225.0, "udloddet": 37.5, "kostpris": 75.0}
+    assert a["bidrag"] == pytest.approx(187.5 / 1000.0)
+    assert data.multiple(a["primo"]) == pytest.approx(100 / 80)
+    assert [p["dagsvaerdi"] for p in a["forloeb"]] == [750.0, 975.0]
+    assert data.bevaegelser_i_dybden([], dict(linjer=[]), {}, {}, {}, None, []) is None
+
+
+def test_koncentration_giver_forloeb_foelsomhed_og_andel_i_fonden():
+    rap = _rapporter((date(2025, 6, 30), [("A", 50.0, 40.0, 0.0), ("B", 50.0, 50.0, 0.0)]),
+                     (date(2025, 12, 31), [("A", 80.0, 40.0, 0.0), ("B", 20.0, 50.0, 0.0)]))
+    f = dict(fund_name="F", valuta="DKK", beholdninger=dict(raekker=rap[date(2025, 12, 31)]))
+    ejd = dict(fund_name="E", valuta="DKK", historik=[
+        dict(dato=date(2025, 6, 30), nav=100.0, indbetalt=90.0, udloddet=0.0),
+        dict(dato=date(2026, 6, 30), nav=110.0, indbetalt=90.0, udloddet=0.0)])
+    sp = dict(nav_dkk=400.0, top_andel=0.525, linjer=[
+        dict(navn="E", art="fond", fonde=["E"], dkk=110.0, andel=110.0 / 400),
+        dict(navn="A", art="porteføljeselskab", fonde=["F"], dkk=80.0, andel=0.2),
+        dict(navn="B", art="porteføljeselskab", fonde=["F"], dkk=20.0, andel=0.05)])
+    c = data.koncentration([f, ejd], sp, {"F": rap}, {"DKK": (1.0, None)},
+                           data.kvartalsdatoer(date(2026, 6, 30), 5), antal=2)
+    e, a = c["kort"]
+    # fonden uden gennemlysning: sin egen NAV med det indbetalte som kostpris
+    assert e["multiple"] == pytest.approx(110 / 90) and e["andel_i_fonden"] is None
+    assert e["uaendret_siden"] is None          # ændret i kvartalet
+    assert e["fald"] == pytest.approx(110 * 0.25 / 400)
+    assert a["andel_i_fonden"] == pytest.approx(0.8)
+    # gevinsten steg fra 10 til 40 over året, målt på dagsværdien for et år siden
+    assert a["aendring_12m"] == pytest.approx((40 - 10) / 50)
+    assert (a["uaendret_siden"], a["uaendret_hele"]) == (date(2025, 12, 31), False)
+    assert (c["stoerste"], c["top5"], c["store"]) == (pytest.approx(0.275),
+                                                      pytest.approx(0.525), 3)
+    assert data.koncentration([], None, {}, {}, []) is None

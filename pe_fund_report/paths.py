@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FUND_INFO = ROOT / "config" / "fund_info.yaml"       # manuelle stamdata pr. fond
 BENCHMARK = ROOT / "config" / "benchmark.yaml"       # MSCI-indeksenes sektorvægte
+ALETA = ROOT / "data" / "aleta"                       # Aletas udtræk pr. investor
 MASTER = ROOT / "assets" / "ppim_slidemaster.pptx"   # PPIM-slidemasteren
 EXPORTS = ROOT / "exports"                           # færdige rapporter (ikke i git)
 LOG = ROOT / "log"                                   # byggeloggen, én fil pr. bygning (ikke i git)

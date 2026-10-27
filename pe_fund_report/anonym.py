@@ -159,6 +159,8 @@ def anonymiser(r, skala):
     kopi = gaa({k: v for k, v in r.items() if k not in FJERN})
     for rigtig, f in zip(r["fonde"], kopi["fonde"], strict=True):
         f.pop("kilder", None)
+        f.pop("aleta", None)        # Aleta er investorens eget system og røber investoren
+        f.pop("aleta_kontrol", None)
         _fjern_identitet(f)
         f["manager"] = nv.forvaltere.get(rigtig.get("manager"))
     pseudonymer = {n.lower() for n in [INVESTOR, *nv.kort.values()]}

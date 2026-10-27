@@ -1,7 +1,7 @@
 """Henter og beregner alt, hvad investorrapporten viser, for én investor.
 
 Reglerne følger docs/analysis-data-guide.md: rpt-views først, LP-fortegn på cash flows
-(betalt < 0), betalt udligningsrente (EQUALISATION) tæller med i indbetalt og modtaget i
+(betalt < 0), betalt equalization (EQUALISATION) tæller med i indbetalt og modtaget i
 udloddet, men ikke i kaldt kapital og resttilsagn; en rabat på kald tæller som indbetalt og
 udloddet (som i Aleta); WITHHOLDING_TAX holdes ude af IRR,
 og basistabeller filtreres på APPROVED + is_active = 1. Investor- og fondsniveau blandes
@@ -460,11 +460,8 @@ def _beholdninger(fund_code, as_of, andel, nav=None):
     NAV fordeles på positionerne efter dagsværdi. Linjer med samme navn lægges sammen, og i
     tranchetabeller (instrument udfyldt) samles trancherne pr. selskab.
     """
-    h = read_sql("""
-        SELECT h.report_date, h.section, h.name, h.segment, h.trade_date, h.vintage,
-               h.instrument, h.commitment, h.invested, h.distributions,
-               h.fair_value, h.paid_in_pct, h.multiple, h.irr_pct, h.document_id,
-               h.industry_code, h.industry_suggested
+    h = read_sql(f"""
+        SELECT {_BEHOLDNINGSKOLONNER}
         FROM rpt.v_portfolio_holding h
         WHERE h.fund_code = :f AND h.report_date =
               (SELECT MAX(report_date) FROM rpt.v_portfolio_holding
@@ -473,6 +470,32 @@ def _beholdninger(fund_code, as_of, andel, nav=None):
         return None
     if (h.section == "PROPERTY").all():
         return _ejendomme(fund_code, h)
+    rows = _beholdningslinjer(h)
+    if nav is not None:
+        samlet = sum(x["dagsvaerdi_fond"] for x in rows)
+        andel = nav / samlet if samlet else None
+    skaleret, andel = andel is not None, andel or 1.0
+    _skaler(rows, andel)
+    # underliggende fonde: ATP/KAPE (section FUND) og LP-andele hos en secondaryfond (NEP);
+    # resten er porteføljeselskaber
+    fondsandel = sum(x["dagsvaerdi_fond"] for x in rows
+                     if x["type"] in ("FUND", "SECONDARY", "PRIMARY"))
+    samlet = sum(x["dagsvaerdi_fond"] for x in rows)
+    return dict(dato=_dato(h.report_date.iloc[0]), raekker=rows, skaleret=skaleret, andel=andel,
+                kode=fund_code,
+                type="fonde" if (h.section == "FUND").all() or (samlet and fondsandel > samlet / 2)
+                else "selskaber")
+
+
+_BEHOLDNINGSKOLONNER = """h.report_date, h.section, h.name, h.segment, h.trade_date, h.vintage,
+               h.instrument, h.commitment, h.invested, h.distributions,
+               h.fair_value, h.paid_in_pct, h.multiple, h.irr_pct, h.document_id,
+               h.industry_code, h.industry_suggested"""
+
+
+def _beholdningslinjer(h):
+    """Linjerne i én beholdningsoversigt med hele fondens tal: linjer med samme navn lagt
+    sammen, og i tranchetabeller (instrument udfyldt) trancherne samlet pr. selskab."""
     tranchevis = h.instrument.notna().any()
     grupper = {}
     for r in h.itertuples():
@@ -492,25 +515,30 @@ def _beholdninger(fund_code, as_of, andel, nav=None):
             kostpris_fond=kost, dagsvaerdi_fond=_f(r.fair_value) or 0.0,
             udloddet_fond=_f(r.distributions) or 0.0, tvpi=_f(r.multiple), irr=_f(r.irr_pct),
             type=r.section, document_id=None if pd.isna(r.document_id) else int(r.document_id)))
-    rows = [_saml(g) for g in grupper.values()]
-    if nav is not None:
-        samlet = sum(x["dagsvaerdi_fond"] for x in rows)
-        andel = nav / samlet if samlet else None
-    skaleret, andel = andel is not None, andel or 1.0
+    return [_saml(g) for g in grupper.values()]
+
+
+def _skaler(rows, andel):
+    """Investors andel af linjernes beløb (kostpris, dagsvaerdi, udloddet, total), størst først."""
     for x in rows:
         kost, fv, udl = x["kostpris_fond"], x["dagsvaerdi_fond"], x["udloddet_fond"]
         x.update(kostpris=None if kost is None else kost * andel, dagsvaerdi=fv * andel,
                  udloddet=udl * andel, total=(fv + udl) * andel)
     rows.sort(key=lambda x: -x["total"])
-    # underliggende fonde: ATP/KAPE (section FUND) og LP-andele hos en secondaryfond (NEP);
-    # resten er porteføljeselskaber
-    fondsandel = sum(x["dagsvaerdi_fond"] for x in rows
-                     if x["type"] in ("FUND", "SECONDARY", "PRIMARY"))
-    samlet = sum(x["dagsvaerdi_fond"] for x in rows)
-    return dict(dato=_dato(h.report_date.iloc[0]), raekker=rows, skaleret=skaleret, andel=andel,
-                kode=fund_code,
-                type="fonde" if (h.section == "FUND").all() or (samlet and fondsandel > samlet / 2)
-                else "selskaber")
+    return rows
+
+
+def _beholdningsrapporter(fund_code, fra, til, andel):
+    """{rapportdato: linjer} for fondens beholdningsoversigter fra den seneste på eller før fra
+    til og med til, skaleret med andel som beholdningerne primo (samme andel som ultimo)."""
+    h = read_sql(f"""
+        SELECT {_BEHOLDNINGSKOLONNER}
+        FROM rpt.v_portfolio_holding h
+        WHERE h.fund_code = :f AND h.report_date <= :t AND h.report_date >=
+              COALESCE((SELECT MAX(report_date) FROM rpt.v_portfolio_holding
+                        WHERE fund_code = :f AND report_date <= :d), :d)""",
+                 f=fund_code, t=til, d=fra)
+    return {_dato(d): _skaler(_beholdningslinjer(g), andel) for d, g in h.groupby("report_date")}
 
 
 def perioder(rapport_dato):
@@ -797,13 +825,13 @@ def fondsstoerrelse(metric, stamdata, nav_dato):
 
 
 def _er_indbetaling(cf):
-    """Kapitalkald plus betalt udligningsrente (EQUALISATION med LP-fortegn < 0)."""
+    """Kapitalkald plus betalt equalization (EQUALISATION med LP-fortegn < 0)."""
     return (cf.flow_class == "CONTRIBUTION") | ((cf.flow_class == "EQUALISATION")
                                                 & (cf.amount < 0))
 
 
 def _er_udlodning(cf):
-    """Udlodninger plus modtaget udligningsrente (EQUALISATION > 0)."""
+    """Udlodninger plus modtaget equalization (EQUALISATION > 0)."""
     return (cf.flow_class == "DISTRIBUTION") | ((cf.flow_class == "EQUALISATION")
                                                 & (cf.amount > 0))
 
@@ -844,7 +872,7 @@ def fond(inv, as_of, info):
                                      WHERE investment_id = :i AND event_date <= :d
                                      ORDER BY event_date""", i=iid, d=nav_dato)
     tilsagn = _f(tilsagn_haendelser.amount.sum()) if not tilsagn_haendelser.empty else None
-    # udligningsrente ved senere closings er betalt ud over tilsagnet: den betalte tæller
+    # equalization ved senere closings er betalt ud over tilsagnet: den betalte tæller
     # med i indbetalt og den modtagne i udloddet, men den nedbringer ikke tilsagnet, så
     # kaldt kapital og resttilsagn regnes uden (som forvalterens MM110)
     betalt_udl = _er_indbetaling(cf) & (cf.flow_class == "EQUALISATION")
@@ -900,19 +928,19 @@ def fond(inv, as_of, info):
             # Definitioner forklarer ejerandelen for en evergreen-fond, så der er ingen note
             andel = float(nav.nav.iloc[-1]) / fonds_nav
 
-    # hele beløb: rabat og udligningsrente er typisk skæve beløb (82.500), som tusinder
+    # hele beløb: rabat og equalization er typisk skæve beløb (82.500), som tusinder
     # runder forkert
     hel = lambda v: f"{v:,.0f}".replace(",", ".") + f" {inv.currency}"
     if udligning_betalt or udligning_modtaget:
         dele = []
         if udligning_betalt:
             dele.append(f"Indbetalt kapital indeholder {hel(udligning_betalt)} i "
-                        f"udligningsrente ({_datoer(cf[betalt_udl])})")
+                        f"equalization ({_datoer(cf[betalt_udl])})")
         if udligning_modtaget:
-            dele.append(f"udlodningerne {hel(udligning_modtaget)} i modtaget udligningsrente "
+            dele.append(f"udlodningerne {hel(udligning_modtaget)} i modtaget equalization "
                         f"({_datoer(cf[modtaget_udl])})")
         tekst = " og ".join(dele)
-        # hvad udligningsrente er, står i Definitioner; noten giver beløbet og følgen
+        # hvad equalization er, står i Definitioner; noten giver beløbet og følgen
         noter.append(Note(tekst[0].upper() + tekst[1:] + "; den indgår ikke i kaldt kapital og "
                           "resttilsagn.", "indbetalt"))
     kaldt_ = kaldt(mod_tilsagn, _memo(ka, nav_dato, "MM110"))
@@ -1135,7 +1163,8 @@ def _positionskandidater(fonde, kurser):
         art = "underliggende fond" if b["type"] == "fonde" else "porteføljeselskab"
         for r in b["raekker"]:
             p = positioner.setdefault(r["navn"].casefold(), dict(
-                navn=r["navn"], art=art, fonde=[], via=b.get("via"), dkk=0.0, dato=b["dato"]))
+                navn=r["navn"], art=art, type=beholdningstype(r), fonde=[], via=b.get("via"),
+                dkk=0.0, dato=b["dato"]))
             p["dkk"] += r["dagsvaerdi"] * kurs
             if f["fund_name"] not in p["fonde"]:
                 p["fonde"].append(f["fund_name"])
@@ -1559,7 +1588,7 @@ def _kvartalsslut(d):
 
 def _kaldt_pr(f, dato):
     """(kaldt mod tilsagnet, genkaldelige udlodninger) til og med dato, med de samme regler
-    som n["kaldt"] og n["recallable"]: kapitalkald uden udligningsrente, rabatten fra sin dato."""
+    som n["kaldt"] og n["recallable"]: kapitalkald uden equalization, rabatten fra sin dato."""
     cf = f["kilder"]["cash_flows"]
     cf = cf[(cf.value_date <= min(dato, f["nav_dato"]))]
     kaldt_ = -cf[cf.flow_class == "CONTRIBUTION"].amount.sum()
@@ -1568,6 +1597,41 @@ def _kaldt_pr(f, dato):
         kaldt_ += rabat_
     recallable = cf[(cf.flow_class == "DISTRIBUTION") & (cf.is_recallable == 1)].amount.sum()
     return float(kaldt_), float(recallable)
+
+
+def _stilling(med, dato, kurs, sidste=False):
+    """(tilsagn, resttilsagn, nav, foer_nav) i DKK for fondene pr. dato, med kursen på datoen,
+    eller None ved en manglende kurs. Resttilsagnet følger reglerne for n["resttilsagn"]
+    (_kaldt_pr), NAV er fondens seneste NAV; før den første NAV står fonden til det, der er
+    betalt netto ind (fondens navn i foer_nav). sidste: rapportens egne tal (*_dkk)."""
+    tilsagn = resttilsagn = nav = 0.0
+    foer_nav = set()
+    for f in med:
+        n = f["n"]
+        if sidste:
+            tilsagn += n["tilsagn_dkk"]
+            resttilsagn += n["resttilsagn_dkk"]
+            nav += n["nav_dkk"]
+            continue
+        t = f["kilder"]["tilsagn"]
+        t = float(t[t.event_date <= dato].amount.sum()) if t is not None else 0.0
+        h = [p for p in f["historik"] if p["dato"] <= dato]
+        betalt = [a for d, a, _ in f["kapitalstroemme"] if d <= dato]
+        if not t and not h and not betalt:
+            continue                # fonden var der ikke endnu; ingen kurs at slå op
+        k = kurs(f["valuta"], dato)
+        if k is None:
+            return None
+        kaldt_, recallable = _kaldt_pr(f, dato)
+        tilsagn += t * k
+        resttilsagn += max(t - kaldt_ + recallable, 0.0) * k
+        if h:
+            nav += h[-1]["nav"] * k
+        elif betalt:
+            # kaldt, men endnu ingen NAV: fonden står til det, der er betalt netto ind
+            foer_nav.add(f["fund_name"])
+            nav -= sum(betalt) * k
+    return tilsagn, resttilsagn, nav, foer_nav
 
 
 def _likviditet_start(lq):
@@ -1579,7 +1643,7 @@ def likviditet(fonde, kurs, rapport_dato, uden=LIKVIDITET_UDEN, fra_aar=None):
     """Porteføljens likviditet i DKK uden fondene i segmentet uden (standard ejendomsfondene;
     None tager alle med), til sliderne Samlede investeringer.
 
-    Kapitalstrømmene (som i indbetalt og udloddet: kald inkl. udligningsrente og rabat) omregnes
+    Kapitalstrømmene (som i indbetalt og udloddet: kald inkl. equalization og rabat) omregnes
     med kursen på deres egen dato, så summerne er indbetalt_dkk og udloddet_dkk. Pr. årsskifte
     (og rapportdatoen for det sidste år): tilsagn og resttilsagn med samme regler som
     n["resttilsagn"] og fondens seneste NAV, alle med kursen på årsskiftet; DPI og RVPI er
@@ -1629,32 +1693,11 @@ def likviditet(fonde, kurs, rapport_dato, uden=LIKVIDITET_UDEN, fra_aar=None):
     aar, foer_nav = [], set()
     for y in range(start.year, rapport_dato.year + 1):
         dato = date(y, 12, 31) if y < rapport_dato.year else rapport_dato
-        tilsagn = resttilsagn = nav = 0.0
-        for f in med:
-            n = f["n"]
-            if y == rapport_dato.year:
-                tilsagn += n["tilsagn_dkk"]
-                resttilsagn += n["resttilsagn_dkk"]
-                nav += n["nav_dkk"]
-                continue
-            t = f["kilder"]["tilsagn"]
-            t = float(t[t.event_date <= dato].amount.sum()) if t is not None else 0.0
-            h = [p for p in f["historik"] if p["dato"] <= dato]
-            betalt = [a for d, a, _ in f["kapitalstroemme"] if d <= dato]
-            if not t and not h and not betalt:
-                continue                # fonden var der ikke endnu; ingen kurs at slå op
-            k = kurs(f["valuta"], dato)
-            if k is None:
-                return None
-            kaldt_, recallable = _kaldt_pr(f, dato)
-            tilsagn += t * k
-            resttilsagn += max(t - kaldt_ + recallable, 0.0) * k
-            if h:
-                nav += h[-1]["nav"] * k
-            elif betalt:
-                # kaldt, men endnu ingen NAV: fonden står til det, der er betalt netto ind
-                foer_nav.add(f["fund_name"])
-                nav -= sum(betalt) * k
+        stilling = _stilling(med, dato, kurs, sidste=y == rapport_dato.year)
+        if stilling is None:
+            return None
+        tilsagn, resttilsagn, nav, uden_nav = stilling
+        foer_nav |= uden_nav
         ind = -sum(a for d, a, t in flows if d <= dato and t == "kald")
         udl = sum(a for d, a, t in flows if d <= dato and t == "udlodning")
         aar.append(dict(aar=y, dato=dato, tilsagn=tilsagn, resttilsagn=resttilsagn,
@@ -1751,6 +1794,50 @@ def kaldstempo(fonde, kurs, rapport_dato):
     rest, kaldt = sum(x["resttilsagn"] for x in linjer), sum(x["kaldt"] for x in linjer)
     return dict(fonde=linjer, fra=fra, total=dict(resttilsagn=rest, kaldt=kaldt,
                                                   aar=rest / kaldt if kaldt > 0 else None))
+
+
+def eksponering_over_tid(fonde, kurs, rapport_dato, fra_aar=None):
+    """NAV, resttilsagn og eksponering (NAV + resttilsagn) pr. kvartalsslut i DKK med kursen
+    ved kvartalets udgang (_stilling; det sidste kvartal er rapportens egne tal), og
+    kapitalkaldene pr. kvartal og akkumuleret, hver med kursen på sin dato (som indbetalt_dkk).
+
+    fra_aar: første år på aksen (som likviditet_alle); kald før det står samlet i primo, som
+    den akkumulerede kurve starter i, og foer_start nævner fondene bag. {kvartaler: [{dato,
+    nav, resttilsagn, eksponering, kald, kaldt}], primo, foer_start, foer_nav,
+    seneste_12_mdr}. None uden kald, med en manglende kurs eller uden DKK-tal.
+    """
+    if not fonde or any(f["n"].get(k) is None for f in fonde for k in DKK_FELTER):
+        return None
+    kald = []                           # (dato, DKK > 0, fondens navn)
+    for f in fonde:
+        for d, a, type_ in f["kapitalstroemme"]:
+            if type_ == "kald":
+                k = kurs(f["valuta"], d)
+                if k is None:
+                    return None
+                kald.append((d, -a * k, f["fund_name"]))
+    if not kald:
+        return None
+    foerste = min(d for d, *_ in kald)
+    start = max(date(fra_aar, 1, 1), foerste) if fra_aar else foerste
+    primo = sum(a for d, a, _ in kald if d < start)
+    kvartaler, foer_nav, q, akk = [], set(), _kvartalsslut(start), primo
+    while q <= _kvartalsslut(rapport_dato):
+        dato = min(q, rapport_dato)
+        stilling = _stilling(fonde, dato, kurs, sidste=dato == rapport_dato)
+        if stilling is None:
+            return None
+        _, rest, nav, uden_nav = stilling
+        foer_nav |= uden_nav
+        i_kvartalet = sum(a for d, a, _ in kald if start <= d and _kvartalsslut(d) == q)
+        akk += i_kvartalet
+        kvartaler.append(dict(dato=dato, nav=nav, resttilsagn=rest, eksponering=nav + rest,
+                              kald=i_kvartalet, kaldt=akk))
+        q = _kvartalsslut(q + timedelta(days=1))
+    fra = rapport_dato - timedelta(days=KALDSTEMPO_DAGE)
+    return dict(kvartaler=kvartaler, primo=primo, foer_nav=sorted(foer_nav),
+                foer_start=sorted({n for d, _, n in kald if d < start}),
+                seneste_12_mdr=sum(a for d, a, _ in kald if fra < d <= rapport_dato))
 
 
 def sammendrag(fonde, total_dkk, irr=None):
@@ -1850,7 +1937,7 @@ def portefoelje_udvikling(fonde):
         s = {k: sum(u[f"{k}_dkk"] for u in us) for k in UDVIKLING_FELTER}
         bidrag = sorted(((f["fund_name"], f["udvikling"][p]["vaerdi_dkk"]
                           + f["udvikling"][p]["valuta_dkk"]) for f in fonde), key=lambda x: -x[1])
-        naevner = s.pop("naevner")
+        naevner = s["naevner"]
         resultat[p] = dict(fra=us[0]["fra"], til=us[0]["til"], bidrag=bidrag,
                            afkast=(s["vaerdi"] + s["valuta"]) / naevner if naevner > 0 else None,
                            **s)
@@ -1914,6 +2001,16 @@ def _taller(r):
     return (r["dagsvaerdi"], r["udloddet"], r["kostpris"])
 
 
+# hvad en beholdningslinje er, efter sektionen i forvalterens oversigt; resten er selskaber
+BEHOLDNINGSTYPER = {"FUND": "Fond", "PRIMARY": "Fond", "SECONDARY": "Secondary",
+                    "CO_INVESTMENT": "Co-investering"}
+
+
+def beholdningstype(linje):
+    """Selskab, Fond, Secondary eller Co-investering for en beholdningslinje."""
+    return BEHOLDNINGSTYPER.get(linje.get("type"), "Selskab")
+
+
 def vaerdibevaegelser(fonde, kurser):
     """Beholdningernes værdibevægelse i kvartalet og året, i DKK på rapportdatoens kurs.
 
@@ -1953,7 +2050,8 @@ def vaerdibevaegelser(fonde, kurser):
                 continue
             for r in nu_r:
                 linje = linjer.setdefault((f["fund_name"], r["navn"]),
-                                          dict(navn=r["navn"], fond=f["fund_name"]))
+                                          dict(navn=r["navn"], fond=f["fund_name"],
+                                               type=beholdningstype(r)))
                 if r["navn"].lower() in primo:
                     linje[p] = (_vaerdiskabt(r) - _vaerdiskabt(primo[r["navn"].lower()])) * kurs
                 elif r["closing"] and r["closing"] > fra:
@@ -1969,6 +2067,192 @@ def vaerdibevaegelser(fonde, kurser):
                             if f not in brugte and f not in ejendomsfonde],
                 ejendomsfonde=[f["fund_name"] for f in ejendomsfonde],
                 uden_beholdninger=[f["fund_name"] for f in fonde if not f.get("beholdninger")])
+
+
+# ---------- de største bevægelser og positioner nærmere (supplerende slides) ----------
+
+DYK_KVARTALER = 8         # kvartaler i forløbet på kortene
+DYK_ANTAL = 3             # bevægelser på Bag de største værdibevægelser
+RISIKO_ANTAL = 4          # positioner på Største positioner - koncentration og risiko
+RISIKO_FALD = 0.25        # følsomheden: hvad et fald på 25 % i positionen koster porteføljen
+RISIKO_STOR = 0.05        # en position på mindst 5 % af NAV tælles som stor
+RISIKO_MULTIPLE = 3.0     # fra denne multiple er værdien mest urealiseret gevinst
+BELOEB = ("dagsvaerdi", "udloddet", "kostpris")
+
+
+def kvartalsdatoer(rapport_dato, antal=DYK_KVARTALER):
+    """De seneste antal kvartalsslut til og med rapportdatoen, ældste først; rapportdatoen er
+    det sidste punkt, også når den ikke er et kvartalsslut."""
+    datoer = [rapport_dato]
+    while len(datoer) < antal:
+        d = datoer[-1]
+        datoer.append(date(d.year, (d.month - 1) // 3 * 3 + 1, 1) - timedelta(days=1))
+    return datoer[::-1]
+
+
+def _linjeforloeb(navn, rapporter, datoer):
+    """Én beholdnings tal pr. dato fra den seneste oversigt på eller før datoen:
+    {dato, rapport, dagsvaerdi, udloddet, kostpris, tvpi}, eller None, før den findes.
+
+    rapporter er {rapportdato: linjer} (_beholdningsrapporter). Navnet følges bagud gennem
+    omdøbninger som i vaerdibevaegelser: store og små bogstaver tæller ikke, og et nyt navn
+    parres med det gamle ved _par.
+    """
+    linjer, soeg, efter = {}, navn.lower(), None
+    for d in sorted(rapporter, reverse=True):
+        rows = {r["navn"].lower(): r for r in rapporter[d]}
+        if soeg not in rows and efter is not None:
+            gl = _par([efter], rapporter[d]).get(efter["navn"])
+            if gl is None:
+                break
+            soeg = gl.lower()
+        if soeg in rows:
+            linjer[d] = efter = rows[soeg]
+        elif efter is not None:
+            break
+    punkter = []
+    for dato in datoer:
+        d = max((x for x in rapporter if x <= dato), default=None)
+        r = linjer.get(d)
+        punkter.append(None if r is None else dict(
+            dato=dato, rapport=d, dagsvaerdi=r["dagsvaerdi"], udloddet=r["udloddet"],
+            kostpris=r["kostpris"] or 0.0, tvpi=r.get("tvpi")))
+    return punkter
+
+
+def _fondsforloeb(f, datoer):
+    """Fondens egen NAV pr. dato som et beholdningsforløb (dagsværdi = NAV, kostpris =
+    indbetalt), til positioner uden gennemlysning."""
+    punkter = []
+    for dato in datoer:
+        h = [p for p in f["historik"] if p["dato"] <= dato]
+        punkter.append(dict(dato=dato, rapport=h[-1]["dato"], dagsvaerdi=h[-1]["nav"],
+                            udloddet=h[-1]["udloddet"], kostpris=h[-1]["indbetalt"], tvpi=None)
+                       if h else None)
+    return punkter
+
+
+def _i_dkk(punkter, kurs):
+    return [None if p is None else p | {k: p[k] * kurs for k in BELOEB} for p in punkter]
+
+
+def _laeg_sammen(forloeb):
+    """Flere fondes forløb for samme position, dato for dato; None, hvor ingen har den."""
+    ud = []
+    for punkter in zip(*forloeb, strict=True):
+        med = [p for p in punkter if p is not None]
+        ud.append(None if not med else dict(
+            med[0], rapport=max(p["rapport"] for p in med),
+            tvpi=med[0]["tvpi"] if len(med) == 1 else None,
+            **{k: sum(p[k] for p in med) for k in BELOEB}))
+    return ud
+
+
+def multiple(p):
+    """Forvalterens multiple for linjen, ellers (dagsværdi + udloddet) / kostpris."""
+    if p is None:
+        return None
+    if p.get("tvpi") is not None:
+        return p["tvpi"]
+    return (p["dagsvaerdi"] + p["udloddet"]) / p["kostpris"] if p["kostpris"] else None
+
+
+def _vaerdi(p):
+    return 0.0 if p is None else _vaerdiskabt(p)
+
+
+def bevaegelser_i_dybden(fonde, vb, udvikling, rapporter, kurser, perioder_, datoer,
+                         antal=DYK_ANTAL):
+    """De antal største værdibevægelser i kvartalet efter absolut størrelse, hver med sit
+    forløb og kvartalets bevægelse delt op i dagsværdi, udloddet og kostpris.
+
+    rapporter: {fondsnavn: {rapportdato: linjer}} (_beholdningsrapporter). Alt er i DKK med
+    kursen på rapportdatoen som i vaerdibevaegelser, så forløbet viser værdien uden
+    valutakursændringer. bidrag er bevægelsen over porteføljens Modified Dietz-nævner: hvor
+    meget den flyttede porteføljens afkast i kvartalet. None uden bevægelser i kvartalet.
+    """
+    linjer = [x for x in (vb or {}).get("linjer", []) if x.get("kvartal") is not None]
+    if not linjer:
+        return None
+    u = (udvikling or {}).get("kvartal") or {}
+    fra, til = perioder_["kvartal"]
+    fond = {f["fund_name"]: f for f in fonde}
+    kort = []
+    for x in sorted(linjer, key=lambda x: -abs(x["kvartal"]))[:antal]:
+        kurs = kurser[fond[x["fond"]]["valuta"]][0]
+        rap = rapporter.get(x["fond"]) or {}
+        primo, ultimo = _i_dkk(_linjeforloeb(x["navn"], rap, [fra, til]), kurs)
+        nul = dict.fromkeys(BELOEB, 0.0)
+        dele = {k: (ultimo or nul)[k] - (primo or nul)[k] for k in BELOEB}
+        kort.append(dict(
+            navn=x["navn"], fond=x["fond"], type=x["type"], kvartal=x["kvartal"],
+            aar=x.get("aar"), primo=primo, ultimo=ultimo, dele=dele,
+            bidrag=x["kvartal"] / u["naevner"] if u.get("naevner", 0) > 0 else None,
+            forloeb=_i_dkk(_linjeforloeb(x["navn"], rap, datoer), kurs)))
+    return dict(kort=kort, afkast=u.get("afkast"), fra=fra, til=til, datoer=datoer)
+
+
+def uaendret(p, forrige):
+    """Er intet ændret i punktet p fra forrige (dagsværdi, udloddet og kostpris)?"""
+    return (p is not None and forrige is not None
+            and all(abs(p[k] - forrige[k]) < 0.5 for k in BELOEB))
+
+
+def uaendret_siden(forloeb):
+    """Den rapportdato, positionens nuværende værdi første gang stod i forløbet, og om den
+    stod uændret i hele forløbet; (None, False), når værdien ændrede sig i det sidste kvartal."""
+    nu = forloeb[-1]
+    if nu is None:
+        return None, False
+    i = len(forloeb) - 1
+    while i > 0 and uaendret(nu, forloeb[i - 1]):
+        i -= 1
+    if i == len(forloeb) - 1:
+        return None, False
+    return forloeb[i]["rapport"], i == 0
+
+
+def koncentration(fonde, sp, rapporter, kurser, datoer, antal=RISIKO_ANTAL):
+    """Porteføljens koncentration og de antal største positioner nærmere, eller None.
+
+    Positionerne er dem fra stoerste_positioner() (sp). Hver får sit forløb over datoer i DKK
+    med kursen på rapportdatoen (summen over fondene, en fond uden gennemlysning med sin egen
+    NAV), andel_i_fonden (af dagsværdien i de fonde, den ejes gennem), værdiændringen de
+    seneste fire kvartaler (ændringen i dagsværdi + udloddet -
+    kostpris over dagsværdien dengang), datoen siden hvilken værdien er uændret, og hvad et
+    fald på RISIKO_FALD i positionen koster porteføljens NAV.
+    """
+    if not sp or not sp["linjer"]:
+        return None
+    nav, linjer = sp["nav_dkk"], sp["linjer"]
+    fond = {f["fund_name"]: f for f in fonde}
+    kort = []
+    for p in linjer[:antal]:
+        if p["art"] == "fond":
+            f = fond[p["fonde"][0]]
+            forloeb = _i_dkk(_fondsforloeb(f, datoer), kurser[f["valuta"]][0])
+        else:
+            forloeb = _laeg_sammen([
+                _i_dkk(_linjeforloeb(p["navn"], rapporter.get(n) or {}, datoer),
+                       kurser[fond[n]["valuta"]][0]) for n in p["fonde"]])
+        # positionens andel af dagsværdien i de fonde, den ejes gennem
+        i_fonden = None if p["art"] == "fond" else sum(
+            x["dagsvaerdi"] * kurser[fond[n]["valuta"]][0]
+            for n in p["fonde"] for x in fond[n]["beholdninger"]["raekker"])
+        nu, aar_siden = forloeb[-1], forloeb[-5] if len(forloeb) >= 5 else None
+        siden, hele = uaendret_siden(forloeb)
+        kort.append(p | dict(
+            forloeb=forloeb, kostpris=nu and nu["kostpris"], multiple=multiple(nu),
+            aendring_12m=(_vaerdi(nu) - _vaerdi(aar_siden)) / aar_siden["dagsvaerdi"]
+            if aar_siden and aar_siden["dagsvaerdi"] else None,
+            uaendret_siden=siden, uaendret_hele=hele,
+            andel_i_fonden=p["dkk"] / i_fonden if i_fonden else None,
+            fald=p["dkk"] * RISIKO_FALD / nav if nav else None))
+    top5 = linjer[:5]
+    return dict(kort=kort, nav_dkk=nav, datoer=datoer, stoerste=linjer[0]["andel"],
+                top5=sum(p["andel"] for p in top5), antal_top5=len(top5),
+                top=sp["top_andel"], antal_top=len(linjer),
+                store=sum(1 for p in linjer if p["andel"] >= RISIKO_STOR))
 
 
 def _dokument_ider(fonde):
@@ -2047,6 +2331,18 @@ def investor_rapport(investor_code, as_of=None):
                     f"TVPI pr. {p['dato']:%d.%m.%Y} er {p['tvpi']:.2f}x "
                     f"(i dag {f['n']['tvpi']:.2f}x) - NAV er langt over det indbetalte; mangler "
                     "et kapitalkald? Kvartalet vises ikke på TVPI og DPI over tid")
+    # her og ikke øverst, fordi aleta bruger xirr herfra
+    from . import aleta
+    aleta.paa_fondene(fonde, investor_code, rapport_dato, kurs)    # f["aleta"], kun med udtræk
+    # beholdningerne kvartal for kvartal til kortene om de største bevægelser og positioner
+    datoer = kvartalsdatoer(rapport_dato)
+    rapporter = {f["fund_name"]: _beholdningsrapporter(b["kode"], datoer[0], rapport_dato,
+                                                       b["andel"])
+                 for f in fonde if (b := f["beholdninger"])
+                 and b["type"] != "ejendomme" and b["skaleret"]}
+    vb = vaerdibevaegelser(fonde, kurser)
+    sp = stoerste_positioner(fonde, kurser)
+    udv = portefoelje_udvikling(fonde)
     return dict(investor=investor_code, navn=investor_navn(investor_code),
                 as_of=rapport_dato, fonde=fonde, total=total(fonde),
                 kurser=kurser, total_dkk=total_dkk, irr_dkk=irr_i_dkk,
@@ -2063,7 +2359,8 @@ def investor_rapport(investor_code, as_of=None):
                               for art in ("brancher", "regioner")},
                 gennemlysning=gennemlysning(fonde),
                 stoerste_eksponering=stoerste_eksponering(fonde, kurser),
-                stoerste_positioner=stoerste_positioner(fonde, kurser),
+                stoerste_positioner=sp,
+                koncentration=koncentration(fonde, sp, rapporter, kurser, datoer),
                 likviditet=lq,
                 # med ejendomsfondene, på samme tidsakse som sliden uden
                 likviditet_alle=likviditet(fonde, kurs, rapport_dato, uden=None,
@@ -2071,9 +2368,13 @@ def investor_rapport(investor_code, as_of=None):
                 aarlige_stroemme=aarlige_stroemme(fonde, kurs, rapport_dato,
                                                   fra_aar=_likviditet_start(lq)),
                 kaldstempo=kaldstempo(fonde, kurs, rapport_dato),
-                perioder=rapport_perioder, udvikling=portefoelje_udvikling(fonde),
+                eksponering_over_tid=eksponering_over_tid(fonde, kurs, rapport_dato,
+                                                          fra_aar=_likviditet_start(lq)),
+                perioder=rapport_perioder, udvikling=udv,
                 fortegnsafvigelser=fortegnsafvigelser(fonde),
-                vaerdibevaegelser=vaerdibevaegelser(fonde, kurser),
+                vaerdibevaegelser=vb,
+                bevaegelser_i_dybden=bevaegelser_i_dybden(fonde, vb, udv, rapporter, kurser,
+                                                          rapport_perioder, datoer),
                 datotjek=datotjek(fonde, rapport_dato),
                 valuta=fonde[0]["valuta"] if len({f["valuta"] for f in fonde}) == 1 else None,
                 # (valuta, ønsket dato) -> (kurs, kursdato) for hver kurs, rapporten har brugt

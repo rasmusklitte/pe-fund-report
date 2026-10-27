@@ -3,10 +3,10 @@ from datetime import date
 
 from pe_fund_report import report, slides
 
-SUPPLERENDE = ["likviditet", "likviditet", "aarlige_stroemme", "tvpi_over_tid", "kaldstempo",
-               "lange_tilsagn", "fordeling", "brancher", "regioner",
-               "branchekort_ejendomme", "regionskort_ejendomme", "vaerdibevaegelser",
-               "definitioner"]
+SUPPLERENDE = ["likviditet", "aarlige_stroemme", "tvpi_over_tid", "kaldstempo",
+               "eksponering_over_tid", "bevaegelser_i_dybden", "koncentration", "lange_tilsagn",
+               "fordeling", "brancher", "regioner", "branchekort_ejendomme",
+               "regionskort_ejendomme", "definitioner"]
 
 
 def test_supplerende_slides_rummer_dem_uden_for_rapporten(monkeypatch):
@@ -17,8 +17,8 @@ def test_supplerende_slides_rummer_dem_uden_for_rapporten(monkeypatch):
     prs = report._byg_supplerende(dict(navn="Motortramp", as_of=date(2026, 6, 30)))
     assert [navn for navn, *_ in kaldt] == SUPPLERENDE
     assert ("fordeling", ("geografi", "Geografisk fordeling efter tilsagn"), {}) in kaldt
-    # likviditeten først uden ejendomsfondene, så med
-    assert kaldt[:2] == [("likviditet", (), {}), ("likviditet", (), dict(med_ejendomme=True))]
+    # likviditeten uden ejendomsfondene; med dem står i rapporten
+    assert kaldt[0] == ("likviditet", (), {})
     # forside, Appendiks-skilleside og slutside; slidesne selv er erstattet ovenfor
     assert len(prs.slides._sldIdLst) == 3
     forside = [sh.text_frame.text for sh in prs.slides[0].shapes if sh.has_text_frame]
@@ -32,10 +32,14 @@ def test_supplerende_slides_er_ikke_i_rapporten(monkeypatch):
     for navn in SUPPLERENDE:
         if navn not in ("fordeling", "definitioner"):
             monkeypatch.setattr(slides, navn, lambda *a, navn=navn, **k: kaldt.append(navn))
-    for navn in ("sammendrag", "udvikling", "tilsagn_paa_tvaers", "aendringer_pr_fond",
+    monkeypatch.setattr(slides, "likviditet", lambda prs, r, **k: kaldt.append(("likviditet", k)))
+    for navn in ("sammendrag", "udvikling", "tilsagn_paa_tvaers", "vaerdibevaegelser",
+                 "aendringer_pr_fond",
                  "valutafordeling", "branchekort", "branchekort_aktivklasser", "regionskort",
                  "regionskort_aktivklasser", "stoerste_positioner", "gennemlysning",
-                 "portefoeljeoversigt", "definitioner", "gics_oversigt", "sidefod"):
+                 "portefoeljeoversigt", "definitioner", "aleta_afstemning", "irr_mod_aleta", "gics_oversigt",
+                 "sidefod"):
         monkeypatch.setattr(slides, navn, lambda *a: None)
     report._byg_deck(dict(navn="Motortramp", as_of=date(2026, 6, 30), fonde=[]))
-    assert kaldt == ["segment"]
+    # samlede investeringer med ejendomsfondene er rykket ind i rapporten
+    assert kaldt == [("likviditet", dict(med_ejendomme=True)), "segment"]
