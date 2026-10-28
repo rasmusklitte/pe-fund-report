@@ -1,6 +1,7 @@
 """Den anonymiserede udgave: navne, identitet og beløb (anonym.py og slides.beloebsskala)."""
 from datetime import date
 
+import pytest
 from pptx import Presentation
 from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE
@@ -146,9 +147,13 @@ def test_cli_anonym(monkeypatch):
     kald = {}
     monkeypatch.setattr(cli, "byg", lambda *a, **k: kald.update(a=a, k=k))
     cli.main(["MOTORTRAMP", "--as-of", "2026-06-30", "--anonym"])
-    assert kald["k"] == dict(med_data=True, anonym=True, med_supplerende=True)
-    cli.main(["MOTORTRAMP", "--uden-supplerende"])
+    assert kald["k"] == dict(med_data=True, anonym=True, med_supplerende=True, med_aleta=False)
+    cli.main(["MOTORTRAMP", "--uden-supplerende", "--aleta"])
     assert kald["k"]["anonym"] is False and kald["k"]["med_supplerende"] is False
+    assert kald["k"]["med_aleta"] is True
+    # Aleta røber investoren
+    with pytest.raises(SystemExit):
+        cli.main(["MOTORTRAMP", "--anonym", "--aleta"])
 
 
 def test_kort_fondsnavn_beholder_loebenummer():

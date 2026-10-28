@@ -12,7 +12,7 @@ from .paths import EXPORTS, MASTER
 
 
 def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, anonym=False,
-        med_supplerende=True):
+        med_supplerende=True, med_aleta=False):
     """Byg rapporten for én investor og returnér stien til pptx-filen.
 
     as_of: rapportdato (ÅÅÅÅ-MM-DD); standard er investors seneste NAV-dato.
@@ -20,6 +20,8 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
     med_data: gem også dataudtrækket <outfile>_data.xlsx med kilder til hvert tal.
     med_supplerende: gem også <outfile>_supplerende_slides.pptx med de slides, der er taget ud
     af rapporten (_byg_supplerende).
+    med_aleta: gem også <outfile>_aleta_afstemning.pptx med rapportens tal mod Aletas udtræk
+    (_byg_aleta); rapporten selv har aldrig Aleta-sider. Ikke sammen med anonym.
     anonym: uden navne, logoer, beskrivelser, fondsstørrelse og ejerandel, og alle beløb
     ganget med én skjult tilfældig faktor; aldrig med dataudtræk. Stopper uden at gemme, hvis
     et oprindeligt navn står i decket.
@@ -27,8 +29,10 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
     Hver bygning skrives i log/ (log.byggelog): hvem, hvornår, hvilken kode, filerne og alt,
     hvad den skriver i terminalen - også når den fejler.
     """
+    if anonym and med_aleta:
+        raise ValueError("Afstemningen med Aleta laves ikke anonymiseret: Aleta røber investoren")
     with log.byggelog(investor_code, as_of, anonym) as lg:
-        r = rigtig = lg.r = data.investor_rapport(investor_code, as_of)
+        r = rigtig = lg.r = data.investor_rapport(investor_code, as_of, med_aleta=med_aleta)
         skala = 1.0
         if anonym:
             skala = _skjult_faktor()
@@ -55,6 +59,16 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
             sti = _gem(ekstra, oenske.with_name(f"{oenske.stem}_supplerende_slides.pptx"))
             lg.filer.append(sti)
             print(f"gemt: {sti}  (supplerende slides, {len(ekstra.slides._sldIdLst)} slides)")
+        if med_aleta:
+            afstemning = _byg_aleta(r, master)
+            if afstemning:
+                sti = _gem(afstemning, oenske.with_name(f"{oenske.stem}_aleta_afstemning.pptx"))
+                lg.filer.append(sti)
+                print(f"gemt: {sti}  (afstemning med Aleta, "
+                      f"{len(afstemning.slides._sldIdLst)} slides)")
+            else:
+                print(f"ADVARSEL: intet Aleta-udtræk for {r['investor']} pr. "
+                      f"{r['as_of']:%d.%m.%Y} - Aleta-decket er ikke gemt")
         if med_data:
             # dataudtrækket ved siden af decket: samme navn med _data, til intern afstemning
             xlsx = _gem(excel.skriv(r), outfile.with_name(f"{outfile.stem}_data.xlsx"))
@@ -113,8 +127,6 @@ def _byg_deck(r, master=None):
     s = _ny_slide(prs, L_SKILLE[2])
     _saet_ph(s, 0, "Appendiks")
     slides.definitioner(prs, r)
-    slides.aleta_afstemning(prs, r)     # nøgletallene mod Aleta; kun med Aletas udtræk
-    slides.irr_mod_aleta(prs, r)        # kun med Aletas udtræk for investoren og datoen
     slides.gics_oversigt(prs, r)        # GICS-sektorerne og deres branchegrupper
     _ny_slide(prs, L_SLUT)
     slides.sidefod(prs, r["navn"])      # til sidst, så sidetallene er endelige
@@ -146,6 +158,7 @@ def _byg_supplerende(r, master=None):
     slides.bevaegelser_i_dybden(prs, r)     # de tre største værdibevægelser nærmere
     slides.koncentration(prs, r)            # de største positioner: koncentration og risiko
     slides.ejendomme_i_dybden(prs, r)       # ejendomsfondenes ejendomme over tid
+    slides.ejendomsbidrag(prs, r)           # hvilke ejendomme der har drevet afkastet
     slides.lange_tilsagn(prs, r)
     slides.fordeling(prs, r, "geografi", "Geografisk fordeling efter tilsagn")
     slides.brancher(prs, r)             # cirkeldiagrammerne
@@ -156,6 +169,24 @@ def _byg_supplerende(r, master=None):
     s = _ny_slide(prs, L_SKILLE[2])
     _saet_ph(s, 0, "Appendiks")
     slides.definitioner(prs, r, supplerende=True)
+    _ny_slide(prs, L_SLUT)
+    slides.sidefod(prs, r["navn"])
+    return prs
+
+
+def _byg_aleta(r, master=None):
+    """Afstemningen med Aleta for sig, kun på forespørgsel (--aleta): nøgletallene og IRR mod
+    investors eget system. None uden Aletas udtræk for investoren og datoen; gemmes ikke."""
+    prs = Presentation(str(_find_master(master or MASTER)))
+    _ryd_slides(prs)
+
+    s = _ny_slide(prs, L_FORSIDE)
+    _saet_ph(s, 0, f"{r['navn']} – afstemning med Aleta")
+    _saet_ph(s, 1, f"Rapportens tal mod Aleta pr. {r['as_of']:%d.%m.%Y}")
+    sider = [slides.aleta_afstemning(prs, r),   # nøgletallene mod Aleta
+             slides.irr_mod_aleta(prs, r)]      # IRR mod Aleta med årsagerne til forskellen
+    if not any(sider):
+        return None
     _ny_slide(prs, L_SLUT)
     slides.sidefod(prs, r["navn"])
     return prs

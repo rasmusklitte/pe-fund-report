@@ -417,6 +417,11 @@ VAERDIGRUNDLAG = {
 }
 
 
+# værdigrundlag, der er kostpris: ændringer i dem er investeringer, ikke værdiændringer
+KOSTGRUNDLAG = {"project costs to date", "acquisition costs to date", "assets measured at cost",
+                "valued at cost", "at cost", "property based on agreed purchase price"}
+
+
 def _ejendomme(fund_code, h):
     """En ejendomsfonds ejendomme som hele fondens værdier, før gæld.
 
@@ -441,7 +446,9 @@ def _ejendomme(fund_code, h):
             for r in linjer if r.segment))
         tekst = " + ".join(grundlag)
         koder = list(dict.fromkeys(str(r.segment).strip().lower() for r in linjer if r.segment))
-        raekker.append(dict(grundlag_koder=koder,
+        kostdel = sum(_f(r.fair_value) or 0.0 for r in linjer
+                      if str(r.segment).strip().lower() in KOSTGRUNDLAG)
+        raekker.append(dict(grundlag_koder=koder, kostdel=kostdel,
             navn=navn, sektor=tekst[:1].upper() + tekst[1:] or None, vintage=None, closing=None,
             instrument=None, kostpris_fond=None, dagsvaerdi_fond=vaerdi, udloddet_fond=0.0,
             kostpris=None, dagsvaerdi=vaerdi, udloddet=0.0, total=vaerdi, tvpi=None, irr=None,
@@ -452,7 +459,8 @@ def _ejendomme(fund_code, h):
         SELECT metric_code, value, document_id FROM rpt.v_fund_metric
         WHERE fund_code = :f AND report_date = :d
           AND metric_code IN ('GROSS_ASSET_VALUE', 'TOTAL_ASSETS', 'FUND_NAV',
-                              'NAV_PER_UNIT', 'ENTITY_VALUE', 'NET_DEBT', 'CASH')""",
+                              'NAV_PER_UNIT', 'ENTITY_VALUE', 'NET_DEBT', 'CASH',
+                              'PAID_IN')""",
                  f=fund_code, d=dato)
     return dict(dato=dato, raekker=raekker, skaleret=False, andel=1.0, kode=fund_code,
                 type="ejendomme", fakta={r.metric_code: _f(r.value) for r in m.itertuples()},
@@ -495,7 +503,7 @@ def _ejendomshistorik(fund_code, til):
 # fondens egne tal ved siden af ejendommene, i Excel-fanen Ejendomme
 EJENDOMSFAKTA = {"GROSS_ASSET_VALUE": "GAV", "ENTITY_VALUE": "Selskabsværdi (PEV)",
                  "NET_DEBT": "Nettogæld", "CASH": "Likvider", "FUND_NAV": "Fondens NAV",
-                 "NAV_PER_UNIT": "NAV pr. andel"}
+                 "NAV_PER_UNIT": "NAV pr. andel", "PAID_IN": "Fondens indbetalte kapital"}
 
 
 # Ejendommens stadie efter dens største værdigrundlag; alt andet (anskaffelse, kostpris,
@@ -535,6 +543,8 @@ def ejendomsforloeb(rapporter):
         fakta, ejendomssum = b["fakta"], sum(x["dagsvaerdi"] for x in b["raekker"])
         kvartaler.append(dict(
             dato=b["dato"], ejendomme={x["navn"]: x["dagsvaerdi"] for x in b["raekker"]},
+            kost={x["navn"]: _kostdel(x) for x in b["raekker"]},
+            indbetalt=fakta.get("PAID_IN"),
             # forvalterens GAV, når den er oplyst; ejendommene summerer til den på nær afrunding
             gav=fakta.get("GROSS_ASSET_VALUE") or ejendomssum, ejendomssum=ejendomssum,
             fonds_nav=fakta.get("FUND_NAV"), nav_pr_andel=fakta.get("NAV_PER_UNIT"),
@@ -564,7 +574,97 @@ def ejendomsforloeb(rapporter):
                 helt_aar=sml is not None and sml["dato"] == _et_aar_foer(nu["dato"]),
                 gav_12m=sml["gav"] if sml else None,
                 fonds_nav_12m=sml["fonds_nav"] if sml else None,
-                nav_pr_andel_12m=sml["nav_pr_andel"] if sml else None, huller=huller)
+                nav_pr_andel_12m=sml["nav_pr_andel"] if sml else None, huller=huller,
+                bidrag=ejendomsbidrag(kvartaler, sml["dato"] if sml else None))
+
+
+def _kostdel(x):
+    """Den del af ejendommens værdi, der står til kostpris; uden opdeling hele værdien, når
+    det største værdigrundlag er kostpris."""
+    if x.get("kostdel") is not None:
+        return x["kostdel"]
+    koder = x.get("grundlag_koder") or []
+    return x["dagsvaerdi"] if koder and koder[0] in KOSTGRUNDLAG else 0.0
+
+
+def _ejendomstrin(a, b):
+    """Ændringen fra rapport a til b pr. ejendom som (investeret, værdiændring).
+
+    Investeret er stigningen i ejendommens kostprisdel (projekt- og anskaffelsesomkostninger,
+    aftalt købspris); resten af ændringen er værdiændring. En ny ejendom er investeret til sin
+    værdi, og en ejendom, der er væk, er afhændet til sin værdi (negativt investeret). Går en
+    ejendom fra kostpris til vurdering, falder kostprisdelen, og hele ændringen er værdiændring.
+    """
+    ud = {}
+    for n in dict.fromkeys([*a["ejendomme"], *b["ejendomme"]]):
+        primo, ultimo = a["ejendomme"].get(n), b["ejendomme"].get(n)
+        if primo is None:
+            ud[n] = (ultimo, 0.0)
+        elif ultimo is None:
+            ud[n] = (-primo, 0.0)
+        else:
+            inv = max(b["kost"].get(n, 0.0) - a["kost"].get(n, 0.0), 0.0)
+            ud[n] = (inv, ultimo - primo - inv)
+    return ud
+
+
+def _vaerdiskabelse(a, b):
+    """Fondens værdiskabelse fra a til b: ændringen i NAV fratrukket ny indbetalt kapital
+    (ejendomsfondene udlodder ikke). None, når NAV eller indbetalt mangler."""
+    if None in (a["fonds_nav"], b["fonds_nav"], a["indbetalt"], b["indbetalt"]):
+        return None
+    return (b["fonds_nav"] - a["fonds_nav"]) - (b["indbetalt"] - a["indbetalt"])
+
+
+def ejendomsbidrag(kvartaler, fra_12m=None):
+    """Hvilke ejendomme der har drevet ejendomsfondens afkast (ren funktion).
+
+    kvartaler: ejendomsforloeb()'s kvartaler, ældste først. Giver trinene mellem rapporterne
+    (værdiændringen pr. ejendom og fondens værdiskabelse) og perioderne kvartal, 12 mdr. (fra
+    fra_12m) og start: pr. ejendom investeret, værdiændring og afkast (værdiændringen i forhold
+    til værdien primo + det investerede), og fra fondens værdiskabelse ned til ejendommene:
+    ændringen i selskabsværdien (PEV) og resten (renter, skat, omkostninger m.m.). None med
+    under to rapporter.
+    """
+    if len(kvartaler) < 2:
+        return None
+    trin = [dict(dato=b["dato"], fra=a["dato"], ejendomme=_ejendomstrin(a, b),
+                 vaerdiskabelse=_vaerdiskabelse(a, b),
+                 kvartaler=_kvartaler_mellem(a["dato"], b["dato"]))
+            for a, b in zip(kvartaler, kvartaler[1:])]
+    starter = {"kvartal": len(kvartaler) - 2, "start": 0}
+    if fra_12m is not None:
+        starter["12m"] = next(i for i, q in enumerate(kvartaler) if q["dato"] == fra_12m)
+    perioder = {}
+    for navn, i in starter.items():
+        primo, ultimo = kvartaler[i], kvartaler[-1]
+        ejendomme = {}
+        for t in trin[i:]:
+            for n, (inv, vaerdi) in t["ejendomme"].items():
+                x = ejendomme.setdefault(n, dict(navn=n, investeret=0.0, vaerdi=0.0,
+                                                 afhaendet=False))
+                x["investeret"] += inv
+                x["vaerdi"] += vaerdi
+                x["afhaendet"] = n not in ultimo["ejendomme"]
+        for x in ejendomme.values():
+            x["grundlag"] = primo["ejendomme"].get(x["navn"], 0.0) + max(x["investeret"], 0.0)
+            x["afkast"] = (x["vaerdi"] / x["grundlag"]
+                           if x["grundlag"] > 0 and not x["afhaendet"] else None)
+            # står hele vejen til kostpris: værdiændringen er 0 af metoden, ikke af markedet
+            x["til_kostpris"] = (not x["afhaendet"] and ultimo["kost"].get(x["navn"], 0.0)
+                                 >= ultimo["ejendomme"][x["navn"]])
+        vs = _vaerdiskabelse(primo, ultimo)
+        pev = (None if primo["pev"] is None or ultimo["pev"] is None
+               else ultimo["pev"] - primo["pev"])
+        i_alt = sum(x["vaerdi"] for x in ejendomme.values())
+        perioder[navn] = dict(
+            fra=primo["dato"], ejendomme=sorted(ejendomme.values(), key=lambda x: -x["vaerdi"]),
+            vaerdi=i_alt, investeret=sum(x["investeret"] for x in ejendomme.values()),
+            afkast=(i_alt / grundlag if (grundlag := sum(
+                x["grundlag"] for x in ejendomme.values() if not x["afhaendet"])) > 0 else None),
+            pev=pev, vaerdiskabelse=vs,
+            rest=None if vs is None else vs - i_alt - (pev or 0.0))
+    return dict(trin=trin, perioder=perioder)
 
 
 def _beholdninger(fund_code, as_of, andel, nav=None):
@@ -2689,8 +2789,10 @@ def dokumenter(ider):
         ORDER BY f.fund_code, d.doc_type, COALESCE(d.period_end, d.value_date)""")
 
 
-def investor_rapport(investor_code, as_of=None):
-    """{investor, navn, as_of, fonde: [...]} — as_of er som standard seneste NAV-dato."""
+def investor_rapport(investor_code, as_of=None, med_aleta=False):
+    """{investor, navn, as_of, fonde: [...]} — as_of er som standard seneste NAV-dato.
+    med_aleta: afstem også mod Aletas udtræk (f["aleta"], f["aleta_kontrol"]) til Aleta-decket;
+    ellers læses udtrækket ikke."""
     as_of = _dato(as_of) if as_of else date.today()
     info = fund_info()
     fonde = [f for f in (fond(inv, as_of, info) for inv in _investeringer(investor_code).itertuples())
@@ -2756,9 +2858,10 @@ def investor_rapport(investor_code, as_of=None):
                     f"TVPI pr. {p['dato']:%d.%m.%Y} er {p['tvpi']:.2f}x "
                     f"(i dag {f['n']['tvpi']:.2f}x) - NAV er langt over det indbetalte; mangler "
                     "et kapitalkald? Kvartalet vises ikke på TVPI og DPI over tid")
-    # her og ikke øverst, fordi aleta bruger xirr herfra
-    from . import aleta
-    aleta.paa_fondene(fonde, investor_code, rapport_dato, kurs)    # f["aleta"], kun med udtræk
+    if med_aleta:
+        # her og ikke øverst, fordi aleta bruger xirr herfra
+        from . import aleta
+        aleta.paa_fondene(fonde, investor_code, rapport_dato, kurs)    # kun med udtræk
     # beholdningerne kvartal for kvartal til kortene om de største bevægelser og positioner
     datoer = kvartalsdatoer(rapport_dato)
     rapporter = {f["fund_name"]: _beholdningsrapporter(b["kode"], datoer[0], rapport_dato,

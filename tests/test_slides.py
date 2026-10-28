@@ -1878,6 +1878,48 @@ def test_ejendomme_i_dybden_fliser_soejler_og_tabel_ned_til_nav():
     assert slides.ejendomme_i_dybden(_prs(), _rapport([dict(f, ejendomsforloeb=None)])) is None
 
 
+def test_ejendomsbidrag_viser_hvilke_ejendomme_der_drev_afkastet():
+    ekst, proj = "property based on third party valuation", "project costs to date"
+
+    def rapport(dato, a, b, nav, indbetalt):
+        return dict(dato=dato, fakta=dict(FUND_NAV=nav, PAID_IN=indbetalt, ENTITY_VALUE=5e6),
+                    raekker=[dict(navn="Ejendom A", dagsvaerdi=a, kostdel=0.0,
+                                  sektor="Ekstern vurdering", grundlag_koder=[ekst]),
+                             dict(navn="Ejendom B", dagsvaerdi=b, kostdel=b,
+                                  sektor="Projektomkostninger", grundlag_koder=[proj])])
+    e = data.ejendomsforloeb([rapport(date(2025, 6, 30), 60e6, 10e6, 40e6, 40e6),
+                              rapport(date(2026, 3, 31), 66e6, 20e6, 52e6, 48e6),
+                              rapport(date(2026, 6, 30), 70e6, 25e6, 60e6, 52e6)])
+    f = dict(fund_name="Bolig K/S", valuta="EUR", nav_dato=date(2026, 6, 30),
+             n=dict(andel=0.05), ejendomsforloeb=e)
+    s = slides.ejendomsbidrag(_prs(), _rapport([f]))[0]
+    t = _tekster(s)
+    assert "Bolig K/S – hvad har drevet afkastet" in t
+    assert "Ejendom A stod for 100 % af ejendommenes værdiændring over 12 måneder." in t
+    celler = [[c.text for c in rk.cells] for sh in s.shapes if sh.has_table
+              for rk in sh.table.rows]
+    hoved = [" ".join(c.split()) for c in celler[0]]
+    assert hoved[2:] == ["Investeret 12 mdr.¹", "Q2 26²", "12 mdr.", "fra 30.06.2025",
+                         "Afkast 12 mdr.³"]
+    assert "Værdiændring" in t                       # over de tre periodekolonner
+    assert celler[1] == ["Ejendom A", "Udlejning", "0,0", "+4,0", "+10,0", "+10,0", "+16,7 %"]
+    assert celler[3][-1] == "+11,8 %"                   # 10 / (60 + 10 + 15)
+    assert celler[2][:3] == ["Ejendom B", "Under opførelse", "15,0"] and celler[2][-1] == "–⁴"
+    assert [rk[0] for rk in celler[-4:]] == ["Ejendomme i alt", "Selskabsværdi (PEV)⁵",
+                                            "Gæld, skat og omkostninger m.m.⁶",
+                                            "Fondens værdiændring"]
+    assert celler[-1][3:5] == ["+4,0", "+8,0"]          # (60 - 40) - (52 - 40)
+    assert celler[-2][3:5] == ["0,0", "-2,0"]           # 8 - 10 - 0
+    diagram = next(sh.chart for sh in s.shapes if sh.has_chart)
+    # Ejendom B står til kostpris og får ingen serie
+    assert [x.name for p in diagram.plots for x in p.series] == [
+        "Ejendom A", "Fondens værdiændring"]
+    noter = " ".join(t)
+    assert "Forvalteren har ikke oplyst ejendommene pr. 30.09.2025 og 31.12.2025" in noter
+    _indenfor_fladen(s, "Bolig K/S – hvad har drevet afkastet")
+    assert slides.ejendomsbidrag(_prs(), _rapport([dict(f, ejendomsforloeb=None)])) is None
+
+
 def test_ejendomme_i_dybden_med_selskabsvaerdi_og_nettogaeld():
     ekst = "property based on third party valuation"
 

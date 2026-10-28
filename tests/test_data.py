@@ -1439,6 +1439,60 @@ def test_ejendomsforloeb_sammenligner_et_aar_tilbage_og_finder_huller():
     assert [q["gav"] for q in e["kvartaler"]] == [50.0, 70.0, 82.0, 100.0]
 
 
+def _bidragsrapport(dato, ejendomme, nav, indbetalt, pev=None):
+    """ejendomme: (navn, værdi, kostprisdel)."""
+    return dict(dato=dato, fakta=dict(FUND_NAV=nav, PAID_IN=indbetalt, ENTITY_VALUE=pev),
+                raekker=[dict(navn=n, dagsvaerdi=v, kostdel=k, sektor="x", grundlag_koder=["x"])
+                         for n, v, k in ejendomme])
+
+
+def test_ejendomsbidrag_skiller_investeringer_fra_vaerdiaendringer():
+    e = data.ejendomsforloeb([
+        _bidragsrapport(date(2025, 6, 30), [("Udlejet", 70.0, 70.0), ("Byggeri", 1.0, 1.0),
+                                            ("Solgt", 5.0, 0.0)], 40.0, 40.0, 10.0),
+        # Udlejet går fra købspris til vurdering, Byggeri får udviklingsgevinst, Ny købes
+        _bidragsrapport(date(2025, 9, 30), [("Udlejet", 73.0, 0.0), ("Byggeri", 15.0, 8.0),
+                                            ("Solgt", 5.0, 0.0), ("Ny", 3.0, 3.0)],
+                        60.0, 52.0, 12.0),
+        _bidragsrapport(date(2026, 6, 30), [("Udlejet", 80.0, 0.0), ("Byggeri", 30.0, 20.0),
+                                            ("Ny", 3.0, 3.0)], 75.0, 60.0, 13.0)])
+    b = e["bidrag"]
+    assert [t["kvartaler"] for t in b["trin"]] == [1, 3]
+    # kostprisdelen faldt for Udlejet: hele ændringen er værdiændring
+    assert b["trin"][0]["ejendomme"]["Udlejet"] == (0.0, 3.0)
+    assert b["trin"][0]["ejendomme"]["Byggeri"] == (7.0, 7.0)
+    assert b["trin"][0]["ejendomme"]["Ny"] == (3.0, 0.0)
+    assert b["trin"][1]["ejendomme"]["Solgt"] == (-5.0, 0.0)       # afhændet til bogført værdi
+    assert b["trin"][0]["vaerdiskabelse"] == 8.0                   # (60 - 40) - (52 - 40)
+    p = b["perioder"]["12m"]
+    assert p["fra"] == date(2025, 6, 30) and p["vaerdiskabelse"] == 15.0    # 35 - 20
+    assert [x["navn"] for x in p["ejendomme"]] == ["Udlejet", "Byggeri", "Solgt", "Ny"]
+    udlejet, byggeri, solgt, ny = p["ejendomme"]
+    assert (byggeri["investeret"], byggeri["vaerdi"]) == (19.0, 10.0)
+    assert byggeri["afkast"] == pytest.approx(10.0 / 20.0)        # værdi primo 1 + investeret 19
+    assert udlejet["afkast"] == pytest.approx(10.0 / 70.0)
+    assert solgt["afhaendet"] and solgt["afkast"] is None and not solgt["til_kostpris"]
+    assert ny["til_kostpris"] and not udlejet["til_kostpris"]
+    assert (p["vaerdi"], p["pev"], p["rest"]) == (20.0, 3.0, -8.0)     # 15 - 20 - 3
+    assert p["afkast"] == pytest.approx(20.0 / (70.0 + 20.0 + 3.0))
+    assert b["perioder"]["kvartal"]["fra"] == date(2025, 9, 30)
+    assert b["perioder"]["start"] == p                               # start er 12 mdr. her
+
+
+def test_ejendomsbidrag_uden_indbetalt_eller_med_kun_en_rapport():
+    e = data.ejendomsforloeb([
+        _bidragsrapport(date(2026, 3, 31), [("A", 10.0, 0.0)], 8.0, None),
+        _bidragsrapport(date(2026, 6, 30), [("A", 12.0, 0.0)], 9.0, None)])
+    p = e["bidrag"]["perioder"]["kvartal"]
+    assert p["vaerdiskabelse"] is None and p["rest"] is None and p["vaerdi"] == 2.0
+    assert "12m" not in e["bidrag"]["perioder"]
+    # uden kostprisdel er en ejendom, hvis største værdigrundlag er kostpris, til kostpris
+    assert data._kostdel(dict(dagsvaerdi=5.0, grundlag_koder=["valued at cost"])) == 5.0
+    assert data._kostdel(dict(dagsvaerdi=5.0, grundlag_koder=["development profit"])) == 0.0
+    assert data.ejendomsforloeb([_bidragsrapport(date(2026, 6, 30), [("A", 1.0, 0.0)],
+                                                 1.0, 1.0)])["bidrag"] is None
+
+
 def test_ejendomsforloeb_uden_rapport_et_aar_tilbage():
     e = data.ejendomsforloeb([_ejd_rapport(date(2026, 6, 30), [("A", 5.0, "x")], 3.0, None)])
     assert e["sammenligning_dato"] is None and not e["helt_aar"]

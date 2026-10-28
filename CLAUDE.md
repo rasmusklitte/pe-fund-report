@@ -9,6 +9,7 @@ pip install -e .[dev]                       # installs the pe-fund-report entry 
 
 python -m pe_fund_report MOTORTRAMP          # build the deck (latest NAV date)
 python -m pe_fund_report MOTORTRAMP --as-of 2025-12-31 --out exports/test.pptx
+python -m pe_fund_report MOTORTRAMP --aleta  # also <deck>_aleta_afstemning.pptx (the report vs Aleta)
 
 pytest                                      # whole suite; only test_aleta.py reads the database
 pytest -m "not db"                          # without the database tests
@@ -96,7 +97,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   *Geografisk eksponering – hele porteføljen* (`regionskort`), geografi pr. aktivklasse,
   største positioner, gennemlysning |
   *Fondsoversigter* section: the portfolio overview table, then each fund page and its company
-  cards | *Appendiks* section: definitions, *Nøgletal afstemt med Aleta* (below), *IRR sammenlignet med Aleta* (below), the GICS overview (`slides.gics_oversigt`: the 11
+  cards | *Appendiks* section: definitions, the GICS overview (`slides.gics_oversigt`: the 11
   sectors with a Danish description in `GICS_BESKRIVELSER` and their industry groups from
   `data.GICS_STRUKTUR`, in the sector colours) | end slide.
 - **Supplerende slides.** Slides taken out of the report go into a second deck,
@@ -143,10 +144,17 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   of the slide without them): earlier cash flows (CRED from 2005) are summed into `primo`, where
   the cumulative curve starts, and named in the note (`foer_start`). Year ends only look up a
   rate for funds that existed by then (no USD rate exists for 2005).
-- *IRR sammenlignet med Aleta* (`slides.irr_mod_aleta`, appendix): the report's IRR against
+- **Aleta deck** (`report._byg_aleta`, only with `--aleta` / `byg(med_aleta=True)`, the user's
+  choice: the report itself never carries the reconciliation): `<deck>_aleta_afstemning.pptx`
+  (named from the intended path, like the supplerende deck) with a cover, *Nøgletal afstemt med
+  Aleta* and *IRR sammenlignet med Aleta* (both below) and the end slide; not saved, with a
+  build warning, when there is no export for the investor and date. Not with `--anonym`.
+  The workbook still comes only from `tests/test_aleta.py`.
+- *IRR sammenlignet med Aleta* (`slides.irr_mod_aleta`, Aleta deck): the report's IRR against
   the investor's own system, Aleta, per fund. `pe_fund_report/aleta.py` reads the exports in
   `data/aleta/<INVESTOR>/` (`noegletal_<date>.xlsx`, dated Aleta's day = the first of the month
-  after the report date, and the newest `*transactions_*.xlsx` by the date in its name); `data.investor_rapport()`
+  after the report date, and the newest `*transactions_*.xlsx` by the date in its name);
+  `data.investor_rapport(..., med_aleta=True)` (only then; otherwise the exports are not read)
   calls `aleta.paa_fondene()`, which sets `f["aleta"]` from `irr_sammenligning()`: our IRR, in DKK
   (each flow at its own date's Nationalbanken rate, NAV at Aleta's date), the same flows moved to
   Aleta's dates, Aleta's IRR and the gap, plus short amount-free reasons; the slide shows our
@@ -160,7 +168,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   bank's date, the report on the date in the deposit notice and the register of owners). Never
   write »kaldsbrev« in the deck (the user: not a word). Without an export for the investor and date the slide is skipped; the anonymized deck
   drops `f["aleta"]` (Aleta would identify the client).
-- *Nøgletal afstemt med Aleta* (`slides.aleta_afstemning`, appendix, before the IRR slide): the
+- *Nøgletal afstemt med Aleta* (`slides.aleta_afstemning`, Aleta deck, before the IRR slide): the
   workbook's *Oversigt* redrawn in house style (the user found the workbook look poor): one row
   per fund, zebra rows, columns grouped under »Beløb« and »Nøgletal« with a vertical rule, one
   dot per cell in `ALETA_MARKERING`'s colours (olive = ens, terracotta = within tolerance,
@@ -231,6 +239,21 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   anonymized deck: the whole fund's NAV next to the investor's gives the ownership back. Excel
   sheet *Ejendomme* (`f["kilder"]["ejendomme"]`: the properties and the fund metrics in
   `data.EJENDOMSFAKTA` per report).
+  Right after it, *<fund> – hvad har drevet afkastet* (`slides.ejendomsbidrag`, the user's
+  request): which properties drove the return, from `data.ejendomsbidrag()` (pure) in
+  `f["ejendomsforloeb"]["bidrag"]`. The database has only fair value per property, so the
+  split rests on the value basis: a rise in the part at cost (`data.KOSTGRUNDLAG`: project and
+  acquisition costs, agreed purchase price; `kostdel` from `_ejendomme`) is *investeret*, a new
+  property is invested at its value, a vanished one disposed of at its value, and the rest is
+  *værdiændring* (so a property moving from cost to valuation counts its quarter's change as
+  value; investments in valued properties can't be separated — both said in the notes). The
+  fund's value change is ΔNAV − ΔPAID_IN; below the properties sit Δ PEV and the rest (»Gæld,
+  skat og omkostninger m.m.«). A generated sentence names the properties behind half the
+  12-month value change. Stacked columns per report of each property's value change (colours
+  as on *ejendommene bag NAV*) with the fund's value change as a line, and a table with
+  investeret, value change for the quarter / 12 mdr. / since the first report and afkast
+  (value change / (value primo + invested)). Dropped with `ejendomsforloeb` in the anonymized
+  deck. No Excel sheet of its own (PAID_IN is in *Ejendomme*).
 - **Cash flow forecast** (three slides in the supplerende deck after *Kapitalkald, resttilsagn og
   eksponering over tid*, the user's request; profile parameters from config, three scenarios,
   supplerende deck + Excel first). The model is Takahashi–Alexander (Yale), pure in

@@ -34,7 +34,7 @@ from pe_fund_report.aleta import TRANSAKTIONSFONDE
 def rapport():
     from pe_fund_report import data
     try:
-        return data.investor_rapport(INVESTOR, AS_OF.isoformat())
+        return data.investor_rapport(INVESTOR, AS_OF.isoformat(), med_aleta=True)
     except (DBAPIError, pyodbc.Error) as e:
         pytest.skip(f"databasen kan ikke nås: {e.__class__.__name__}")
 

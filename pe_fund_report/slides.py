@@ -4487,6 +4487,8 @@ def ejendomme_i_dybden(prs, r):
 
 
 ED_REST = 0.005           # en rest fra GAV til NAV over 0,5 % af NAV står som Øvrige poster
+ED_PEV = ("Selskabsværdien (PEV) er forvalterens værdi af selve fondsselskabet, vurderet "
+          "eksternt ved årets udgang og i årets løb tillagt de afholdte selskabsomkostninger.")
 
 
 def _ejendomsbro(e, fod):
@@ -4502,9 +4504,7 @@ def _ejendomsbro(e, fod):
     if pev is None or nd is None:
         m = fod.maerke("Fondens NAV fratrukket ejendommenes værdi (GAV).")
         return [(f"Gæld m.m., netto{m}", nav - gav, minus(e["fonds_nav_12m"], e["gav_12m"]))]
-    pev_m = fod.maerke("Selskabsværdien (PEV) er forvalterens værdi af selve fondsselskabet, "
-                       "vurderet eksternt ved årets udgang og i årets løb tillagt de afholdte "
-                       "selskabsomkostninger.")
+    pev_m = fod.maerke(ED_PEV)
     likvider = f" ({beloeb(e['likvider'])})" if e["likvider"] is not None else ""
     nd_m = fod.maerke("Nettogælden er lån og øvrige forpligtelser på ejendoms- og "
                       "selskabsniveau, inkl. renteswaps og udskudt skat, fratrukket likvider"
@@ -4623,6 +4623,197 @@ def _ejendomsslide(prs, r, f, e):
     _tabel(s, tx, ty, tw, raekker, bredder=[b for _, b, _ in ED_KOL],
            just=[j for _, _, j in ED_KOL], raekke_h=rh, pt=8, hoved=True, zebra=True,
            total=nav is not None, totaler=(i_gav,))
+    fod.tegn(s, noter_y)
+    return s
+
+
+# ---------- hvad har drevet ejendomsfondens afkast ----------
+
+EB_INDHOLD_Y = 1.55       # overskrifterne over diagram og tabel, under sætningen
+EB_DIAGRAM_W = 4.30       # diagrammets bredde; tabellen fylder resten
+EB_DRIVERE = 0.5          # sætningen nævner de største ejendomme, til de dækker halvdelen
+EB_MAKS_NAVNE = 3
+EB_MIN_SERIE = 5e4        # en ejendom uden værdiændring over dette i noget kvartal får ingen serie
+# tabellens kolonner: nøgle, bredde (forhold), justering
+EB_KOL = [("Ejendom", 1.40, V), ("Stadie", 0.95, V), ("Investeret", 0.72, H),
+          ("kvartal", 0.66, H), ("12m", 0.66, H), ("start", 0.78, H), ("Afkast", 0.66, H)]
+EB_GRUPPE_H = 0.20        # »Værdiændring« over periodekolonnerne
+
+
+def ejendomsbidrag(prs, r):
+    """Én slide pr. ejendomsfond med ejendomme pr. linje (i dag Home.Earth), lige efter
+    *ejendommene bag NAV*: hvilke ejendomme der har drevet afkastet. Værdiændringen pr. ejendom
+    og kvartal som stablede søjler med fondens værdiændring som linje, og en tabel med
+    investeret, værdiændringen i kvartalet, over 12 måneder og siden første rapport og
+    afkastet pr. ejendom, ned til fondens værdiændring. Hele fondens tal. Data fra
+    data.ejendomsbidrag() i f["ejendomsforloeb"]["bidrag"]."""
+    slides = []
+    for f in r["fonde"]:
+        e = f.get("ejendomsforloeb")
+        if e and e.get("bidrag"):
+            slides.append(_bidragsslide(prs, r, f, e))
+    return slides or None
+
+
+def _drivere(p):
+    """De største positive værdiændringer, til de dækker EB_DRIVERE af periodens samlede:
+    (navne, deres andel). Ingen, når ejendommenes værdi ikke steg."""
+    if p["vaerdi"] <= 0:
+        return [], None
+    navne, sum_ = [], 0.0
+    for x in p["ejendomme"]:
+        if x["vaerdi"] <= 0 or len(navne) == EB_MAKS_NAVNE:
+            break
+        navne.append(x["navn"])
+        sum_ += x["vaerdi"]
+        if sum_ >= EB_DRIVERE * p["vaerdi"]:
+            break
+    return navne, sum_ / p["vaerdi"]
+
+
+def _periodenavn(e, b, noegle):
+    """Kolonnens periode: »Q2 26«, »12 mdr.« eller »fra 30.06.2023«."""
+    p = b["perioder"][noegle]
+    if noegle == "kvartal" and b["trin"][-1]["kvartaler"] == 1:
+        return kvartal(e["dato"])
+    if noegle == "12m" and e["helt_aar"]:
+        return "12 mdr."
+    return f"fra {p['fra']:%d.%m.%Y}"
+
+
+def _bidragsslide(prs, r, f, e):
+    b, valuta = e["bidrag"], f["valuta"]
+    s = _oversigtsslide(prs, r, f"{f['fund_name']} – hvad har drevet afkastet",
+                        enhed=f"hele fonden, beløb i mio. {valuta}")
+    fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger.")
+    if e["dato"] != f["nav_dato"]:
+        fod.generel(f"Ejendommene er pr. {e['dato']:%d.%m.%Y}.")
+    lange = [t for t in b["trin"] if t["kvartaler"] > 1]
+    if lange:
+        fod.generel("Forvalteren har ikke oplyst ejendommene pr. "
+                    + _navne([f"{d:%d.%m.%Y}" for d in e["huller"]]) + ", så "
+                    + _navne([f"søjlen for {kvartal(t['dato'])} er ændringen fra "
+                              f"{t['fra']:%d.%m.%Y}" for t in lange]) + ".")
+    per = b["perioder"]
+    hoved_p = "12m" if "12m" in per else "start"
+    p = per[hoved_p]
+    perioder = [k for k in ("kvartal", "12m", "start") if k in per]
+
+    navne, andel = _drivere(p)
+    om = "over 12 måneder" if _periodenavn(e, b, hoved_p) == "12 mdr." \
+        else _periodenavn(e, b, hoved_p)
+    saetning = (f"{_navne(navne)} stod for {pct(andel, 0)} af ejendommenes værdiændring {om}."
+                if navne else f"Ejendommenes værdi steg ikke {om}.")
+
+    # mærkerne i læseorden: overskrifterne, så rækkerne
+    inv_m = fod.maerke("Investeret er stigningen i den del af ejendommens værdi, der står til "
+                       "kostpris (projekt- og anskaffelsesomkostninger, aftalt købspris), og en "
+                       "ny ejendoms værdi; resten af ændringen i ejendommens værdi er "
+                       "værdiændring.")
+    vaerdi_m = fod.maerke("Forvalteren oplyser ikke investeringerne i de eksternt vurderede "
+                          "ejendomme, så de indgår i værdiændringen; når en ejendom går fra "
+                          "kostpris til vurdering, er kvartalets ændring værdiændring.")
+    afkast_m = fod.maerke("Værdiændringen i procent af værdien primo plus det investerede, før "
+                          "gæld og omkostninger.")
+    kost_m = (fod.maerke("Ejendommen står til kostpris og har derfor ingen værdiændring.")
+              if any(x["til_kostpris"] for x in p["ejendomme"]) else "")
+    afh_m = (fod.maerke("Afhændet; forskellen mellem salgsprisen og den bogførte værdi indgår i "
+                        "gæld, skat og omkostninger m.m.")
+             if any(x["afhaendet"] for x in p["ejendomme"]) else "")
+    med_fond = p["vaerdiskabelse"] is not None
+    pev_m = fod.maerke(ED_PEV) if med_fond and p["pev"] is not None else ""
+    rest_m = fod.maerke("Fondens værdiændring fratrukket ejendommenes"
+                        + (" og selskabsværdiens" if p["pev"] is not None else "")
+                        + ": bl.a. renter, renteswaps, udskudt skat og fondens omkostninger."
+                        ) if med_fond else ""
+    noter_y = _noter_y(fod.tekst())
+
+    _tekst(s, X0, LQ_FLISE_Y + 0.02, X1 - X0, 0.30, saetning, 13, fed=True, farve=SAGE)
+
+    # venstre: værdiændringen pr. ejendom og kvartal, med fondens værdiændring som linje
+    y = EB_INDHOLD_Y
+    _tekst(s, X0, y, EB_DIAGRAM_W, 0.22, "Værdiændring pr. kvartal", 10.5, fed=True,
+           farve=SAGE)
+    _streg(s, X0, y + 0.27, X0 + EB_DIAGRAM_W, y + 0.27)
+    # samme rækkefølge og farver som på siden om ejendommene bag NAV
+    alle = [x["navn"] for x in e["ejendomme"]]
+    alle += list(dict.fromkeys(n for q in e["kvartaler"] for n in q["ejendomme"]
+                               if n not in alle))
+    farver = {n: FOND_FARVER[i % len(FOND_FARVER)] for i, n in enumerate(alle)}
+    med = [n for n in alle if any(abs(t["ejendomme"].get(n, (0.0, 0.0))[1]) >= EB_MIN_SERIE
+                                  for t in b["trin"])]
+    cd = CategoryChartData(number_format="#,##0.0")
+    cd.categories = [kvartal(t["dato"]) for t in b["trin"]]
+    for n in med:
+        cd.add_series(n, [_mio(t["ejendomme"].get(n, (0.0, 0.0))[1]) for t in b["trin"]])
+    if med_fond:
+        cd.add_series("Fondens værdiændring", [None if t["vaerdiskabelse"] is None
+                                                else _mio(t["vaerdiskabelse"])
+                                                for t in b["trin"]])
+    diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(X0), Inches(y + 0.32),
+                                 Inches(EB_DIAGRAM_W), Inches(noter_y - 0.08 - y - 0.32),
+                                 cd).chart
+    _diagramakser(diagram, '#,##0" mio."')
+    diagram.legend.position = XL_LEGEND_POSITION.BOTTOM
+    plot = diagram.plots[0]
+    plot.gap_width, plot.overlap = 45, 100
+    for serie, n in zip(list(plot.series)[:len(med)], med):
+        _farv(serie, farver[n])
+        serie.invert_if_negative = False     # ellers bliver faldene hvide
+    if med_fond:
+        bar = plot._element
+        ser = bar.findall(qn("c:ser"))[len(med)]
+        bar.remove(ser)
+        _linjeplot(diagram, bar, ser, SORT, len(med))
+
+    # højre: pr. ejendom ned til fondens værdiændring
+    tx = X0 + EB_DIAGRAM_W + ED_LUFT
+    _tekst(s, tx, y, X1 - tx, 0.22, "Ejendommene", 10.5, fed=True, farve=SAGE)
+    _streg(s, tx, y + 0.27, X1, y + 0.27)
+    kol = [k for k in EB_KOL if k[0] not in ("kvartal", "12m", "start") or k[0] in per]
+    hovedperiode = _periodenavn(e, b, hoved_p)
+    overskrift = {"Investeret": f"Investeret\n{hovedperiode}{inv_m}",
+                  "Afkast": f"Afkast\n{hovedperiode}{afkast_m}",
+                  **{k: _periodenavn(e, b, k).replace("fra ", "fra\n")
+                        + (vaerdi_m if k == perioder[0] else "") for k in perioder}}
+    stadie = {x["navn"]: x["stadie"] for x in e["ejendomme"]}
+
+    def i_periode(k, n):
+        x = next((x for x in per[k]["ejendomme"] if x["navn"] == n), None)
+        return aendring(x["vaerdi"]) if x else "–"
+
+    def fond(noegle):
+        return [aendring(per[k][noegle]) for k in perioder]
+
+    raekker = [[overskrift.get(k, k) for k, _, _ in kol]]
+    for x in p["ejendomme"]:
+        afkast = ("–" + kost_m if x["til_kostpris"] else "–" + afh_m if x["afhaendet"]
+                  else aendring(x["afkast"], fmt=pct))
+        raekker.append([x["navn"], stadie.get(x["navn"], "Afhændet"), beloeb(x["investeret"]),
+                        *(i_periode(k, x["navn"]) for k in perioder), afkast])
+    i_alt = len(raekker)
+    raekker.append(["Ejendomme i alt", "", beloeb(p["investeret"]), *fond("vaerdi"),
+                    aendring(p["afkast"], fmt=pct)])
+    if med_fond:
+        if p["pev"] is not None:
+            raekker.append([f"Selskabsværdi (PEV){pev_m}", "", "", *fond("pev"), ""])
+        raekker.append([f"Gæld, skat og omkostninger m.m.{rest_m}", "", "", *fond("rest"), ""])
+        raekker.append(["Fondens værdiændring", "", "", *fond("vaerdiskabelse"), ""])
+    # »Værdiændring« over periodekolonnerne, som en gruppeoverskrift
+    bredder = [w for _, w, _ in kol]
+    skala = (X1 - tx) / sum(bredder)
+    i0 = next(i for i, (k, _, _) in enumerate(kol) if k in per)
+    gx = tx + sum(bredder[:i0]) * skala
+    gw = sum(bredder[i0:i0 + len(perioder)]) * skala
+    _tekst(s, gx, y + 0.33, gw, EB_GRUPPE_H, "Værdiændring", 8, fed=True, farve=SAGE, just=C)
+    _streg(s, gx + 0.05, y + 0.33 + EB_GRUPPE_H, gx + gw - 0.05, y + 0.33 + EB_GRUPPE_H,
+           pt=0.5)
+    ty = y + 0.36 + EB_GRUPPE_H
+    rh = min(0.28, (noter_y - 0.1 - ty) / (len(raekker) + 0.6))
+    tbl = _tabel(s, tx, ty, X1 - tx, raekker, bredder=bredder,
+                 just=[j for _, _, j in kol], raekke_h=rh, pt=8, hoved=True, zebra=True,
+                 total=med_fond, totaler=(i_alt,))
+    tbl.rows[0].height = Inches(rh * 1.6)       # overskrifterne står på to linjer
     fod.tegn(s, noter_y)
     return s
 
