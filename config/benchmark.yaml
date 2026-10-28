@@ -45,11 +45,11 @@ indeks:
 # sliderne (brugerens valg).
 regioner:
   MSCI ACWI:
-    NORTH_AMERICA: 66.64    # USA 63,59 + Canada 3,05
-    EUROPE: 9.71            # Storbritannien 3,20 + Frankrig 2,10 + Tyskland 2,13 + Schweiz 2,28
-    ROW: 23.65              # Japan 4,93 + Kina 3,14 + Taiwan 2,31 + Indien 1,65 + ikke oplyst 11,62
+    NORTH_AMERICA: 66.44    # USA 63,59 + Canada 3,05
+    EUROPE: 14.46            # Storbritannien 3,20 + Frankrig 2,10 + Tyskland 2,13 + Schweiz 2,28
+    ROW: 20.10              # Japan 4,93 + Kina 3,14 + Taiwan 2,31 + Indien 1,65 + ikke oplyst 11,62
   # MSCI World:
-  #   NORTH_AMERICA: 75.10    # USA 71,91 + Canada 3,19
-  #   EUROPE: 12.41           # Storbritannien 3,61 + Frankrig 2,75 + Tyskland 2,57 + Schweiz 2,34
+  #   NORTH_AMERICA: 75.24    # USA 71,91 + Canada 3,19
+  #   EUROPE: 16.12           # Storbritannien 3,61 + Frankrig 2,75 + Tyskland 2,57 + Schweiz 2,34
   #                           # + Nederlandene 1,14
-  #   ROW: 12.49              # Japan 5,15 + Australien 1,69 + ikke oplyst 5,65
+  #   ROW: 13.64              # Japan 5,15 + Australien 1,69 + ikke oplyst 5,65
