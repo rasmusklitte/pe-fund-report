@@ -18,7 +18,7 @@ def test_byggelog_skriver_udskrift_og_oplysninger(tmp_path, capsys):
     with log.byggelog("MOTORTRAMP", None, False, mappe=tmp_path) as lg:
         print("ADVARSEL: KAPE22 er opgjort pr. 31.03.2026")
         lg.filer.append("exports/MOTORTRAMP_2026-06-30.pptx")
-        lg.r = dict(as_of=date(2026, 6, 30), fonde=[{}, {}],
+        lg.r = dict(as_of=date(2026, 6, 30), justeret_til=date(2026, 6, 30), fonde=[{}, {}],
                     total_dkk=dict(nav_dkk=317_699_673.4), irr_dkk=dict(irr=0.1234))
     # udskriften står stadig i terminalen, og loggen er nævnt til sidst
     ud = capsys.readouterr().out

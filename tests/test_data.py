@@ -315,6 +315,82 @@ def test_datotjek_ignorerer_fonde_uden_beholdninger():
     assert data.datotjek([_fond_med_datoer("A", d, None)], d)["ens"]
 
 
+def _stroemme(*raekker):
+    return pd.DataFrame(raekker, columns=["value_date", "flow_class", "amount"])
+
+
+def test_rul_nav_frem_laegger_kald_til_og_traekker_udlodninger_fra():
+    gp, til = date(2026, 6, 30), date(2026, 9, 30)
+    cf = _stroemme((date(2026, 6, 30), "CONTRIBUTION", -99.0),       # på NAV-datoen: i forvalterens NAV
+             (date(2026, 7, 15), "CONTRIBUTION", -20.0),
+             (date(2026, 8, 1), "DISTRIBUTION", 5.0),
+             (date(2026, 8, 1), "WITHHOLDING_TAX", -1.0),     # udlodningen står brutto
+             (date(2026, 8, 2), "EQUALISATION", -3.0),
+             (date(2026, 10, 1), "CONTRIBUTION", -50.0))      # efter rapportdatoen
+    nav, justering, raekker = data.rul_nav_frem(100.0, cf, gp, til)
+    assert (nav, justering, len(raekker)) == (115.0, 15.0, 2)
+
+
+def test_rul_nav_frem_saetter_negativ_nav_til_nul():
+    cf = _stroemme((date(2026, 7, 15), "DISTRIBUTION", 130.0))
+    nav, justering, _ = data.rul_nav_frem(100.0, cf, date(2026, 6, 30), date(2026, 9, 30))
+    assert (nav, justering) == (0.0, -100.0)
+
+
+def _just_fond(navn, valuta, nav_dato, nav, cf, indbetalt_dkk=100.0, udloddet_dkk=0.0):
+    return dict(fund_name=navn, valuta=valuta, nav_dato=nav_dato,
+                # rapportens NAV i DKK: kursen på NAV-datoen (7,0 for EUR i testen)
+                n=dict(nav=nav, nav_dkk=nav * (1.0 if valuta == "DKK" else 7.0),
+                       indbetalt_dkk=indbetalt_dkk, udloddet_dkk=udloddet_dkk),
+                kilder=dict(cash_flows=_stroemme(*cf)))
+
+
+def test_justeret_nav_ruller_kun_de_fonde_der_halter_frem():
+    q2, q3 = date(2026, 6, 30), date(2026, 9, 30)
+    kurs = lambda v, d: 1.0 if v == "DKK" else {q3: 7.5}.get(d, 7.0)
+    a = _just_fond("A", "DKK", q3, 120.0, [(date(2026, 8, 1), "CONTRIBUTION", -10.0)])
+    b = _just_fond("B", "EUR", q2, 10.0, [(date(2026, 7, 15), "CONTRIBUTION", -2.0),
+                                          (date(2026, 8, 1), "DISTRIBUTION", 1.0),
+                                          (date(2026, 8, 1), "WITHHOLDING_TAX", -0.1)],
+                   indbetalt_dkk=56.0)
+    irr_dkk = dict(flows=[dict(dato=date(2024, 1, 1), dkk=-100.0, type="Cash flow"),
+                          dict(dato=date(2024, 1, 1), dkk=-56.0, type="Cash flow"),
+                          dict(dato=q3, dkk=120.0, type="NAV (sidste cash flow)")])
+    j = data.justeret_nav([a, b], q3, kurs, irr_dkk)
+    la, lb = j["linjer"]
+    assert (la["kald"], la["justeret"]) == (0.0, 120.0)           # A er opgjort pr. q3
+    assert (lb["kald"], lb["udlodning"], lb["justeret"]) == (2.0, 1.0, 11.0)
+    assert lb["justeret_dkk"] == 11.0 * 7.5 and lb["kald_dkk"] == 2.0 * 7.0
+    t = j["i_alt"]
+    assert t["justeret_dkk"] == pytest.approx(120.0 + 82.5)
+    assert t["nav_dkk"] + t["kald_dkk"] - t["udlodning_dkk"] == pytest.approx(120.0 + 75.0 + 7.0)
+    assert j["tvpi"] == pytest.approx((7.0 + 202.5) / (156.0 + 14.0))
+    # IRR: de gamle cash flows, B's senere kald og udlodning (uden kildeskat) og justeret NAV
+    assert j["irr"] == pytest.approx(data.xirr([
+        (date(2024, 1, 1), -156.0), (date(2026, 7, 15), -14.0), (date(2026, 8, 1), 7.0),
+        (q3, 202.5)]))
+    # broen fra rapportens NAV i DKK går op med valutakursændringen som residual
+    assert t["nav_rapport_dkk"] == 120.0 + 70.0
+    assert t["nav_rapport_dkk"] + t["kald_dkk"] - t["udlodning_dkk"] + t["valuta_dkk"] == \
+        pytest.approx(t["justeret_dkk"])
+    assert j["negative"] == []
+    assert data.justeret_nav([a], q3, kurs, irr_dkk) is None
+
+
+def test_fond_bag_rapportdatoen_har_sit_eget_kvartal():
+    q1, q2 = date(2026, 3, 31), date(2026, 6, 30)
+    f = dict(historik=_historik((q1, 100.0, 80.0, 0.0), (q2, 110.0, 80.0, 0.0)),
+             kapitalstroemme=[(date(2026, 8, 1), -20.0, "kald")], noter=[], valuta="EUR",
+             fund_name="B")
+    data.udvikling(f, data.perioder(q2))
+    data.omregn_udvikling_til_dkk([f], lambda v, d: {q1: 7.0, q2: 7.2}.get(d, 7.5),
+                                  date(2026, 9, 30))
+    u = f["udvikling"]["kvartal"]
+    assert (u["fra"], u["til"], u["vaerdi"], u["kald"]) == (q1, q2, 10.0, 0.0)
+    # ultimo er til rapportdatoens kurs, som NAV i DKK på de andre sider
+    assert u["ultimo_dkk"] == 110.0 * 7.5 and u["kurs_ultimo"] == 7.5
+
+
 class _FalskPrs:
     """Presentation-stub, der lader som om de første n filnavne er låst."""
 
@@ -604,7 +680,7 @@ def test_omregning_til_dkk_giver_valutakursaendring_som_residual():
               ("EUR", date(2026, 6, 30)): 7.5}
     kurs = lambda v, d: 1.0 if v == "DKK" else kurser.get((v, d))
     a, b = _udv_fond("A", "DKK", 100.0, 10.0, 120.0), _udv_fond("B", "EUR", 10.0, 2.0, 13.0)
-    data.omregn_udvikling_til_dkk([a, b], kurs)
+    data.omregn_udvikling_til_dkk([a, b], kurs, date(2026, 6, 30))
     ua, ub = a["udvikling"]["kvartal"], b["udvikling"]["kvartal"]
     assert ua["valuta_dkk"] == 0.0 and ua["vaerdi_dkk"] == 10.0
     assert (ub["primo_dkk"], ub["kald_dkk"], ub["ultimo_dkk"]) == (70.0, 14.4, 97.5)
@@ -677,7 +753,7 @@ def test_regnskabstal_bevaegelsesnote_pr_fond_og_i_alt():
                  rettet=98.0)
     b = _rt_fond("B", "EUR", _ka((ultimo, "ITD", "CA290", 1.0)),
                  skat=[(date(2026, 5, 20), -2.0)])
-    data.omregn_udvikling_til_dkk([a, b], kurs)
+    data.omregn_udvikling_til_dkk([a, b], kurs, date(2026, 6, 30))
     rt = data.regnskabstal([a, b], kurs)["kvartal"]
     fa, fb = rt["fonde"]
     for x in (fa, fb, rt["i_alt"]):
@@ -689,13 +765,14 @@ def test_regnskabstal_bevaegelsesnote_pr_fond_og_i_alt():
     assert rt["i_alt"]["gebyrer"] == -1.0 and rt["i_alt"]["resttilsagn"] == 80.0
     assert rt["udeladte_gebyrer"] == ["B"] and rt["udeladte_carry"] == ["B"]
     # uden kurs ingen regnskabstal for perioden
-    assert data.regnskabstal([a, b], lambda v, d: 1.0 if v == "DKK" else None) == \
-        {"kvartal": None}
+    uden = lambda v, d: 1.0 if v == "DKK" else None
+    data.omregn_udvikling_til_dkk([a, b], uden, ultimo)
+    assert data.regnskabstal([a, b], uden) == {"kvartal": None}
 
 
 def test_portefoelje_udvikling_er_none_uden_kurs():
     a = _udv_fond("A", "USD", 10.0, 0.0, 11.0)
-    data.omregn_udvikling_til_dkk([a], lambda v, d: None)
+    data.omregn_udvikling_til_dkk([a], lambda v, d: None, date(2026, 6, 30))
     assert data.portefoelje_udvikling([a]) == {"kvartal": None}
 
 

@@ -12,7 +12,7 @@ from .paths import EXPORTS, MASTER
 
 
 def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, anonym=False,
-        med_supplerende=True, med_aleta=False):
+        med_supplerende=True, med_aleta=False, med_pme=False):
     """Byg rapporten for én investor og returnér stien til pptx-filen.
 
     as_of: rapportdato (ÅÅÅÅ-MM-DD); standard er investors seneste NAV-dato.
@@ -22,6 +22,8 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
     af rapporten (_byg_supplerende).
     med_aleta: gem også <outfile>_aleta_afstemning.pptx med rapportens tal mod Aletas udtræk
     (_byg_aleta); rapporten selv har aldrig Aleta-sider. Ikke sammen med anonym.
+    med_pme: en udgave af rapporten med de tre PME-slides efter Samlede investeringer, gemt som
+    <...>_med_pme.pptx; de står stadig også i de supplerende slides.
     anonym: uden navne, logoer, beskrivelser, fondsstørrelse og ejerandel, og alle beløb
     ganget med én skjult tilfældig faktor; aldrig med dataudtræk. Stopper uden at gemme, hvis
     et oprindeligt navn står i decket.
@@ -39,7 +41,7 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
             r, originaler = anonymisering.anonymiser(rigtig, skala)
             med_data = False
         with slides.beloebsskala(skala) if anonym else nullcontext():
-            prs = _byg_deck(r, master)
+            prs = _byg_deck(r, master, med_pme)
             ekstra = _byg_supplerende(r, master) if med_supplerende else None
         if anonym:
             # begge decks tjekkes, før noget gemmes
@@ -49,7 +51,10 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
                                  + " - intet er gemt")
 
         navn = "ANONYM" if anonym else r["investor"]
-        oenske = Path(outfile or EXPORTS / f"{navn}_{r['as_of']:%Y-%m-%d}.pptx")
+        # den ønskede dato, også når forvalternes seneste NAV er ældre
+        # med PME har sit eget navn, så standardrapporten ikke overskrives
+        oenske = Path(outfile or EXPORTS / (f"{navn}_{r['justeret_til']:%Y-%m-%d}"
+                                            + ("_med_pme" if med_pme else "") + ".pptx"))
         outfile = _gem(prs, oenske)
         lg.filer.append(outfile)
         print(f"gemt: {outfile}  ({len(r['fonde'])} fonde, {len(prs.slides._sldIdLst)} slides"
@@ -85,8 +90,9 @@ def _skjult_faktor():
     return rng.uniform(0.55, 0.8) if rng.random() < 0.5 else rng.uniform(1.25, 1.8)
 
 
-def _byg_deck(r, master=None):
-    """Hele præsentationen i slide-rækkefølgen; gemmes ikke."""
+def _byg_deck(r, master=None, med_pme=False):
+    """Hele præsentationen i slide-rækkefølgen; gemmes ikke. med_pme: også de tre PME-slides
+    efter Samlede investeringer."""
     prs = Presentation(str(_find_master(master or MASTER)))
     _ryd_slides(prs)
 
@@ -98,6 +104,13 @@ def _byg_deck(r, master=None):
     slides.udvikling(prs, r)            # springes over uden DKK-kurser for alle fonde
     # samlede investeringer med ejendomsfondene; uden dem står i de supplerende slides
     slides.likviditet(prs, r, med_ejendomme=True)
+    if med_pme:
+        slides.pme_portefoelje(prs, r)
+        slides.pme_fonde(prs, r)
+        slides.pme_relevante(prs, r)
+    # kun når en fond er bag den ønskede dato: kald og udlodninger efter NAV-datoen
+    slides.efter_kvartalet(prs, r)
+    slides.justeret_nav(prs, r)
 
     s = _ny_slide(prs, L_SKILLE[0])
     _saet_ph(s, 0, "Porteføljeoversigt")
@@ -126,8 +139,8 @@ def _byg_deck(r, master=None):
 
     s = _ny_slide(prs, L_SKILLE[2])
     _saet_ph(s, 0, "Appendiks")
-    slides.definitioner(prs, r)
-    slides.gics_oversigt(prs, r)        # GICS-sektorerne og deres branchegrupper
+    slides.definitioner(prs, r, pme=med_pme)
+    slides.gics_oversigt(prs, r)       # GICS-sektorerne og deres branchegrupper
     _ny_slide(prs, L_SLUT)
     slides.sidefod(prs, r["navn"])      # til sidst, så sidetallene er endelige
     return prs
@@ -148,6 +161,7 @@ def _byg_supplerende(r, master=None):
     slides.likviditet(prs, r)           # samlede investeringer uden ejendomsfondene
     slides.pme_portefoelje(prs, r)      # porteføljen mod indekskontoen i ACWI
     slides.pme_fonde(prs, r)            # hver fonds IRR mod samme cash flows i ACWI
+    slides.pme_relevante(prs, r)        # det samme mod hver fonds eget indeks
     slides.aarlige_stroemme(prs, r)     # kald og udlodninger pr. år og fond
     slides.tvpi_over_tid(prs, r)        # TVPI og DPI pr. kvartal, én pr. fond
     slides.kaldstempo(prs, r)           # resttilsagn og kaldene de seneste 12 mdr.
@@ -195,6 +209,7 @@ def _byg_aleta(r, master=None):
 def _advarsler(r):
     """Forhold, der skal ses på før udsendelse; skrives ved bygningen, ikke i decket."""
     _advar_om_datoer(r["datotjek"])
+    _advar_om_justering(r.get("justeret_nav"))
     for f in r["fonde"]:
         for advarsel in f.get("advarsler", []):
             print(f"ADVARSEL: {f['fund_name']}: {advarsel}")
@@ -252,3 +267,17 @@ def _advar_om_datoer(tjek):
     for x in tjek["skaeve_beholdninger"]:
         print(f"ADVARSEL: {x['fond']} har beholdninger pr. "
               f"{x['beholdninger_dato']:%d.%m.%Y}, men nøgletal pr. {x['nav_dato']:%d.%m.%Y}")
+
+
+def _advar_om_justering(j):
+    """Skriv de fonde, hvis NAV er justeret for kapitalstrømme på sin egen slide."""
+    if not j:
+        return
+    for x in j["linjer"]:
+        if x["nav_dato"] < j["til"]:
+            print(f"justeret NAV: {x['fund_name']} har NAV pr. {x['nav_dato']:%d.%m.%Y}, "
+                  f"justeret for kapitalstrømme til {j['til']:%d.%m.%Y} "
+                  f"({x['justeret'] - x['nav']:+,.0f} {x['valuta']})")
+    for navn in j["negative"]:
+        print(f"ADVARSEL: {navn}: NAV + kald - udlodninger er negativ pr. {j['til']:%d.%m.%Y}; "
+              "sat til 0 på sliden med justeret NAV")

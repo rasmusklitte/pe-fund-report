@@ -1,0 +1,38 @@
+# Relevante benchmarkindeks til PME-siden »Fondene mod relevante indeks« i de supplerende
+# slides. Siderne »Porteføljen mod markedet« og »Fondene mod markedet« bruger fortsat MSCI ACWI
+# for alle fonde (indeks.BENCHMARK_TICKER).
+#
+# indeks:     yfinance-ticker -> navn (fuldt, til noten), kort (til tabellen) og valuta (den,
+#             kurserne er noteret i). Kurserne er udbyttejusterede (total return) og gemmes i
+#             data/indeks/<ticker uden ^>.csv; de hentes kun efter et kvartalsskifte.
+# segmenter:  fondens segment (data.segment()) -> ticker.
+# fonde:      fondskode -> ticker, når fonden skal afvige fra sit segment.
+# standard:   ticker for fonde, hvis segment ikke står her.
+# Kontrollér, at et nyt indeks findes i yfinance, og hvor langt tilbage det går: en fond, hvis
+# første cash flow ligger før indeksets start, får n/a.
+
+standard: ACWI
+
+indeks:
+  ACWI: {navn: iShares MSCI ACWI ETF, kort: MSCI ACWI, valuta: USD}
+  PSP: {navn: Invesco Global Listed Private Equity ETF, kort: Børsnoteret PE, valuta: USD}
+  IWM: {navn: iShares Russell 2000 ETF, kort: Russell 2000, valuta: USD}
+  IWO: {navn: iShares Russell 2000 Growth ETF, kort: Russell 2000 Growth, valuta: USD}
+  ^OMXCCAPGI: {navn: OMX Copenhagen Cap GI, kort: OMX Cph Cap GI, valuta: DKK}
+  BKLN: {navn: Invesco Senior Loan ETF, kort: Senior loans, valuta: USD}
+  SYBJ.DE: {navn: SPDR Bloomberg Euro High Yield Bond UCITS ETF, kort: Euro high yield,
+            valuta: EUR}
+  IQQP.DE: {navn: iShares European Property Yield UCITS ETF, kort: Europæisk ejendom,
+            valuta: EUR}
+
+segmenter:
+  Private equity: PSP
+  Fund of funds: PSP
+  Secondaries: IWM
+  Private credit: BKLN
+  Ejendomme: IQQP.DE
+
+fonde:
+  CATACAP3: ^OMXCCAPGI      # danske SMV-buyouts
+  SEED4: IWO                # tidlig venture
+  PD3LGT: SYBJ.DE           # europæiske unitranche-lån i EUR

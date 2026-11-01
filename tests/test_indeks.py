@@ -67,3 +67,9 @@ def test_fejl_ved_hentning_bruger_csv_eller_giver_none(tmp_path, capsys):
     s = indeks.indeksserie("ACWI", date(2026, 10, 2), _fejl, tmp_path)
     assert s.index[-1] == date(2026, 6, 30)
     assert "ADVARSEL" in capsys.readouterr().out
+
+
+def test_indeksserie_gemmer_uden_cirkumfleks(tmp_path):
+    hent = lambda t, til: pd.Series([1.0], index=[date(2026, 6, 30)])
+    indeks.indeksserie("^OMX", i_dag=date(2026, 7, 15), hent=hent, mappe=tmp_path)
+    assert (tmp_path / "OMX.csv").exists()

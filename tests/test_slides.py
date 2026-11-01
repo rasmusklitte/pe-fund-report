@@ -490,8 +490,49 @@ def test_fordeling_fortsaetter_paa_ny_slide_naar_tabellen_er_for_lang():
     assert _tabelraekker(sider[0])[1][0] == "I alt"
 
 
+def _justeret_rapport():
+    r = _rapport([])
+    linje = lambda navn, valuta, d, nav, kald, udl: dict(
+        fund_name=navn, valuta=valuta, nav_dato=d, kurs=1.0 if valuta == "DKK" else 7.46,
+        nav=nav, kald=kald, udlodning=udl, justeret=nav + kald - udl,
+        nav_dkk=nav, kald_dkk=kald, udlodning_dkk=udl, justeret_dkk=nav + kald - udl)
+    linjer = [linje("Alfa", "DKK", date(2026, 9, 30), 120e6, 0.0, 0.0),
+              linje("Beta", "EUR", date(2026, 6, 30), 10e6, 2e6, 1e6)]
+    i_alt = {k: sum(x[k] for x in linjer) for k in
+             ("nav_dkk", "kald_dkk", "udlodning_dkk", "justeret_dkk")}
+    i_alt |= dict(nav_rapport_dkk=129.5e6, valuta_dkk=131e6 - 129.5e6 - 2e6 + 1e6)
+    r["justeret_nav"] = dict(til=date(2026, 9, 30), linjer=linjer, negative=[], i_alt=i_alt,
+                             tvpi=1.4, irr=0.11)
+    return r
+
+
+def test_justeret_nav_har_sin_egen_slide_kun_naar_en_fond_halter():
+    assert slides.justeret_nav(_prs(), _rapport([])) is None
+    s = slides.justeret_nav(_prs(), _justeret_rapport())
+    rk = _tabelraekker(s)
+    assert [x[0] for x in rk[1:3]] == ["Alfa", "Beta"]
+    assert rk[2][2] == "30.06.2026" and rk[2][6] == "11,0"
+    assert rk[-1][0].startswith("I alt") and rk[-1][-1] == "131,0"
+    t = " ".join(_tekster(s))
+    assert "Udvikling efter kvartalets afslutning – pr. fond" in t and "EUR 7,4600" in t
+
+
+def test_efter_kvartalet_viser_broen_og_kapitalstroemmene():
+    assert slides.efter_kvartalet(_prs(), _rapport([])) is None
+    t = " ".join(_tekster(slides.efter_kvartalet(_prs(), _justeret_rapport())))
+    assert "Udvikling efter kvartalets afslutning" in t
+    assert "NAV +1,5 mio. DKK" in t and "TVPI 1,40x" in t and "IRR 11,0 %" in t
+    assert "Beta" in t and "Ingen kapitalstrømme i perioden: Alfa." in t
+
+
+def test_definitioner_viser_justeret_nav_kun_naar_en_fond_er_justeret():
+    tekster = lambda r: [x for s in slides.definitioner(_prs(), r) for x in _tekster(s)]
+    assert "Justeret NAV" not in tekster(_rapport([]))
+    assert "Justeret NAV" in tekster(_justeret_rapport())
+
+
 def test_definitioner_viser_alle_begreber_inden_for_fladen():
-    sider = slides.definitioner(_prs(), _rapport([]), supplerende=True)
+    sider = slides.definitioner(_prs(), _justeret_rapport(), supplerende=True)
     t = [x for s in sider for x in _tekster(s)]
     assert "Definitioner" in t
     assert ("Definitioner (fortsat)" in t) == (len(sider) > 1)
@@ -1976,7 +2017,7 @@ def test_pme_fonde_sorteret_efter_direct_alpha_med_i_alt_nederst():
     s = slides.pme_fonde(_prs(), _pme_rapport())
     t = _tekster(s)
     assert "Fondene mod markedet" in t and "KS-PME" in t and "Merværdi\vmod ACWI³" in t
-    assert "IRR: fonden mod de samme cash flows i ACWI²" in t
+    assert "IRR: fonden mod indekskontoen" in t and "IRR\vACWI²" in t
     raekker = [x for x in t if x.startswith(("Fond A", "Fond B", "Fond C", "I alt"))]
     assert [x[:6] for x in raekker] == ["Fond A", "Fond B", "Fond C", "I alt"]
     assert "Fond C¹" in t
@@ -2090,3 +2131,79 @@ def test_prognose_pr_fond_tabel_og_profiler():
     noter = next(x for x in _tekster(s) if x.startswith("Kilde"))
     assert "⁴ Alfa har egne antagelser: bow 1,0." in noter
     _indenfor_fladen(s, "Prognose pr. fond")
+
+
+def _pme_relevant_rapport():
+    r = _pme_rapport()
+    a, b, c = (next(f for f in r["fonde"] if f["fund_name"] == n)
+               for n in ("Fond A", "Fond B", "Fond C"))
+    # mod eget indeks vender rækkefølgen: B slår sit indeks, A ikke
+    a["pme_relevant"] = dict(ks_pme=0.95, direct_alpha=-0.01, indeks_irr=0.13,
+                             merverdi=-1_000_000.0, kort="Senior loans", ticker="BKLN")
+    b["pme_relevant"] = dict(ks_pme=1.10, direct_alpha=0.02, indeks_irr=0.03,
+                             merverdi=2_000_000.0, kort="Børsnoteret PE", ticker="PSP")
+    c["pme_relevant"] = dict(grund="Fondens første cash flow (31.03.2005) ligger før "
+                                   "indeksets start.", kort="Europæisk ejendom")
+    r["pme_relevant"] = dict(ks_pme=1.02, direct_alpha=0.004, irr=0.139, indeks_irr=0.135,
+                             merverdi=1_000_000.0, udeladte=["Fond C"],
+                             indeks=[dict(ticker="BKLN", navn="Invesco Senior Loan ETF",
+                                          kort="Senior loans", kvartal=0.01),
+                                     dict(ticker="PSP", kort="Børsnoteret PE", kvartal=-0.08,
+                                          navn="Invesco Global Listed Private Equity ETF")])
+    return r
+
+
+def test_pme_relevante_viser_hver_fonds_indeks():
+    r = _pme_relevant_rapport()
+    t = _tekster(slides.pme_relevante(_prs(), r))
+    assert "Fondene mod relevante indeks" in t and "Indeks" in t
+    raekker = [x for x in t if x.startswith(("Fond A", "Fond B", "Fond C", "I alt"))]
+    assert [x[:6] for x in raekker[:3]] == ["Fond B", "Fond A", "Fond C"]
+    assert raekker[3].startswith("I alt") and len(raekker) == 4
+    assert "Senior loans" in t and "Børsnoteret PE" in t and "Fondenes egne" in t
+    assert "1,10x" in t and "+2,0 mio. DKK" in t and "1,02x" in t
+    noter = next(x for x in t if x.startswith("Kilde"))
+    assert "Børsnoteret PE: Invesco Global Listed Private Equity ETF (PSP)" in noter
+    assert "faldt Børsnoteret PE 8,0 %" in noter and "Senior loans 1,0 %" not in noter
+    assert "summen af fondenes konti" in noter and "heller ikke med i i alt-rækken" in noter
+    assert "ACWI" not in " ".join(t)
+    # ACWI-siden er uændret af de nye tal
+    assert slides.pme_fonde(_prs(), r) is not None
+
+
+def test_pme_relevante_springes_over_uden_data():
+    r = _pme_rapport()
+    assert slides.pme_relevante(_prs(), r) is None
+
+
+@pytest.mark.parametrize("byg, kol, plot", [(slides.pme_fonde, slides.PME_KOL, 4),
+                                            (slides.pme_relevante, slides.PME_REL_KOL, 5)])
+def test_pme_intet_krydser_gitteret(byg, kol, plot):
+    s = byg(_prs(), _pme_relevant_rapport())
+    v, h = slides._lt_x(plot, kol), slides._lt_x(plot + 1, kol)
+    ind = lambda sh: sh.left / 914400 < h and (sh.left + sh.width) / 914400 > v
+    y_top = slides.Y_TOP + 0.44
+    bund = max(sh.top + sh.height for sh in s.shapes if sh.is_placeholder is False
+               and sh.shape_type == 9) / 914400        # gitterstregernes bund
+    # kun aksens etiketter står i kolonnen; tallene har egne kolonner
+    tekster = [sh for sh in s.shapes if sh.has_text_frame and sh.text_frame.text.strip()
+               and ind(sh) and y_top <= sh.top / 914400 < bund]
+    assert tekster == []
+    # ingen flade ud over rækkernes zebra i fuld bredde dækker nullinjen
+    fuld = (slides.X1 - slides.X0) * 914400
+    assert not [sh for sh in s.shapes if sh.shape_type == 1 and ind(sh) and sh.width < fuld
+                and sh.auto_shape_type != slides.MSO_SHAPE.OVAL and sh.top / 914400 < bund]
+
+
+def test_definitioner_med_pme_viser_kun_pme_begreberne():
+    tekster = lambda **k: [x for s in slides.definitioner(_prs(), _pme_rapport(), **k)
+                           for x in _tekster(s)]
+    assert "KS-PME" not in tekster()
+    med = tekster(pme=True)
+    assert {"KS-PME", "Direct Alpha", "Indekskonto"} <= set(med)
+    assert "Gebyrer" not in med and "Cash flow-prognose" not in med
+
+
+def test_pme_relevante_kolonner_fylder_indholdsbredden():
+    assert sum(b for _, b, _ in slides.PME_REL_KOL) == pytest.approx(
+        sum(b for _, b, _ in slides.PME_KOL))

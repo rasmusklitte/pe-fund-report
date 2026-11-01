@@ -5,7 +5,7 @@ import pytest
 
 from pe_fund_report import report, slides
 
-SUPPLERENDE = ["regnskabstal", "likviditet", "pme_portefoelje", "pme_fonde", "aarlige_stroemme", "tvpi_over_tid", "kaldstempo",
+SUPPLERENDE = ["regnskabstal", "likviditet", "pme_portefoelje", "pme_fonde", "pme_relevante", "aarlige_stroemme", "tvpi_over_tid", "kaldstempo",
                "eksponering_over_tid", "prognose", "prognose_nav", "prognose_pr_fond", "bevaegelser_i_dybden", "koncentration",
                "ejendomme_i_dybden", "ejendomsbidrag", "lange_tilsagn",
                "fordeling", "brancher", "regioner", "branchekort_ejendomme",
@@ -48,10 +48,30 @@ def test_supplerende_slides_er_ikke_i_rapporten(monkeypatch):
                  "regionskort_aktivklasser", "stoerste_positioner", "gennemlysning",
                  "portefoeljeoversigt", "definitioner", "gics_oversigt",
                  "sidefod"):
-        monkeypatch.setattr(slides, navn, lambda *a: None)
+        monkeypatch.setattr(slides, navn, lambda *a, **k: None)
     report._byg_deck(dict(navn="Motortramp", as_of=date(2026, 6, 30), fonde=[]))
     # samlede investeringer med ejendomsfondene er rykket ind i rapporten
     assert kaldt == [("likviditet", dict(med_ejendomme=True)), "segment"]
+
+
+def test_rapporten_med_pme_har_slidesene_efter_samlede_investeringer(monkeypatch):
+    kaldt = []
+    for navn in ("sammendrag", "udvikling", "efter_kvartalet", "justeret_nav",
+                 "tilsagn_paa_tvaers", "vaerdibevaegelser", "aendringer_pr_fond",
+                 "valutafordeling", "fordeling", "branchekort", "branchekort_aktivklasser",
+                 "regionskort", "regionskort_aktivklasser", "stoerste_positioner",
+                 "gennemlysning", "portefoeljeoversigt", "gics_oversigt", "sidefod"):
+        monkeypatch.setattr(slides, navn, lambda *a, **k: None)
+    for navn in ("likviditet", "pme_portefoelje", "pme_fonde", "pme_relevante"):
+        monkeypatch.setattr(slides, navn, lambda *a, navn=navn, **k: kaldt.append(navn))
+    monkeypatch.setattr(slides, "definitioner", lambda prs, r, **k: kaldt.append(k))
+    r = dict(navn="Motortramp", as_of=date(2026, 6, 30), fonde=[])
+    report._byg_deck(r)
+    assert kaldt == ["likviditet", dict(pme=False)]
+    kaldt.clear()
+    report._byg_deck(r, med_pme=True)
+    assert kaldt == ["likviditet", "pme_portefoelje", "pme_fonde", "pme_relevante",
+                     dict(pme=True)]
 
 
 def test_aleta_afstemningen_er_et_deck_for_sig(monkeypatch):

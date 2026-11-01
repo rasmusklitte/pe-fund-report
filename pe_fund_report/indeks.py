@@ -56,7 +56,7 @@ def indeksserie(ticker=BENCHMARK_TICKER, i_dag=None, hent=_hent_yfinance, mappe=
     hentes historikken til og med det ultimo og gemmes. Mislykkes hentningen, bruges filen,
     hvis den findes (med en advarsel i byggeloggen); ellers None.
     """
-    sti = mappe / f"{ticker}.csv"
+    sti = mappe / f"{ticker.lstrip('^')}.csv"      # ^ i Yahoos indekskoder (^OMXCCAPGI)
     ultimo = seneste_kvartalsslut(i_dag or date.today())
     gemt = _laes(sti) if sti.exists() else None
     if gemt is not None and not gemt.empty \

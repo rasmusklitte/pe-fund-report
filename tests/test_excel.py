@@ -47,7 +47,7 @@ def _fond(dok_mappe):
                          fondsstoerrelse=dict(tekst="Stamdata", document_id=None),
                          indbetalt="kapitalkald", estimerede=[]))
     data.udvikling(f, data.perioder(NAV_DATO))
-    data.omregn_udvikling_til_dkk([f], lambda v, d: 1.0)
+    data.omregn_udvikling_til_dkk([f], lambda v, d: 1.0, NAV_DATO)
     (dok_mappe / "ALFA").mkdir()
     (dok_mappe / "ALFA" / "q2.pdf").write_bytes(b"%PDF")
     return f

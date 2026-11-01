@@ -109,6 +109,21 @@ def test_anonymiser_fjerner_ejendomsforloebet():
     assert "ejendomsforloeb" not in ny["fonde"][0]
 
 
+def test_anonymiser_omskriver_pme():
+    r = _rapport()
+    navn = "Petersen & Partners Private Credit II"
+    r["fonde"][1]["pme_relevant"] = dict(kort="Senior loans", grund=f"{navn} mangler kurser.")
+    r["pme"] = dict(udeladte=[navn], linjer=[dict(fund_code="PPPC2", fund_name=navn)])
+    r["pme_relevant"] = dict(udeladte=[navn], indeks=[dict(kort="Senior loans", fonde=[navn])])
+    ny, originaler = anonym.anonymiser(r, 2.0)
+    tekst = " ".join(_alle_strenge({k: ny[k] for k in ("pme", "pme_relevant")})
+                     ) + ny["fonde"][1]["pme_relevant"]["grund"]
+    assert navn.lower() in originaler and "PPPC2" in originaler
+    assert "Petersen" not in tekst and "PPPC2" not in tekst
+    # indeksets navn står (brugerens valg)
+    assert ny["fonde"][1]["pme_relevant"]["kort"] == "Senior loans"
+
+
 def test_anonymiser_skalerer_beloeb_i_noter():
     ny, _ = anonym.anonymiser(_rapport(), 2.0)
     note = ny["fonde"][0]["noter"][0]
@@ -147,7 +162,8 @@ def test_cli_anonym(monkeypatch):
     kald = {}
     monkeypatch.setattr(cli, "byg", lambda *a, **k: kald.update(a=a, k=k))
     cli.main(["MOTORTRAMP", "--as-of", "2026-06-30", "--anonym"])
-    assert kald["k"] == dict(med_data=True, anonym=True, med_supplerende=True, med_aleta=False)
+    assert kald["k"] == dict(med_data=True, anonym=True, med_supplerende=True, med_aleta=False,
+                             med_pme=False)
     cli.main(["MOTORTRAMP", "--uden-supplerende", "--aleta"])
     assert kald["k"]["anonym"] is False and kald["k"]["med_supplerende"] is False
     assert kald["k"]["med_aleta"] is True

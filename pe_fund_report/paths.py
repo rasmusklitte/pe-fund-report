@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FUND_INFO = ROOT / "config" / "fund_info.yaml"       # manuelle stamdata pr. fond
 BENCHMARK = ROOT / "config" / "benchmark.yaml"       # MSCI-indeksenes sektorvægte
 PROGNOSE = ROOT / "config" / "cashflow_profiler.yaml"  # profilerne til cash flow-prognosen
+PME_BENCHMARKS = ROOT / "config" / "pme_benchmarks.yaml"  # relevant indeks pr. segment/fond
 ALETA = ROOT / "data" / "aleta"                       # Aletas udtræk pr. investor
 INDEKS = ROOT / "data" / "indeks"                     # benchmarkindeksets kurser fra yfinance
 MASTER = ROOT / "assets" / "ppim_slidemaster.pptx"   # PPIM-slidemasteren

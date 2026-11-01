@@ -86,19 +86,31 @@ def pme(flows, navs, slut, indeks):
     merverdi er NAV minus indekskontoens værdi pr. slut (når alle NAV'er er pr. slut); indeks_irr
     er None, når udlodningerne har tømt kontoen (værdi <= 0), så der ingen IRR er at regne.
     """
+    res = pme_samlet([(flows, navs, indeks)], slut)
+    return res and dict(res, slutniveau=indeks(slut))
+
+
+def pme_samlet(dele, slut):
+    """PME for flere dele, hver forrentet med sit eget indeks: dele [(flows, navs, indeks)].
+    Indekskontoen er summen af delenes konti, så en portefølje kan måles mod hver fonds eget
+    indeks. pme()'s felter uden slutniveau; linjerne har nr (delens nummer). None som pme()."""
     from .data import xirr      # her og ikke øverst: data importerer dette modul
-    cf = forrentede(flows, slut, indeks)
-    nv = forrentede(navs, slut, indeks, "NAV")
-    if cf is None or nv is None:
-        return None
-    linjer = sorted(cf + nv, key=lambda x: (x["dato"], x["type"] == "NAV"))
+    linjer, alle_cf, konto = [], [], 0.0
+    for i, (flows, navs, indeks) in enumerate(dele):
+        cf = forrentede(flows, slut, indeks)
+        nv = forrentede(navs, slut, indeks, "NAV")
+        if cf is None or nv is None:
+            return None
+        linjer += [x | dict(nr=i) for x in cf + nv]
+        alle_cf += flows
+        konto -= sum(x["forrentet"] for x in cf)
+    linjer.sort(key=lambda x: (x["dato"], x["type"] == "NAV"))
     ud = sum(x["forrentet"] for x in linjer if x["forrentet"] > 0)
     ind = -sum(x["forrentet"] for x in linjer if x["forrentet"] < 0)
     if not ind:
         return None
-    konto = -sum(x["forrentet"] for x in cf)
     return dict(ks_pme=ud / ind,
                 direct_alpha=xirr([(x["dato"], x["forrentet"]) for x in linjer]),
                 merverdi=sum(x["forrentet"] for x in linjer), indeks_nav=konto,
-                indeks_irr=xirr(list(flows) + [(slut, konto)]) if konto > 0 else None,
-                slutniveau=indeks(slut), linjer=linjer)
+                indeks_irr=xirr(sorted(alle_cf) + [(slut, konto)]) if konto > 0 else None,
+                linjer=linjer)

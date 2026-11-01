@@ -92,7 +92,8 @@ def byggelog(investor, as_of, anonym, mappe=LOG):
         raise
     finally:
         sys.stdout = gammel
-        dato = lg.r["as_of"] if lg.r else as_of
+        # den ønskede dato, som decket er navngivet efter
+        dato = lg.r["justeret_til"] if lg.r else as_of
         udgave = "anonymiseret" if anonym else "normal"
         navn = (f"{tid:%Y-%m-%d_%H%M%S}_{investor}_{dato or 'seneste'}"
                 + ("_anonym" if anonym else "") + ".log")

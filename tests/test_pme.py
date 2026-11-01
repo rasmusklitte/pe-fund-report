@@ -153,3 +153,88 @@ def test_pme_forloeb_pr_kvartal_til_rapportdatoen():
     assert [x["indekskonto"] for x in fl] == pytest.approx([100.0, 120.0, 150.0])
     assert all(x["netto_indbetalt"] == 100.0 for x in fl)
     assert data.pme_forloeb(linjer, lambda d: None, indeks, T) is None
+
+
+# ---------- PME mod hver fonds relevante indeks ----------
+
+OPSAETNING = dict(standard="ACWI", segmenter={"Private credit": "BKLN"}, fonde={"B": "^OMX"},
+                  indeks={"ACWI": dict(navn="iShares MSCI ACWI ETF", kort="MSCI ACWI",
+                                       valuta="USD"),
+                          "BKLN": dict(navn="Invesco Senior Loan ETF", kort="Senior loans",
+                                       valuta="USD"),
+                          "^OMX": dict(navn="OMX Copenhagen Cap GI", kort="OMX Cph",
+                                       valuta="DKK")})
+
+
+def test_pme_samlet_med_en_del_er_pme():
+    indeks = lambda d: 100.0 + (d - date(2020, 1, 1)).days / 10
+    a = pme.pme(CF, NAV, T, indeks)
+    b = pme.pme_samlet([(CF, NAV, indeks)], T)
+    for k in ("ks_pme", "direct_alpha", "merverdi", "indeks_nav", "indeks_irr"):
+        assert a[k] == pytest.approx(b[k])
+
+
+def test_pme_samlet_forrenter_hver_del_med_sit_eget_indeks():
+    fladt = lambda d: 100.0
+    dobbelt = pme.opslag(_serie([(date(2020, 1, 1), 100.0), (T, 200.0)]))
+    res = pme.pme_samlet([([(date(2020, 1, 1), -100.0)], [(T, 150.0)], fladt),
+                          ([(date(2020, 1, 1), -100.0)], [(T, 150.0)], dobbelt)], T)
+    # kontiene: 100 i det flade indeks og 200 i det dobbelte
+    assert res["indeks_nav"] == pytest.approx(300.0)
+    assert res["merverdi"] == pytest.approx(0.0)
+    assert res["ks_pme"] == pytest.approx(300 / 300)
+    assert {x["nr"] for x in res["linjer"]} == {0, 1}
+    assert pme.pme_samlet([([(date(2005, 1, 1), -1.0)], [(T, 1.0)], dobbelt)], T) is None
+
+
+def test_pme_benchmark_fond_foer_segment_foer_standard():
+    assert data.pme_benchmark(dict(fund_code="B", segment="Private credit"), OPSAETNING) == "^OMX"
+    assert data.pme_benchmark(dict(fund_code="A", segment="Private credit"), OPSAETNING) == "BKLN"
+    assert data.pme_benchmark(dict(fund_code="A", segment="Shipping"), OPSAETNING) == "ACWI"
+
+
+def test_pme_benchmarks_afviser_ukendt_ticker(tmp_path):
+    sti = tmp_path / "pme.yaml"
+    sti.write_text("standard: ACWI\nindeks:\n  ACWI: {navn: a, kort: a, valuta: USD}\n"
+                   "fonde:\n  X: PSP\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="X peger på PSP"):
+        data.pme_benchmarks(sti)
+    assert data.pme_benchmarks(tmp_path / "findes_ikke.yaml") is None
+
+
+def test_pme_relevante_hver_fond_i_sit_eget_indeks():
+    usd = _serie([(date(2010, 1, 1), 5.0), (T, 6.5)])
+    serier = {"BKLN": _serie([(date(2010, 1, 1), 100.0), (T, 200.0)]),
+              "^OMX": _serie([(date(2012, 1, 1), 100.0), (date(2026, 3, 31), 90.0),
+                              (T, 100.0)])}
+    a = _fond("A", "USD", [(date(2010, 1, 1), -100.0), (T, 260.0)]) | dict(
+        segment="Private credit")
+    b = _fond("B", "DKK", [(date(2015, 1, 1), -100.0), (T, 120.0)])
+    c = _fond("C", "DKK", [(date(2005, 1, 1), -100.0), (T, 120.0)])     # før OMX-indekset
+    c["fund_code"] = "B"            # samme indeks som B
+    c["fund_name"] = "Fond C"
+    flows = [dict(fund_code=f, dato=d, dkk=v, type=t) for f, d, v, t in (
+        ("A", date(2010, 1, 1), -500.0, "Cash flow"), ("A", T, 1690.0, "NAV"),
+        ("B", date(2015, 1, 1), -100.0, "Cash flow"), ("B", T, 120.0, "NAV"))]
+    p = data.pme_relevante([a, b, c], serier, OPSAETNING, {"USD": usd, "DKK": None},
+                           dict(irr=0.1, flows=flows), T, date(2026, 3, 31))
+    # A i USD: indekset fordobledes, fonden voksede 2,6x
+    assert a["pme_relevant"]["ks_pme"] == pytest.approx(1.3)
+    assert a["pme_relevant"]["kort"] == "Senior loans" and "ks_pme" not in a["n"]
+    assert b["pme_relevant"]["ks_pme"] == pytest.approx(1.2)
+    assert "før indeksets start" in c["pme_relevant"]["grund"]
+    assert c["pme_relevant"]["ticker"] == "^OMX"
+    assert p["udeladte"] == ["Fond C"] and p["fonde"] == ["Fond A", "Fond B"]
+    # i alt i DKK: A's indeks i DKK voksede 2 * 1,3 = 2,6x, så A følger det; B slår sit med 20
+    assert p["indeks_nav"] == pytest.approx(500 * 2.6 + 100)
+    assert p["merverdi"] == pytest.approx(1690 - 1300 + 20)
+    assert [b_["ticker"] for b_ in p["indeks"]] == ["BKLN", "^OMX"]
+    omx = p["indeks"][1]
+    assert omx["fonde"] == ["Fond B"] and omx["kvartal"] == pytest.approx(100 / 90 - 1)
+
+
+def test_pme_relevante_uden_kurser_for_indekset():
+    f = _fond("B", "DKK", [(date(2015, 1, 1), -100.0), (T, 120.0)])
+    assert data.pme_relevante([f], {"^OMX": None}, OPSAETNING, {}, None, T, T) is None
+    assert "kunne ikke hentes" in f["pme_relevant"]["grund"]
+

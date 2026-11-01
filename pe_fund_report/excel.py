@@ -29,6 +29,7 @@ LINK = Font(color="0563C1", underline="single")
 
 PERIODER = {"kvartal": "Kvartalet", "aar": "År til dato"}
 KS = "Kapitalstrømme"       # fanenavne, der bruges i formler på tværs af faner
+JUSTERER = "justerer NAV"   # bemærkningen på de kald og udlodninger, fanen Justeret NAV summerer
 
 
 class Link:
@@ -158,7 +159,10 @@ def _kapitalstroemme(wb, r, kilder):
     for f in r["fonde"]:
         for c in f["kilder"]["cash_flows"].itertuples():
             efter = c.value_date > f["nav_dato"]
-            bem = ("Efter NAV-datoen – ikke medregnet" if efter else
+            # kald og udlodninger efter NAV-datoen indgår i NAV justeret for kapitalstrømme
+            justerer = efter and c.flow_class in ("CONTRIBUTION", "DISTRIBUTION")
+            bem = (f"Efter NAV-datoen – ikke medregnet; {JUSTERER}" if justerer else
+                   "Efter NAV-datoen – ikke medregnet" if efter else
                    {"EQUALISATION": "Udligningsrente – i indbetalt (betalt) eller udloddet "
                                     "(modtaget), ikke i kaldt kapital",
                     "WITHHOLDING_TAX": "Kildeskat – holdes ude af IRR og DPI"}.get(c.flow_class, ""))
@@ -195,7 +199,7 @@ def _kapitalstroemme(wb, r, kilder):
     return ark
 
 
-def _nav(wb, r, kilder):
+def _nav(wb, r, kilder, ks):
     ark = Ark(wb, "NAV", [
         ("Fondskode", 11, None, None), ("Fond", 34, None, None), ("Periode", 11, "dato", None),
         ("NAV rapporteret", 15, "tal", None), ("Restatement", 13, "tal", None),
@@ -215,6 +219,43 @@ def _nav(wb, r, kilder):
     return nav_rad
 
 
+def _justeret_nav(wb, r, ks, nav_rad):
+    """Siden NAV justeret for kapitalstrømme: forvalterens NAV + kald - udlodninger efter
+    NAV-datoen (SUMIFS over Kapitalstrømme) med kontrol mod sidens tal."""
+    j = r.get("justeret_nav")
+    if not j:
+        return
+    ark = Ark(wb, "Justeret NAV", [
+        ("Fondskode", 11, None, None), ("Fond", 34, None, None), ("Valuta", 7, None, None),
+        ("NAV-dato", 11, "dato", None), ("Justeret til", 11, "dato", None),
+        ("NAV", 15, "tal", None), ("Kapitalkald siden", 15, "tal", None),
+        ("Udlodninger siden", 15, "tal", None), ("Justeret NAV", 15, "tal", None),
+        ("DKK-kurs", 9, "kurs", None), ("Justeret NAV DKK", 15, "tal", None),
+        ("I rapporten", 15, "tal", None), ("Kontrol: forskel", 12, "tal", "kontrol")])
+    fond = {f["fund_name"]: f for f in r["fonde"]}
+
+    def summ(kl, rad, k):
+        return (f'SUMIFS({ks.kol("Beløb")},{ks.kol("Fondskode")},{k["Fondskode"]}{rad},'
+                f'{ks.kol("Klasse")},"{kl}",{ks.kol("Bemærkning")},"*{JUSTERER}",'
+                f'{ks.kol("Valørdato")},">"&{k["NAV-dato"]}{rad},'
+                f'{ks.kol("Valørdato")},"<="&{k["Justeret til"]}{rad})')
+    for x in j["linjer"]:
+        f = fond[x["fund_name"]]
+        rad_nav = nav_rad.get((f["fund_code"], x["nav_dato"]))
+        ark.raekke([
+            f["fund_code"], x["fund_name"], x["valuta"], x["nav_dato"], j["til"],
+            f"=NAV!F{rad_nav}" if rad_nav else x["nav"],
+            lambda rad, k: f"=-{summ('CONTRIBUTION', rad, k)}",
+            lambda rad, k: f"={summ('DISTRIBUTION', rad, k)}",
+            lambda rad, k: (f"=MAX({k['NAV']}{rad}+{k['Kapitalkald siden']}{rad}"
+                            f"-{k['Udlodninger siden']}{rad},0)"),
+            x["kurs"],
+            lambda rad, k: f"={k['Justeret NAV']}{rad}*{k['DKK-kurs']}{rad}",
+            x["justeret_dkk"],
+            lambda rad, k: f"={k['Justeret NAV DKK']}{rad}-{k['I rapporten']}{rad}"])
+    ark.afslut()
+
+
 BRUGT_TIL = {"CA110": "Forvalterens indbetalte kapital (ITD)", "MM110": "Kaldt mod tilsagnet (resttilsagn; forvalterens indbetalte, hvis CA110 mangler)",
              "CA210": "Værdibro: gebyrer", "CA220": "Værdibro: omkostninger",
              "CA230": "Værdibro: finansielle poster", "CA400": "Værdibro: carried interest",
@@ -230,7 +271,8 @@ def _kapitalkonto(wb, r, kilder):
     for f in r["fonde"]:
         ka = f["kilder"]["kapitalkonto"].sort_values(["period_end", "basis", "account_code"])
         for k in ka.itertuples():
-            brugt = BRUGT_TIL.get(k.account_code, "") if k.period_end == f["nav_dato"] else ""
+            brugt = (BRUGT_TIL.get(k.account_code, "")
+                     if k.period_end == f["nav_dato"] else "")
             ark.raekke([f["fund_code"], f["fund_name"], k.period_end, k.basis, k.account_code,
                         k.account_name, k.amount, brugt, kilder.id_(k.document_id),
                         kilder.fil(k.document_id)])
@@ -470,7 +512,7 @@ def _udvikling(wb, r, ks, nav_rad):
                 f["valuta"], u["primo"], u["kald"], u["udlodning"], u["ultimo"],
                 lambda rad, k: f"={k['NAV ultimo']}{rad}-{k['NAV primo']}{rad}"
                                f"-{k['Kapitalkald']}{rad}+{k['Udlodninger']}{rad}",
-                u["afkast"], kurs(f["valuta"], u["primo_dato"]), kurs(f["valuta"], u["til"]),
+                u["afkast"], kurs(f["valuta"], u["primo_dato"]), u.get("kurs_ultimo"),
                 lambda rad, k: f"={k['NAV primo']}{rad}*{k['DKK-kurs primo']}{rad}",
                 u.get("kald_dkk"), u.get("udlodning_dkk"),
                 lambda rad, k: f"={k['Værdiændring']}{rad}*{k['DKK-kurs ultimo']}{rad}",
@@ -911,6 +953,9 @@ FANER = [
                  "med kontrol mod kapitalstrømmene og IRR regnet igen med XIRR."),
     ("Udvikling", "Kvartalet og år til dato pr. fond og for porteføljen: fra NAV primo til "
                   "ultimo, i fondens valuta og i DKK."),
+    ("Justeret NAV", "Siden NAV justeret for kapitalstrømme: forvalterens seneste NAV + "
+                     "kapitalkald - udlodninger efter NAV-datoen (rækkerne i Kapitalstrømme med "
+                     "bemærkningen »justerer NAV«), med kontrol mod sidens tal."),
     ("Værdibro", "Fra indbetalt kapital til NAV pr. fond, med kontrolrække."),
     ("Regnskabstal", "Siderne Regnskabstal i de supplerende slides: fra NAV primo til ultimo "
                      "i DKK pr. fond og periode, gebyrer og carry fra Kapitalkonto (tom, hvor "
@@ -974,7 +1019,7 @@ def skriv(r):
     # Dokumenter først, så de andre fanes dokument-id'er kan linke til rækken
     _dokumenter(wb, r, kilder)
     ks = _kapitalstroemme(wb, r, kilder)
-    nav_rad = _nav(wb, r, kilder)
+    nav_rad = _nav(wb, r, kilder, ks)
     _kapitalkonto(wb, r, kilder)
     _tilsagn(wb, r, kilder)
     irr_blokke = _irr(wb, r)
@@ -983,6 +1028,7 @@ def skriv(r):
     _noegletal(wb, r, kilder, ks, nav_rad, irr_blokke)
     _vaerdibro(wb, r)
     _udvikling(wb, r, ks, nav_rad)
+    _justeret_nav(wb, r, ks, nav_rad)
     _regnskabstal(wb, r)
     _beholdninger(wb, r, kilder)
     _vaerdibevaegelser(wb, r)
