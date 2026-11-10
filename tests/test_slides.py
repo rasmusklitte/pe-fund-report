@@ -12,7 +12,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches
 from test_data import LQ_KURSER, _lq_fond
 
-from pe_fund_report import data, slides
+from pe_fund_report import anonym, data, enhed, slides
 from pe_fund_report.deck import L_FORSIDE, L_SKILLE, L_SLUT, L_TEKST, _ny_slide, _ryd_slides
 from pe_fund_report.paths import MASTER
 
@@ -23,6 +23,24 @@ def test_danske_talformater():
     assert slides.gange(1.5) == "1,50x"
     assert slides.beloeb(None) == slides.pct(None) == slides.gange(None) == "n/a"
     assert slides.kvartal(date(2026, 6, 30)) == "Q2 26"
+
+
+def test_beloeb_i_tusinder():
+    with enhed.beloebsenhed(enhed.TUSINDE):
+        assert slides.beloeb(1_234_567) == "1.235"
+        assert slides._mio(1_234_567) == 1235
+        assert slides.million(1_234_567) == "1.235"
+        assert slides.aendring(-1_234_567) == "-1.235"
+        assert enhed.tekst("DKK") == "t.DKK" and enhed.aksefmt() == "#,##0"
+        assert enhed.seriefmt() == "#,##0"
+        assert data._mio_tekst(4_500_000, "EUR") == "4.500 t.EUR"
+        with slides.beloebsskala(2.0):
+            assert slides.beloeb(1_234_567) == "2.469"
+    # tilbage til mio. bagefter
+    assert slides.beloeb(1_234_567) == "1,2" and enhed.tekst("DKK") == "mio. DKK"
+    assert enhed.seriefmt() == "#,##0.0" and data._mio_tekst(4_500_000, "EUR") == "4,5 mio. EUR"
+    # den anonymiserede udgave skalerer også beløb i t. i notetekst
+    assert anonym.BELOEB.sub("X", "kald på 4.500 t.EUR i alt") == "kald på X i alt"
 
 
 def _selskab(navn, closing, vintage):

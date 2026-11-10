@@ -6,13 +6,14 @@ from pathlib import Path
 from pptx import Presentation
 
 from . import anonym as anonymisering
-from . import data, excel, log, slides
+from . import data, enhed, excel, log, slides
 from .deck import L_FORSIDE, L_SKILLE, L_SLUT, _find_master, _ny_slide, _ryd_slides, _saet_ph
 from .paths import EXPORTS, MASTER
 
 
 def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, anonym=False,
-        med_supplerende=True, med_aleta=False, med_pme=False):
+        med_supplerende=True, med_aleta=False, med_pme=False, demo=False,
+        tusinder=False):
     """Byg rapporten for én investor og returnér stien til pptx-filen.
 
     as_of: rapportdato (ÅÅÅÅ-MM-DD); standard er investors seneste NAV-dato.
@@ -28,12 +29,25 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
     ganget med én skjult tilfældig faktor; aldrig med dataudtræk. Stopper uden at gemme, hvis
     et oprindeligt navn står i decket.
 
+    tusinder: alle beløb i tusinder uden decimaler (»54.400 t.DKK«) i stedet for mio. med én
+    decimal; gemt som <...>_tusinder.pptx, så standardrapporten ikke overskrives.
+
+    demo: byg rapporten for den fiktive demoinvestor (DEMO) af syntetiske data uden databasen
+    (pe_fund_report.demo); investor_code ignoreres.
+
     Hver bygning skrives i log/ (log.byggelog): hvem, hvornår, hvilken kode, filerne og alt,
     hvad den skriver i terminalen - også når den fejler.
     """
     if anonym and med_aleta:
         raise ValueError("Afstemningen med Aleta laves ikke anonymiseret: Aleta røber investoren")
-    with log.byggelog(investor_code, as_of, anonym) as lg:
+    if demo and med_aleta:
+        raise ValueError("Demoinvestoren har ingen Aleta-udtræk")
+    if demo:
+        from .demo import INVESTOR, demo_kontekst
+        investor_code = INVESTOR
+    with (demo_kontekst() if demo else nullcontext(),
+          enhed.beloebsenhed(enhed.TUSINDE) if tusinder else nullcontext(),
+          log.byggelog(investor_code, as_of, anonym) as lg):
         r = rigtig = lg.r = data.investor_rapport(investor_code, as_of, med_aleta=med_aleta)
         skala = 1.0
         if anonym:
@@ -54,10 +68,12 @@ def byg(investor_code, as_of=None, outfile=None, master=None, med_data=True, ano
         # den ønskede dato, også når forvalternes seneste NAV er ældre
         # med PME har sit eget navn, så standardrapporten ikke overskrives
         oenske = Path(outfile or EXPORTS / (f"{navn}_{r['justeret_til']:%Y-%m-%d}"
-                                            + ("_med_pme" if med_pme else "") + ".pptx"))
+                                            + ("_med_pme" if med_pme else "")
+                                            + ("_tusinder" if tusinder else "") + ".pptx"))
         outfile = _gem(prs, oenske)
         lg.filer.append(outfile)
         print(f"gemt: {outfile}  ({len(r['fonde'])} fonde, {len(prs.slides._sldIdLst)} slides"
+              + (", beløb i tusinder" if tusinder else "")
               + (", anonymiseret)" if anonym else ")"))
         if ekstra:
             # navngivet efter det ønskede navn, ikke et _v2, fordi rapporten var åben

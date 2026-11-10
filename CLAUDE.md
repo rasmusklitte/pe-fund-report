@@ -12,6 +12,8 @@ python -m pe_fund_report MOTORTRAMP --as-of 2025-12-31 --out exports/test.pptx
 python -m pe_fund_report MOTORTRAMP --as-of 2026-09-30   # any date ≤ today; lagging NAVs get their own slide
 python -m pe_fund_report MOTORTRAMP --aleta  # also <deck>_aleta_afstemning.pptx (the report vs Aleta)
 python -m pe_fund_report MOTORTRAMP --med-pme  # a version with the PME slides: <INVESTOR>_<date>_med_pme.pptx (with --anonym: ANONYM_<date>_med_pme.pptx)
+python -m pe_fund_report --demo [--med-pme]   # the fictional demo investor, no database: exports/DEMO_2026-09-30*.pptx
+python -m pe_fund_report MOTORTRAMP --tusinder  # amounts in thousands (54.400 t.DKK), saved as <...>_tusinder.pptx
 
 pytest                                      # whole suite; only test_aleta.py reads the database
 pytest -m "not db"                          # without the database tests
@@ -547,6 +549,33 @@ text in the finished deck (tables, charts, notes pages) for the original names a
 `byg()` raises without saving if any is left — a new name field in `data.fond()` must be added to
 `anonym._navnekort`. The PPIM house logo in the master stays.
 
+**Demo report** (`--demo`, `report.byg(demo=True)`, the user's request: a realistic report for
+showing, and an offline build of every slide): the fictional investor `DEMO` (»Demo-investor«)
+with 8 funds and about DKK 580m committed, like a small foundation (the user's choice). Names
+are generic, in the anonymized deck's style (»Private Equity-fond 1«, »Selskab 3«, »Ejendom 2«,
+»Forvalter A«; the user's choice), with no logos. `pe_fund_report/demo/generator.py` builds the
+database's tables (same names and columns, `rpt` views as plain tables) from a seeded
+bottom-up simulation: each holding has its draws, a value path (its own drift, front-loaded in
+the first four years, plus a shared market factor `MARKED`) and exits in two tranches, gradual
+distributions or interest. The fund's calls are draws + fees and its NAV is fair value + cash −
+accrued carry, so NAV, cash flows, capital account and holdings agree, and the investor is the
+ownership share of it. Each fund's drift is calibrated by bisection to the TVPI in `FONDE`. The
+funds are chosen so every branch appears: buyout with equalisation, a recallable distribution
+and a restated primo NAV; growth in USD one quarter behind (justeret NAV); venture in DKK;
+fund of funds; secondaries with co-investments and withholding tax; a private credit feeder
+into a master fund with a 25 % call discount; an evergreen property fund with properties
+(projects, a new purchase, only CA290); a closed property fund without property lines
+(`_ejendomsbalance`, `FUND_DEFAULT` exposure). FX is a seeded path (`USD_ANKRE`, EUR near
+7,45), the index levels are the real `data/indeks` files. `demo/__init__.py`'s
+`demo_kontekst()` swaps `data.read_sql` for an in-memory SQLite copy (schemas attached, `TOP 1`
+→ `LIMIT 1`, `ISNULL` → `IFNULL`, dates back as `datetime.date`; `OUTER APPLY`, i.e.
+`GP_BREAKDOWN`, is refused), `data.fund_info` for the generator's descriptions and company
+cards, and `indeks.indeksserie` for one that never calls yfinance; so `data.py`, slides and
+Excel run unchanged. A new query against a new table or column needs it in the generator too,
+or `tests/test_demo.py` fails (it builds both decks and checks every slide title, the dagger
+fund, that no real fund code appears, and `generator.kontrol()`: strategy, currency, region,
+sector and TVPI stay realistic). The report date is fixed at `generator.DATO` (30.09.2026).
+
 **Build log.** `report.byg()` runs inside `log.byggelog()`, which writes one file per build to
 `log/` (`<time>_<INVESTOR>_<date>[_anonym].log`, not in git: it names the investor and the real
 funds): user, command, report date, normal/anonymized, git commit (and whether the tree is dirty),
@@ -587,7 +616,14 @@ Identifiers, docstrings and comments are **Danish** (`fond`, `tilsagn`, `indbeta
 `beholdninger`, `_saet_ph`); only the shared `style.py`/`deck.py` API and database columns are
 English. Report text is Danish, numbers use Danish formatting via `style._dk` (wrapped by
 `slides.beloeb/pct/gange`; amounts are in mio. with one decimal, »mio. DKK«), and missing values render as `"n/a"` (`slides.IKKE_OPLYST`), never as
-a blank or a zero.
+a blank or a zero. `--tusinder` (`byg(tusinder=True)`, the user's request) shows every amount in
+thousands without decimals instead (»54.400 t.DKK«): the unit lives in `enhed.py`, set for the
+whole build by `enhed.beloebsenhed()`, and `beloeb`/`_mio`/`million` and `data._mio_tekst` read it.
+So never write »mio.« in a slide: the unit is `enh.tekst(valuta)` (»mio. DKK« / »t.DKK«),
+`enh.kort()` without a currency (»mio.« / »tusinder«), `enh.aksefmt()` / `enh.seriefmt()` on
+charts (thousands carry no suffix on axes and labels, so they fit the bars).
+`tests/test_demo.py::test_tusinder_uden_mio` fails on a hardcoded »mio.«. *Regnskabstal* is
+t.DKK in both modes.
 
 ## Data rules
 

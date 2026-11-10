@@ -12,6 +12,7 @@ from datetime import date, timedelta
 import pandas as pd
 import yaml
 
+from . import enhed
 from .db import read_sql
 from .paths import BENCHMARK, FUND_INFO, PME_BENCHMARKS, PROGNOSE
 
@@ -120,9 +121,10 @@ def _dato(v):
 
 
 def _mio_tekst(v, valuta):
-    """Et beløb til en notes tekst, som decket viser beløb: "4,5 mio. EUR"."""
-    tal = f"{v / 1_000_000:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return f"{tal} mio. {valuta}"
+    """Et beløb til en notes tekst, som decket viser beløb: "4,5 mio. EUR" ("4.500 t.EUR")."""
+    e = enhed.aktuel()
+    tal = f"{v / e.divisor:,.{e.decimaler}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{tal} {enhed.tekst(valuta)}"
 
 
 def xirr(flows):

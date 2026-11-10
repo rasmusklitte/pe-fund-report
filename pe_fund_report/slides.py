@@ -23,6 +23,7 @@ from pptx.oxml import parse_xml
 from pptx.oxml.ns import nsdecls, qn
 from pptx.util import Inches, Pt
 
+from . import enhed as enh
 from . import style
 from .data import (BRANCHEGRUPPER, GICS_STRUKTUR, IKKE_KLASSIFICERET, NAV_SYNLIG, REGIONER,
                    RISIKO_FALD, RISIKO_MULTIPLE, RISIKO_STOR, SEGMENT_OEVRIGE, SEKTORER,
@@ -55,7 +56,8 @@ OLIVEN, ROED = _rgb(style.PPIM_OLIVE), _rgb(style.PPIM_RED_MUTED)
 # ---------- talformater (dansk) ----------
 
 # den anonymiserede udgave ganger alle beløb med én skjult faktor; procenter, multipler og IRR
-# er uændrede. Alle beløb, decket viser, går derfor gennem beloeb, million, kroner eller _mio.
+# er uændrede. Alle beløb, decket viser, går derfor gennem beloeb, million, kroner eller _mio,
+# og enheden (mio./t., enhed.py) skrives med enh.tekst/enh.kort, aldrig som »mio.«.
 _SKALA = 1.0
 
 
@@ -80,18 +82,20 @@ def tusinde(v):
 
 
 def _mio(v):
-    """Et beløb i mio. som tal til en diagramserie."""
-    return round(v * _SKALA / 1_000_000, 1)
+    """Et beløb i decktets enhed (enhed.py: mio. eller t.) som tal til en diagramserie."""
+    e = enh.aktuel()
+    return round(v * _SKALA / e.divisor, e.decimaler)
 
 
 def beloeb(v):
-    """Et beløb i mio. med én decimal: 54,4."""
-    return IKKE_OPLYST if v is None else style._dk(v * _SKALA / 1_000_000, 1)
+    """Et beløb i decktets enhed: mio. med én decimal (54,4) eller tusinder (54.400)."""
+    e = enh.aktuel()
+    return IKKE_OPLYST if v is None else style._dk(v * _SKALA / e.divisor, e.decimaler)
 
 
 def million(v):
-    """Hele mio. uden decimaler - hele fondens beløb på virksomhedskortene."""
-    return IKKE_OPLYST if v is None else style._dk(v * _SKALA / 1_000_000, 0)
+    """Hele mio. (eller tusinder) uden decimaler - hele fondens beløb på virksomhedskortene."""
+    return IKKE_OPLYST if v is None else style._dk(v * _SKALA / enh.aktuel().divisor, 0)
 
 
 def pct(v, dec=1):
@@ -313,7 +317,7 @@ def _blok(slide, x, w, overskrift, par, bredder=(1.15, 1)):
 
 
 def _historik_graf(slide, x, y, w, h, historik):
-    data = CategoryChartData(number_format="#,##0.0")
+    data = CategoryChartData(number_format=enh.seriefmt())
     data.categories = [kvartal(p["dato"]) for p in historik]
     serier = [("NAV", "nav", style.PPIM_SAGE_DARK, 2.25),
               ("Akk. indbetalt", "indbetalt", style.PPIM_TERRACOTTA, 1.5),
@@ -336,7 +340,7 @@ def _historik_graf(slide, x, y, w, h, historik):
     y_akse.major_gridlines.format.line.color.rgb = _rgb(style.GRID)
     y_akse.major_gridlines.format.line.width = Pt(0.75)
     y_akse.format.line.fill.background()
-    y_akse.tick_labels.number_format, y_akse.tick_labels.number_format_is_linked = "#,##0.0", False
+    y_akse.tick_labels.number_format, y_akse.tick_labels.number_format_is_linked = enh.seriefmt(), False
     x_akse.format.line.color.rgb = STREG
     x_akse.has_major_gridlines = False
     return diagram
@@ -377,7 +381,7 @@ def _beholdningstabel(s, y, beh, f, investor_navn, maerker=None):
         bredder, just = [3.2, 1.9, 0.9, 1.1, 1.1, 1.1, 1.1, 0.9], [V, V, C, H, H, H, H, H]
     raekker[0] = [k + maerker.get(k, "") for k in raekker[0]]
     raekke_h = 0.185 if len(raekker) > 8 else 0.215
-    _tekst(s, X0, y, X1 - X0, 0.22, f"{titel} – {hvem} (mio. {f['valuta']})", 10.5, fed=True,
+    _tekst(s, X0, y, X1 - X0, 0.22, f"{titel} – {hvem} ({enh.tekst(f['valuta'])})", 10.5, fed=True,
            farve=SAGE)
     _tabel(s, X0, y + 0.28, X1 - X0, raekker, bredder=bredder, just=just, raekke_h=raekke_h,
            pt=8, hoved=True, total=True, zebra=True)
@@ -398,7 +402,7 @@ def _navnote(f):
     mio. med én decimal eller er under 2 % af forskellen (afrundingsstøj ved siden af en stor forskel).
     """
     a, beh = f.get("nav_afstemning"), f["beholdninger"]
-    v = f"mio. {f['valuta']}"
+    v = f"{enh.tekst(f['valuta'])}"
     tekst = ""
     if a:
         retning = "lavere" if a["forskel"] < 0 else "højere"
@@ -481,7 +485,7 @@ def _gennemlysningsblok(s, y, beh, f, investor_navn, bund=Y_NOTER):
     """
     via = _uden_selskabsform(beh["via"])
     _tekst(s, X0, y, X1 - X0, 0.22,
-           f"Gennemlysning af {via} – {investor_navn}s andel (mio. {f['valuta']})", 10.5, fed=True,
+           f"Gennemlysning af {via} – {investor_navn}s andel ({enh.tekst(f['valuta'])})", 10.5, fed=True,
            farve=SAGE)
     aktive = [r for r in beh["raekker"] if r["dagsvaerdi"] > 0]
     top, oevrige = aktive[:GL_TOP], aktive[GL_TOP:] + [r for r in beh["raekker"]
@@ -560,7 +564,7 @@ def _gennemlysningskilde(beh, f, investor_navn):
         tekst += " Branche- og geografifordelingen er forvalterens, i procent af dagsværdien."
     kredit = (beh.get("fakta") or {}).get("CREDIT_LINE_DRAWN")
     if kredit:
-        tekst += (f" {via} har trukket {million(kredit)} mio. {f['valuta']} på sin "
+        tekst += (f" {via} har trukket {million(kredit)} {enh.tekst(f['valuta'])} på sin "
                   "kreditfacilitet; den gearing er ikke vist som ekstra eksponering.")
     return tekst.strip()
 
@@ -571,14 +575,14 @@ BRO_X = 7.55              # værdibroens venstre kant på fondssiden
 def _historik_og_bro(s, y, f, bund=Y_NOTER):
     """NAV-graf til venstre og værdibro til højre i den plads, der er tilbage over noterne."""
     _tekst(s, X0, y, BRO_X - X0 - 0.3, 0.22,
-           f"Udvikling i NAV og kapitalstrømme (mio. {f['valuta']})", 10.5, fed=True, farve=SAGE)
+           f"Udvikling i NAV og kapitalstrømme ({enh.tekst(f['valuta'])})", 10.5, fed=True, farve=SAGE)
     _historik_graf(s, X0 - 0.1, y + 0.22, BRO_X - X0 - 0.2, bund - y - 0.27, f["historik"])
     _vaerdibro(s, y, f, bund=bund)
 
 
 def _vaerdibro(s, y, f, bro_x=BRO_X, bund=Y_NOTER):
     """Tabellen fra indbetalt kapital til NAV i højre side af fondssiden."""
-    _tekst(s, bro_x, y, X1 - bro_x, 0.22, f"Fra indbetalt kapital til NAV (mio. {f['valuta']})",
+    _tekst(s, bro_x, y, X1 - bro_x, 0.22, f"Fra indbetalt kapital til NAV ({enh.tekst(f['valuta'])})",
            10.5, fed=True, farve=SAGE)
     bro = [[navn, beloeb(v)] for navn, v in f["bro"]]
     raekke_h = min(0.27, (bund - y - 0.35) / len(bro))
@@ -639,7 +643,7 @@ def _ejendomsblok(s, y, beh, f, investor_navn, bund=Y_NOTER):
     skala = _ejendomsskala(beh, f)
     hvem = f"{investor_navn}s andel" if skala else "hele fonden"
     b = X1 - X0
-    _tekst(s, X0, y, b, 0.22, f"Fra ejendomme til NAV – {hvem} (mio. {f['valuta']})", 10.5,
+    _tekst(s, X0, y, b, 0.22, f"Fra ejendomme til NAV – {hvem} ({enh.tekst(f['valuta'])})", 10.5,
            fed=True, farve=SAGE)
     _streg(s, X0, y + 0.27, X0 + b, y + 0.27)
     trin = _ejendomstrin(beh, skala or 1.0)
@@ -672,7 +676,7 @@ def fondsside(prs, f, investor_navn):
     _fjern_tomme_ph(s)
     _logo(s, f["logo"])
     _tekst(s, X0, Y_UNDERTITEL, X1 - X0, 0.22,
-           f"{investor_navn}  ·  pr. {f['nav_dato']:%d.%m.%Y}  ·  beløb i mio. {f['valuta']}", 9.5)
+           f"{investor_navn}  ·  pr. {f['nav_dato']:%d.%m.%Y}  ·  beløb i {enh.tekst(f['valuta'])}", 9.5)
 
     # øverste halvdel: beskrivelse + tre nøgletalsblokke adskilt af lodrette streger
     kol = [(X0, 3.25), (4.22, 2.45), (6.98, 1.95), (9.24, X1 - 9.24)]
@@ -895,7 +899,7 @@ def virksomhedsprofiler(prs, f, investor_navn, maks_pr_slide=KORT_KOL * 2):
             for k in ("ejerandel", "stemmer")) else None)
         _tekst(s, X0, Y_UNDERTITEL, X1 - X0, 0.22,
                f"{f['fund_name']}  ·  {investor_navn}  ·  pr. {beh['dato']:%d.%m.%Y}  ·  "
-               f"hele fonden, beløb i mio. {f['valuta']}{beloeb_m}", 9.5)
+               f"hele fonden, beløb i {enh.tekst(f['valuta'])}{beloeb_m}", 9.5)
 
         kort_w = (X1 - X0 - KORT_LUFT * (KORT_KOL - 1)) / KORT_KOL
         n_raekker = ceil(len(side) / KORT_KOL)
@@ -962,7 +966,7 @@ def _oversigtsslide(prs, r, titel, enhed=None):
     _titel(s, titel)
     _fjern_tomme_ph(s)
     if enhed is None:
-        enhed = f"beløb i mio. {r['valuta']}" if r["valuta"] else "beløb i mio., fondens valuta"
+        enhed = f"beløb i {enh.tekst(r['valuta'])}" if r["valuta"] else f"beløb i {enh.kort()}, fondens valuta"
     _tekst(s, X0, Y_UNDERTITEL, X1 - X0, 0.22,
            f"{r['navn']}  ·  pr. {r['as_of']:%d.%m.%Y}  ·  {enhed}", 9.5)
     return s
@@ -1067,7 +1071,7 @@ def _resttilsagnsnoter(f):
     har sin note ved den indbetalte kapital (data.rabat), da den indgår i den."""
     n, v = f["n"], f["valuta"]
     return ([f"Resttilsagnet indeholder genkaldelige udlodninger på "
-             f"{beloeb(n['recallable'])} mio. {v}."] if (n.get("recallable") or 0) else [])
+             f"{beloeb(n['recallable'])} {enh.tekst(v)}."] if (n.get("recallable") or 0) else [])
 
 
 def _rabatnote(fonde):
@@ -1182,7 +1186,7 @@ def _kursnote(r):
 def tilsagn_paa_tvaers(prs, r):
     """Som Lange tilsagn, men med tilsagn, PICC, resttilsagn i DKK og NAV i DKK som tal."""
     s = _oversigtsslide(prs, r, "Investeringer",
-                        enhed="beløb i mio.; tilsagn i fondens valuta, "
+                        enhed=f"beløb i {enh.kort()}; tilsagn i fondens valuta, "
                               "resttilsagn og NAV i DKK")
     fonde, t, td = r["fonde"], r["total"], r.get("total_dkk")
     n_raekker = len(fonde) + bool(t or td)
@@ -1291,7 +1295,7 @@ def pme_portefoelje(prs, r):
     fl = p.get("forloeb")
     if not fl:
         return None
-    s = _oversigtsslide(prs, r, "Porteføljen mod markedet", enhed="beløb i mio. DKK")
+    s = _oversigtsslide(prs, r, "Porteføljen mod markedet", enhed=f"beløb i {enh.tekst('DKK')}")
     fod = Fodnoter(PME_KILDE)
     _pme_noter(fod, r, "porteføljen")
     fod.generel("NAV er omregnet med kursen ved kvartalets udgang, ind- og udbetalinger med "
@@ -1313,7 +1317,7 @@ def pme_portefoelje(prs, r):
         _tekst(s, X0 + i * fw, LQ_FLISE_Y + 0.22, fw, 0.30, tal, 16, fed=True, farve=farve,
                just=C)
 
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = [kvartal(x["dato"]) for x in fl]
     cd.add_series("NAV", [_mio(x["nav"]) for x in fl])
     cd.add_series("Indekskonto (ACWI)", [_mio(x["indekskonto"]) for x in fl])
@@ -1321,7 +1325,7 @@ def pme_portefoelje(prs, r):
     y = LQ_KURVE_Y + 0.05
     diagram = s.shapes.add_chart(XL_CHART_TYPE.LINE, Inches(X0), Inches(y), Inches(X1 - X0),
                                  Inches(noter_y - 0.08 - y), cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     _kvartalsakse(diagram, len(fl))
     serier = diagram.plots[0].series
     for serie, farve, bredde in zip(serier, (SAGE, TERRA, STREG), (2.5, 2.5, 1.25)):
@@ -1342,8 +1346,8 @@ def pme_portefoelje(prs, r):
 
 
 def _mio_valuta(v, valuta):
-    """Et beløb med fortegn og enhed: »+21,6 mio. DKK«."""
-    return IKKE_OPLYST if v is None else f"{aendring(v)} mio. {valuta}"
+    """Et beløb med fortegn og enhed: »+21,6 mio. DKK« (»+21.600 t.DKK«)."""
+    return IKKE_OPLYST if v is None else f"{aendring(v)} {enh.tekst(valuta)}"
 
 
 def _prik(s, x, y, farve, hul=False):
@@ -1620,7 +1624,7 @@ def stoerste_positioner(prs, r):
     sp = r.get("stoerste_positioner")
     if not sp or not sp["linjer"]:
         return None
-    s = _oversigtsslide(prs, r, "Største positioner", enhed="investors andel, beløb i mio. DKK")
+    s = _oversigtsslide(prs, r, "Største positioner", enhed=f"investors andel, beløb i {enh.tekst('DKK')}")
 
     def via(p):
         if len(p["fonde"]) > 2:
@@ -1677,18 +1681,18 @@ def gennemlysning(prs, r):
     fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger. Fondenes beholdninger pr. "
                    f"{g['dato']:%d.%m.%Y} ganget med ejerandelen.")
     sum_m = fod.maerke(
-        f"Summen af beholdningerne ({beloeb(g['dagsvaerdi'])} mio. {r['valuta']}) afviger fra "
-        f"fondenes samlede NAV ({beloeb(g['nav'])} mio. {r['valuta']}), fordi likvider, "
+        f"Summen af beholdningerne ({beloeb(g['dagsvaerdi'])} {enh.tekst(r['valuta'])}) afviger fra "
+        f"fondenes samlede NAV ({beloeb(g['nav'])} {enh.tekst(r['valuta'])}), fordi likvider, "
         "omkostninger og carried interest på fondsniveau ikke indgår i forvalternes "
         "beholdningsoversigter.")
     _tekst(s, X0, y, X1 - X0, 0.22,
-           f"Største eksponeringer – {r['navn']}s andel (mio. {r['valuta']}){sum_m}", 10.5,
+           f"Største eksponeringer – {r['navn']}s andel ({enh.tekst(r['valuta'])}){sum_m}", 10.5,
            fed=True, farve=SAGE)
     y += 0.28
 
     # søjlediagram til venstre som rigtigt diagram, så tallene kan redigeres i PowerPoint
     graf_w = 5.55
-    data = CategoryChartData(number_format="#,##0.0")
+    data = CategoryChartData(number_format=enh.seriefmt())
     data.categories = [x["navn"] for x in reversed(top)]       # største øverst i en bar-graf
     data.add_series("Dagsværdi", [_mio(x["dagsvaerdi"]) for x in reversed(top)])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(X0 - 0.08), Inches(y - 0.06),
@@ -1703,7 +1707,7 @@ def gennemlysning(prs, r):
     diagram.plots[0].gap_width = 60
     diagram.plots[0].has_data_labels = True
     etiketter = diagram.plots[0].data_labels
-    etiketter.number_format, etiketter.number_format_is_linked = "#,##0.0", False
+    etiketter.number_format, etiketter.number_format_is_linked = enh.seriefmt(), False
     etiketter.font.size, etiketter.font.name = Pt(7.5), BROED_FONT
     x_akse, y_akse = diagram.category_axis, diagram.value_axis
     x_akse.format.line.color.rgb = STREG
@@ -1811,7 +1815,7 @@ def fordeling(prs, r, noegle, titel):
     lavede = []
     for nr, side in enumerate(sider):
         s = _oversigtsslide(prs, r, titel if nr == 0 else f"{titel} (fortsat)",
-                            enhed="beløb i mio.; tilsagn i fondens valuta, øvrige beløb i DKK")
+                            enhed=f"beløb i {enh.kort()}; tilsagn i fondens valuta, øvrige beløb i DKK")
         fod, hoved = fodnoter()
         raekker = [hoved] + [celler for celler, _ in side]
         _tabel(s, X0, Y_TOP, X1 - X0, raekker,
@@ -1914,11 +1918,11 @@ def _geoskiver(regioner):
     return _skiver(poster)
 
 
-def _cirkel(s, x, y, w, h, skiver, serie="NAV, mio. DKK"):
+def _cirkel(s, x, y, w, h, skiver, serie=None):
     """Cirkeldiagram som rigtigt diagram; etiketterne skrives med danske talformater."""
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = [navn for navn, *_ in skiver]
-    cd.add_series(serie, [_mio(dkk) for _, dkk, *_ in skiver])
+    cd.add_series(serie or f"NAV, {enh.tekst('DKK')}", [_mio(dkk) for _, dkk, *_ in skiver])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.PIE, Inches(x), Inches(y), Inches(w), Inches(h),
                                  cd).chart
     diagram.has_legend = diagram.has_title = False
@@ -2023,7 +2027,7 @@ def brancher(prs, r):
     if not b:
         return None
     s = _oversigtsslide(prs, r, "Branchefordeling",
-                        enhed="investors NAV, beløb i mio. DKK")
+                        enhed=f"investors NAV, beløb i {enh.tekst('DKK')}")
     skiver, farver, smaa_sektorer = _brancheskiver(b["grupper"])
     indeks = (r.get("benchmark") or {}).get("indeks") or {}
     linjer = [(["", x["navn"], beloeb(x["dkk"]), pct(x["andel"])]
@@ -2158,16 +2162,16 @@ def _kortkasse(s, kasse, navn, dkk, andel, farve, fod=None, maerke="", loeftet=F
     uden = False
     if kw >= 1.5 and kh >= 0.85:
         store = [(vist if passer(13) else delt, 13, True),
-                 (f"{beloeb(dkk)} mio. DKK", 10.5, False), (pct(andel), 10.5, True)]
+                 (f"{beloeb(dkk)} {enh.tekst('DKK')}", 10.5, False), (pct(andel), 10.5, True)]
     if kw >= 0.95 and kh >= 0.6:
         mellem = [(vist if passer(9.5) else delt, 9.5, True),
-                  (f"{beloeb(dkk)} mio. DKK", 8.5, False), (pct(andel), 8.5, True)]
+                  (f"{beloeb(dkk)} {enh.tekst('DKK')}", 8.5, False), (pct(andel), 8.5, True)]
     if store and har_plads(store):
         linjer = store
     elif mellem and har_plads(mellem):
         linjer = mellem
-    elif mellem and har_plads(mellem[:1] + [(f"{beloeb(dkk)} mio. DKK  ·  {pct(andel)}", 8.5, True)]):
-        linjer = mellem[:1] + [(f"{beloeb(dkk)} mio. DKK  ·  {pct(andel)}", 8.5, True)]
+    elif mellem and har_plads(mellem[:1] + [(f"{beloeb(dkk)} {enh.tekst('DKK')}  ·  {pct(andel)}", 8.5, True)]):
+        linjer = mellem[:1] + [(f"{beloeb(dkk)} {enh.tekst('DKK')}  ·  {pct(andel)}", 8.5, True)]
     else:
         # en lille kasse skal stadig sige, hvad den er: navn og procent så småt som nødvendigt,
         # og på tværs, hvis kassen er høj og smal
@@ -2185,7 +2189,7 @@ def _kortkasse(s, kasse, navn, dkk, andel, farve, fod=None, maerke="", loeftet=F
                 return _lodret_etiket(s, kasse, ind, _med_gulvmaerke(linjer, fod), tekstfarve)
         if linjer is None:
             # kun procenten: én fodnote siger, hvilken kasse det er
-            uden_m = fod.maerke(f"{navn}, {beloeb(dkk)} mio. DKK.")
+            uden_m = fod.maerke(f"{navn}, {beloeb(dkk)} {enh.tekst('DKK')}.")
             linjer = [(f"{uden_m}{maerke.replace(GULV_PLADS, '')} {pct(andel)}".lstrip(), 7,
                        True)]
             uden = True
@@ -2381,7 +2385,7 @@ def branchekort(prs, r):
     if not b:
         return None
     s = _oversigtsslide(prs, r, "Branchefordeling – hele porteføljen",
-                        enhed="investors NAV, beløb i mio. DKK")
+                        enhed=f"investors NAV, beløb i {enh.tekst('DKK')}")
     raekker = _bm_sektorer(r)
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
                    "Kassernes areal er sektorens andel, fordelt efter "
@@ -2421,7 +2425,7 @@ def regionskort(prs, r):
     if not b:
         return None
     s = _oversigtsslide(prs, r, "Geografisk eksponering – hele porteføljen",
-                        enhed="investors NAV, beløb i mio. DKK")
+                        enhed=f"investors NAV, beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
                    "Kassernes areal er regionens andel, fordelt efter "
                    "forvalterens geografiske fordeling eller beholdningernes dagsværdi, med "
@@ -2513,7 +2517,7 @@ def _delbaand(s, x, y, w, navn, dkk, andel):
     """Båndet over en del: navn, beløb og delens andel af hele NAV, så stort som bredden tillader."""
     baand = _bjaelke(s, x, y, w, GEO_HOVED_H, GEO_HOVED)
     baand.line.fill.background()
-    tekst = f"{navn}  ·  {beloeb(dkk)} mio. DKK  ·  {pct(andel)}"
+    tekst = f"{navn}  ·  {beloeb(dkk)} {enh.tekst('DKK')}  ·  {pct(andel)}"
     pt = next((pt for pt in (10, 9, 8) if len(tekst) * pt * 0.0075 <= w - 0.16), 7.5)
     _tekst(s, x + 0.08, y, w - 0.16, GEO_HOVED_H, tekst, pt, fed=True, farve=HVID,
            anker=MSO_ANCHOR.MIDDLE)
@@ -2653,7 +2657,7 @@ def branchekort_ejendomme(prs, r):
         return None
     rest = opd["resten"]
     s = _oversigtsslide(prs, r, "Branchefordeling – ejendomme for sig",
-                        enhed="investors NAV, beløb i mio. DKK")
+                        enhed=f"investors NAV, beløb i {enh.tekst('DKK')}")
     raekker = _bm_sektorer(r)
     bund = EJD_NOTER - _bm_hoejde(raekker)
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
@@ -2681,7 +2685,7 @@ def regionskort_ejendomme(prs, r):
         return None
     rest = _kun_regioner(opd["resten"])
     s = _oversigtsslide(prs, r, "Geografisk eksponering – ejendomme for sig",
-                        enhed="investors NAV, beløb i mio. DKK")
+                        enhed=f"investors NAV, beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger. "
                    "Fordelt efter forvalterens geografiske fordeling eller "
                    "beholdningernes dagsværdi, med feederfondene gennemlyst.")
@@ -2715,7 +2719,7 @@ def branchekort_aktivklasser(prs, r):
     if not opd or not opd["dele"]:
         return None
     s = _oversigtsslide(prs, r, "Branchefordeling pr. aktivklasse",
-                        enhed="investors NAV, beløb i mio. DKK; Private Equity, Private "
+                        enhed=f"investors NAV, beløb i {enh.tekst('DKK')}; Private Equity, Private "
                               "Credit og ejendomme")
     raekker = _bm_sektorer(r)
     # med båndene fylder noterne en linje mere (båndenes kilde)
@@ -2756,7 +2760,7 @@ def regionskort_aktivklasser(prs, r):
     if not opd or not opd["dele"]:
         return None
     s = _oversigtsslide(prs, r, "Geografisk eksponering pr. aktivklasse",
-                        enhed="investors NAV, beløb i mio. DKK; Private Equity, Private "
+                        enhed=f"investors NAV, beløb i {enh.tekst('DKK')}; Private Equity, Private "
                               "Credit og ejendomme")
     dele = [d | {"fordeling": _kun_regioner(d["fordeling"])} for d in opd["dele"]]
 
@@ -2814,7 +2818,7 @@ def regioner(prs, r):
     if not b:
         return None
     s = _oversigtsslide(prs, r, "Geografisk eksponering",
-                        enhed="investors NAV, beløb i mio. DKK")
+                        enhed=f"investors NAV, beløb i {enh.tekst('DKK')}")
     skiver, farver, smaa = _geoskiver(b["grupper"])
 
     indeks = (r.get("benchmark") or {}).get("regioner") or {}
@@ -2887,7 +2891,7 @@ def _lys(farve):
 def _ring(s, x, y, side, poster, serie):
     """Ringdiagram (doughnut) med valuta og andel skrevet på ringen; poster er
     [(navn, dkk, andel, farve)]. Returnerer navnene, der er for små til en etiket."""
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = [navn for navn, *_ in poster]
     cd.add_series(serie, [_mio(dkk) for _, dkk, *_ in poster])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.DOUGHNUT, Inches(x), Inches(y), Inches(side),
@@ -2941,7 +2945,7 @@ def valutafordeling(prs, r):
     vf = r.get("valutafordeling")
     if not vf:
         return None
-    s = _oversigtsslide(prs, r, "Eksponering", enhed="beløb i mio. DKK")
+    s = _oversigtsslide(prs, r, "Eksponering", enhed=f"beløb i {enh.tekst('DKK')}")
     farver = _valutafarver(vf)
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel(_kursnote(r))
@@ -2961,7 +2965,7 @@ def valutafordeling(prs, r):
             uden_etiket |= set(_ring(
                 s, mx - VF_GRAF / 2, my - VF_GRAF / 2, VF_GRAF,
                 [(x["valuta"], x["dkk"], x["andel"], farver[x["valuta"]]) for x in poster],
-                serie=f"{navn}, mio. DKK"))
+                serie=f"{navn}, {enh.tekst('DKK')}"))
         # i hullet: målets navn, eventuelt hvad det består af, og totalen
         i_alt = beloeb(sum(x["dkk"] for x in poster))
         hul_w = VF_GRAF * (1 - 2 * VF_KANT) * VF_HUL / 100 * 0.92
@@ -2970,7 +2974,7 @@ def valutafordeling(prs, r):
         if under:
             _tekst(s, mx - hul_w / 2, my - 0.03, hul_w, 0.2, under, 8, farve=SAGE, just=C)
         _tekst(s, mx - hul_w / 2, my + (0.15 if under else -0.01), hul_w, 0.22,
-               f"{i_alt} mio. DKK", 9.5, just=C)
+               f"{i_alt} {enh.tekst('DKK')}", 9.5, just=C)
 
     if uden_etiket:
         fod.generel(f"{_navne(sorted(uden_etiket))} er under {pct(BR_ETIKET, 0)} og har ingen "
@@ -3097,7 +3101,7 @@ def udvikling(prs, r):
     perioder = [p for p in _viste_perioder(r) if ud.get(p)]
     if not perioder:
         return None
-    s = _oversigtsslide(prs, r, "Udvikling i kvartalet og året", enhed="beløb i mio. DKK")
+    s = _oversigtsslide(prs, r, "Udvikling i kvartalet og året", enhed=f"beløb i {enh.tekst('DKK')}")
 
     bro_b = 6.25
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
@@ -3119,7 +3123,7 @@ def udvikling(prs, r):
     for i, (p, trin) in enumerate(zip(perioder, broer)):
         u, y = ud[p], Y_TOP + i * blok_h
         _tekst(s, X0, y, bro_b, 0.22, _periodetitel(r, p), 10.5, fed=True, farve=SAGE)
-        _tekst(s, X0, y + 0.03, bro_b, 0.2, f"NAV {aendring(u['ultimo'] - u['primo'])} mio. DKK"
+        _tekst(s, X0, y + 0.03, bro_b, 0.2, f"NAV {aendring(u['ultimo'] - u['primo'])} {enh.tekst('DKK')}"
                f"  ·  afkast {pct(u['afkast'])}", 9, fed=True, just=H)
         _streg(s, X0, y + 0.27, X0 + bro_b, y + 0.27)
         _nav_bro(s, X0, y + 0.58, bro_b, blok_h - 0.98, trin, gulv, loft)
@@ -3222,7 +3226,7 @@ def efter_kvartalet(prs, r):
     if not j or None in j["i_alt"].values():
         return None
     t = j["i_alt"]
-    s = _efter_hoved(prs, r, j, EFTER_TITEL, "beløb i mio. DKK")
+    s = _efter_hoved(prs, r, j, EFTER_TITEL, f"beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel(_efter_kurser(j))
     valuta_m = fod.maerke("Forskellen mellem rapportens NAV omregnet med kursen på "
@@ -3247,7 +3251,7 @@ def efter_kvartalet(prs, r):
     _tekst(s, X0, Y_TOP, bro_b, 0.22, "Fra rapportens NAV til den justerede NAV", 10.5,
            fed=True, farve=SAGE)
     _tekst(s, X0, Y_TOP + 0.03, bro_b, 0.2,
-           f"NAV {aendring(t['justeret_dkk'] - t['nav_rapport_dkk'])} mio. DKK", 9, fed=True,
+           f"NAV {aendring(t['justeret_dkk'] - t['nav_rapport_dkk'])} {enh.tekst('DKK')}", 9, fed=True,
            just=H)
     _streg(s, X0, Y_TOP + 0.27, X0 + bro_b, Y_TOP + 0.27)
     _nav_bro(s, X0, Y_TOP + 0.58, bro_b, noter_y - Y_TOP - 1.3, trin, gulv, loft)
@@ -3311,7 +3315,7 @@ def justeret_nav(prs, r):
     if not j:
         return None
     s = _efter_hoved(prs, r, j, EFTER_TITEL + " – pr. fond",
-                     "beløb i mio., fondens valuta og DKK")
+                     f"beløb i {enh.kort()}, fondens valuta og DKK")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel(_efter_kurser(j))
     negativ_m = (fod.maerke("NAV + kapitalkald - udlodninger er under nul og sat til 0.")
@@ -3345,7 +3349,7 @@ def aendringer_pr_fond(prs, r):
     if not perioder:
         return None
     s = _oversigtsslide(prs, r, "Ændringer pr. fond",
-                        enhed="beløb i mio. DKK; afkast i fondens valuta")
+                        enhed=f"beløb i {enh.tekst('DKK')}; afkast i fondens valuta")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     vaerdi_m = fod.maerke(
         "Værdiændringen indeholder valutakursændringen for fonde i fremmed valuta, så i "
@@ -3494,7 +3498,7 @@ def vaerdibevaegelser(prs, r):
     if not linjer:
         return None
     s = _oversigtsslide(prs, r, "Største værdibevægelser i porteføljen",
-                        enhed="investors andel, beløb i mio. DKK")
+                        enhed=f"investors andel, beløb i {enh.tekst('DKK')}")
     stigninger = sorted((x for x in linjer if x["kvartal"] > 0), key=lambda x: -x["kvartal"])
     fald = sorted((x for x in linjer if x["kvartal"] < 0), key=lambda x: x["kvartal"])
     stigninger, fald = stigninger[:VB_MAKS], fald[:VB_MAKS]
@@ -3629,14 +3633,14 @@ def _farv(serie, farve):
 def _j_kurve(s, x, y, w, h, kvartaler):
     """Kvartalets ind- og udbetalinger som søjler og den akkumulerede netto cash flow som flade
     i ét diagram (et kombinationsdiagram), så det kan redigeres i PowerPoint."""
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = [kvartal(q["dato"]) for q in kvartaler]
     cd.add_series("Indbetalinger i kvartalet", [_mio(q["kald"]) for q in kvartaler])
     cd.add_series("Udbetalinger i kvartalet", [_mio(q["udlodning"]) for q in kvartaler])
     cd.add_series("Akkumuleret netto cash flow", [_mio(q["akkumuleret"]) for q in kvartaler])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(x), Inches(y),
                                  Inches(w), Inches(h), cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     soejler = diagram.plots[0]
     soejler.overlap, soejler.gap_width = 100, 30
     for serie, farve in zip(soejler.series, (TERRA, SAGE)):
@@ -3763,7 +3767,7 @@ def likviditet(prs, r, med_ejendomme=False):
         return None
     s = _oversigtsslide(prs, r, "Likviditetsoverblik",
                         enhed=("hele porteføljen inkl. ejendomsfonde" if med_ejendomme
-                               else "uden ejendomsfonde") + ", beløb i mio. DKK")
+                               else "uden ejendomsfonde") + f", beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel(f"Ejendomsfondene ({_navne(lq['udeladt'])}) er evergreen og indgår ikke."
                 if lq["udeladt"] else None,
@@ -3776,7 +3780,7 @@ def likviditet(prs, r, med_ejendomme=False):
     if lq.get("foer_start"):
         fod.generel(f"Ind- og udbetalinger før {lq['aar'][0]['aar']} "
                     f"({_navne(lq['foer_start'])}) indgår samlet i den akkumulerede netto cash "
-                    f"flow fra start: {beloeb(lq['primo'])} mio. DKK.")
+                    f"flow fra start: {beloeb(lq['primo'])} {enh.tekst('DKK')}.")
     if lq["foer_nav"]:
         fod.generel(f"Før den første NAV indgår {_navne(lq['foer_nav'])} med det, der er "
                     "betalt ind netto.")
@@ -3803,11 +3807,11 @@ def likviditet(prs, r, med_ejendomme=False):
     _tekst(s, X0, LQ_BUND_Y, bw, 0.22, "Kapitaltilsagn ved årets udgang", 11, fed=True)
     def mio(noegle, farve, navn):
         return (navn, [_mio(a[noegle]) for a in lq["aar"]], farve,
-                [million(a[noegle]) + " mio." for a in lq["aar"]])
+                [million(a[noegle]) + enh.diagramsuffiks() for a in lq["aar"]])
 
     _stablede_soejler(s, X0, by, bw, bh, kategorier,
                       [mio("resttilsagn", SAGE, "Resttilsagn"), mio("kaldt", SAGE_LYS, kaldt)],
-                      '#,##0" mio."')
+                      enh.aksefmt())
     x2 = X0 + bw + LQ_LUFT
     _tekst(s, x2, LQ_BUND_Y, bw, 0.22, "TVPI ved årets udgang", 11, fed=True)
     _stablede_soejler(s, x2, by, bw, bh, kategorier, [
@@ -3843,7 +3847,7 @@ def _aarskategorier(r, aar, fod):
 
 
 NETTO_ETIKETTER = (
-    '<c:dLbls {ns}><c:numFmt formatCode="#,##0&quot; mio.&quot;" sourceLinked="0"/>'
+    '<c:dLbls {ns}><c:numFmt formatCode="{talformat}" sourceLinked="0"/>'
     '<c:spPr><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="85000"/></a:srgbClr>'
     '</a:solidFill><a:ln><a:noFill/></a:ln></c:spPr>'
     '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="800" b="1"/></a:pPr>'
@@ -3859,7 +3863,7 @@ def aarlige_stroemme(prs, r):
     if not a or not a["fonde"]:
         return None
     s = _oversigtsslide(prs, r, "Kapitalkald og udlodninger pr. år",
-                        enhed="hele porteføljen, beløb i mio. DKK")
+                        enhed=f"hele porteføljen, beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel("Kapitalkald står under nul og udlodninger over, hver omregnet med "
                 "Nationalbankens kurs på sin dato; linjen er årets netto cash flow.")
@@ -3871,7 +3875,7 @@ def aarlige_stroemme(prs, r):
     noter_y = _noter_y(fod.tekst())
 
     farver = _fondsfarver(r)
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = kategorier
     serier = []                 # (farve, i forklaringen)
     for x in a["fonde"]:
@@ -3886,7 +3890,7 @@ def aarlige_stroemme(prs, r):
     cd.add_series("Netto cash flow", [_mio(v) for v in a["netto"]])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(X0), Inches(Y_TOP),
                                  Inches(X1 - X0), Inches(noter_y - 0.08 - Y_TOP), cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     diagram.legend.position = XL_LEGEND_POSITION.RIGHT
     plot = diagram.plots[0]
     plot.gap_width, plot.overlap = 55, 100
@@ -3899,7 +3903,8 @@ def aarlige_stroemme(prs, r):
     linje = _linjeplot(diagram, bar, netto, SORT, len(serier))
     # nettoets værdi over hvert år
     linje.find(qn("c:ser")).find(qn("c:marker")).addnext(
-        parse_xml(NETTO_ETIKETTER.format(ns=nsdecls("c", "a"))))
+        parse_xml(NETTO_ETIKETTER.format(ns=nsdecls("c", "a"),
+                                       talformat=enh.aksefmt().replace('"', "&quot;"))))
     # udlodningerne gentager fondene i forklaringen; de skjules
     legend = diagram.legend._element
     for i, (_, med) in reversed(list(enumerate(serier))):
@@ -3991,7 +3996,7 @@ def kaldstempo(prs, r):
     k = r.get("kaldstempo")
     if not k:
         return None
-    s = _oversigtsslide(prs, r, "Resttilsagn og kaldstempo", enhed="beløb i mio. DKK")
+    s = _oversigtsslide(prs, r, "Resttilsagn og kaldstempo", enhed=f"beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     kaldt_m = fod.maerke(f"Kapitalkald fra {k['fra'] + timedelta(days=1):%d.%m.%Y} til "
                          f"{r['as_of']:%d.%m.%Y}, omregnet med Nationalbankens kurs på deres "
@@ -4053,14 +4058,14 @@ def eksponering_over_tid(prs, r):
     if not e or not e["kvartaler"]:
         return None
     s = _oversigtsslide(prs, r, "Kapitalkald, resttilsagn og eksponering over tid",
-                        enhed="hele porteføljen inkl. ejendomsfonde, beløb i mio. DKK")
+                        enhed=f"hele porteføljen inkl. ejendomsfonde, beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel("Kapitalkald er omregnet med Nationalbankens kurs på deres dato, NAV og "
                 "resttilsagn med kursen ved kvartalets udgang.")
     kv = e["kvartaler"]
     if e["foer_start"]:
         fod.generel(f"Kapitalkald før {kv[0]['dato']:%Y} ({_navne(e['foer_start'])}) indgår "
-                    f"samlet i den kaldte kapital fra start: {beloeb(e['primo'])} mio. DKK.")
+                    f"samlet i den kaldte kapital fra start: {beloeb(e['primo'])} {enh.tekst('DKK')}.")
     if e["foer_nav"]:
         fod.generel(f"Før den første NAV indgår {_navne(e['foer_nav'])} med det, der er "
                     "betalt ind netto.")
@@ -4088,14 +4093,14 @@ def eksponering_over_tid(prs, r):
     # eksponeringen: NAV og resttilsagn stablet, kaldt kapital som linje på samme akser
     _tekst(s, X0, y0, X1 - X0, 0.22, "Eksponering (NAV + resttilsagn) og kaldt kapital",
            11, fed=True)
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = kategorier
     cd.add_series("NAV", [_mio(q["nav"]) for q in kv])
     cd.add_series("Resttilsagn", [_mio(q["resttilsagn"]) for q in kv])
     cd.add_series("Kaldt kapital, akkumuleret", [_mio(q["kaldt"]) for q in kv])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.AREA_STACKED, Inches(X0), Inches(y0 + 0.24),
                                  Inches(X1 - X0), Inches(h1), cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     _kvartalsakse(diagram, len(kv))
     # kvartalerne midt i deres felt som søjlerne nedenunder, så de to diagrammer flugter
     diagram.value_axis._element.find(qn("c:crossBetween")).set("val", "between")
@@ -4110,12 +4115,12 @@ def eksponering_over_tid(prs, r):
     # kaldene pr. kvartal på samme kvartalsakse
     y2 = y0 + 0.24 + h1 + EO_LUFT
     _tekst(s, X0, y2, X1 - X0, 0.22, "Kapitalkald pr. kvartal", 11, fed=True)
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = kategorier
     cd.add_series("Kapitalkald", [_mio(q["kald"]) for q in kv])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(X0), Inches(y2 + 0.24),
                                  Inches(X1 - X0), Inches(h2), cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     # overskriften står over diagrammet; uden forklaring sætter PowerPoint seriens navn som titel
     diagram.has_legend = diagram.has_title = False
     _kvartalsakse(diagram, len(kv))
@@ -4204,7 +4209,7 @@ def prognose(prs, r):
     if not p:
         return None
     s = _oversigtsslide(prs, r, "Forventede kapitalkald og udlodninger",
-                        enhed="prognose, hele porteføljen, beløb i mio. DKK")
+                        enhed=f"prognose, hele porteføljen, beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     basis = p["scenarier"][0]
     fod.generel(f"Søjlerne og den fuldt optrukne linje er scenariet {basis[1]}.")
@@ -4227,7 +4232,7 @@ def prognose(prs, r):
     # kald og udlodninger pr. fond, netto pr. scenarie som linjer
     _tekst(s, X0, y0, X1 - X0, 0.22, "Kapitalkald og udlodninger pr. år", 11, fed=True)
     farver = _fondsfarver(r)
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = kategorier
     serier = []                 # (farve, i forklaringen)
     for x in p["fonde"]:
@@ -4244,7 +4249,7 @@ def prognose(prs, r):
         cd.add_series(f"Netto, {navn.lower()}", [_mio(a["netto"]) for a in p["aar"][noegle]])
     diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(X0), Inches(y0 + 0.24),
                                  Inches(X1 - X0), Inches(h1), cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     # nederst, hvor fondene og de tre linjer kan bryde over to rækker; til højre blev de skåret
     diagram.legend.position = XL_LEGEND_POSITION.BOTTOM
     diagram.legend.font.size = Pt(7)
@@ -4260,7 +4265,8 @@ def prognose(prs, r):
         linje = _linjeplot(diagram, bar, ser, farve, len(serier) + i, stiplet=i > 0)
         if i == 0:              # basis bærer sine værdier
             linje.find(qn("c:ser")).find(qn("c:marker")).addnext(
-                parse_xml(NETTO_ETIKETTER.format(ns=nsdecls("c", "a"))))
+                parse_xml(NETTO_ETIKETTER.format(ns=nsdecls("c", "a"),
+                                       talformat=enh.aksefmt().replace('"', "&quot;"))))
     # udlodningerne gentager fondene i forklaringen; de skjules
     legend = diagram.legend._element
     for i, (_, med) in reversed(list(enumerate(serier))):
@@ -4281,7 +4287,7 @@ def prognose_nav(prs, r):
     if not p:
         return None
     s = _oversigtsslide(prs, r, "Forventet NAV og resttilsagn",
-                        enhed="prognose, hele porteføljen, beløb i mio. DKK")
+                        enhed=f"prognose, hele porteføljen, beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     basis, *andre = p["scenarier"]
     fod.generel(f"Fladerne er scenariet {basis[1]}.")
@@ -4301,7 +4307,7 @@ def prognose_nav(prs, r):
 
     y0 = LQ_KURVE_Y
     _tekst(s, X0, y0, X1 - X0, 0.22, "NAV og resttilsagn ved årets udgang", 11, fed=True)
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = kategorier
     cd.add_series(f"NAV, {basis[1].lower()}", [_mio(a["nav"]) for a in p["aar"][basis[0]]])
     cd.add_series("Resttilsagn", [_mio(a["resttilsagn"]) for a in p["aar"][basis[0]]])
@@ -4310,7 +4316,7 @@ def prognose_nav(prs, r):
     diagram = s.shapes.add_chart(XL_CHART_TYPE.AREA_STACKED, Inches(X0), Inches(y0 + 0.24),
                                  Inches(X1 - X0), Inches(noter_y - 0.05 - y0 - 0.24),
                                  cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     diagram.legend.position = XL_LEGEND_POSITION.BOTTOM
     diagram.legend.font.size = Pt(8)
     # årene midt i deres felt som søjlerne på siden før
@@ -4337,7 +4343,7 @@ def prognose_pr_fond(prs, r):
     p = r.get("prognose")
     if not p:
         return None
-    s = _oversigtsslide(prs, r, "Prognose pr. fond", enhed="beløb i mio. DKK")
+    s = _oversigtsslide(prs, r, "Prognose pr. fond", enhed=f"beløb i {enh.tekst('DKK')}")
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     basis = p["scenarier"][0]
     fod.generel(f"Scenariet {basis[1]}.")
@@ -4548,7 +4554,7 @@ def bevaegelser_i_dybden(prs, r):
     kort = b["kort"]
     s = _oversigtsslide(prs, r, "Bag de største værdibevægelser",
                         enhed=f"kvartalets {len(kort)} største værdibevægelser, investors andel, "
-                              "beløb i mio. DKK")
+                              f"beløb i {enh.tekst('DKK')}")
     _forloebsforklaring(s, Y_UNDERTITEL)
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel("Værdibevægelsen er ændringen i dagsværdi + udloddet - investeret i fondenes "
@@ -4577,7 +4583,7 @@ def bevaegelser_i_dybden(prs, r):
                                         + _datomarkering(r, k["fond"]),
                                         linje.get("sektor") if k["type"] != "Selskab" else None,
                                         _hvornaar(linje)) if t)
-        ved = [f"mio. DKK i {kvartal(b['til'])}"]
+        ved = [f"{enh.tekst('DKK')} i {kvartal(b['til'])}"]
         if vis_aar and k.get("aar") is not None:
             ved.append(f"År til dato: {aendring(k['aar'])}")
         ved.append(f"Bidrag til porteføljens afkast: {aendring(k['bidrag'] * 100, _pp1)} "
@@ -4621,7 +4627,7 @@ def koncentration(prs, r):
     if not c or not c["kort"]:
         return None
     s = _oversigtsslide(prs, r, "Største positioner – koncentration og risiko",
-                        enhed="investors andel, beløb i mio. DKK")
+                        enhed=f"investors andel, beløb i {enh.tekst('DKK')}")
     _forloebsforklaring(s, Y_UNDERTITEL)
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel("En position er investors andel af dagsværdien i fondenes beholdningsoversigter "
@@ -4665,7 +4671,7 @@ def koncentration(prs, r):
         linje2 = " · ".join(t for t in (_positionstype(k) + (fond_m if er_fond else ""), via,
                                         None if er_fond else _hvornaar(linje)) if t)
         y = _kortskelet(s, x, top, w, noter_y - 0.10 - top, k["navn"], linje2,
-                        pct(k["andel"]), SAGE, f"af porteføljens NAV\n{beloeb(k['dkk'])} mio. DKK")
+                        pct(k["andel"]), SAGE, f"af porteføljens NAV\n{beloeb(k['dkk'])} {enh.tekst('DKK')}")
         siden = ("i kvartalet" if k["uaendret_siden"] is None
                  else ("før " if k["uaendret_hele"] else "") + f"{k['uaendret_siden']:%d.%m.%Y}")
         raekker = [["Kostpris", beloeb(k["kostpris"])],
@@ -4738,7 +4744,7 @@ def _ejendomsbro(e, fod):
 def _ejendomsslide(prs, r, f, e):
     valuta = f["valuta"]
     s = _oversigtsslide(prs, r, f"{f['fund_name']} – ejendommene bag NAV",
-                        enhed=f"hele fonden, beløb i mio. {valuta}")
+                        enhed=f"hele fonden, beløb i {enh.tekst(valuta)}")
     fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger.")
     if e["dato"] != f["nav_dato"]:
         fod.generel(f"Ejendommene er pr. {e['dato']:%d.%m.%Y}.")
@@ -4786,7 +4792,7 @@ def _ejendomsslide(prs, r, f, e):
     navne = [x["navn"] for x in e["ejendomme"]]
     navne += list(dict.fromkeys(n for q in e["kvartaler"] for n in q["ejendomme"]
                                 if n not in navne))     # solgte ejendomme sidst
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = [kvartal(q["dato"]) for q in e["kvartaler"]]
     for n in navne:
         cd.add_series(n, [_mio(q["ejendomme"].get(n, 0.0)) for q in e["kvartaler"]])
@@ -4799,7 +4805,7 @@ def _ejendomsslide(prs, r, f, e):
     diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(X0), Inches(y + 0.32),
                                  Inches(ED_DIAGRAM_W), Inches(noter_y - 0.08 - y - 0.32),
                                  cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     diagram.legend.position = XL_LEGEND_POSITION.BOTTOM
     plot = diagram.plots[0]
     plot.gap_width, plot.overlap = 45, 100
@@ -4902,7 +4908,7 @@ def _periodenavn(e, b, noegle):
 def _bidragsslide(prs, r, f, e):
     b, valuta = e["bidrag"], f["valuta"]
     s = _oversigtsslide(prs, r, f"{f['fund_name']} – hvad har drevet afkastet",
-                        enhed=f"hele fonden, beløb i mio. {valuta}")
+                        enhed=f"hele fonden, beløb i {enh.tekst(valuta)}")
     fod = Fodnoter("Kilde: Forvalterrapporter og egne beregninger.")
     if e["dato"] != f["nav_dato"]:
         fod.generel(f"Ejendommene er pr. {e['dato']:%d.%m.%Y}.")
@@ -4960,7 +4966,7 @@ def _bidragsslide(prs, r, f, e):
     farver = {n: FOND_FARVER[i % len(FOND_FARVER)] for i, n in enumerate(alle)}
     med = [n for n in alle if any(abs(t["ejendomme"].get(n, (0.0, 0.0))[1]) >= EB_MIN_SERIE
                                   for t in b["trin"])]
-    cd = CategoryChartData(number_format="#,##0.0")
+    cd = CategoryChartData(number_format=enh.seriefmt())
     cd.categories = [kvartal(t["dato"]) for t in b["trin"]]
     for n in med:
         cd.add_series(n, [_mio(t["ejendomme"].get(n, (0.0, 0.0))[1]) for t in b["trin"]])
@@ -4971,7 +4977,7 @@ def _bidragsslide(prs, r, f, e):
     diagram = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_STACKED, Inches(X0), Inches(y + 0.32),
                                  Inches(EB_DIAGRAM_W), Inches(noter_y - 0.08 - y - 0.32),
                                  cd).chart
-    _diagramakser(diagram, '#,##0" mio."')
+    _diagramakser(diagram, enh.aksefmt())
     diagram.legend.position = XL_LEGEND_POSITION.BOTTOM
     plot = diagram.plots[0]
     plot.gap_width, plot.overlap = 45, 100
@@ -5483,11 +5489,11 @@ def _hoejdepunkter(r, fod=None):
                f"forvaltere{vintage}."]
     if sm["indbetalt_dkk"] is not None:
         punkter += [
-            f"Der er indbetalt {beloeb(sm['indbetalt_dkk'])} mio. DKK, svarende til "
-            f"{pct(sm['picc'])} af tilsagnet på {beloeb(sm['tilsagn_dkk'])} mio. DKK, og fondene "
-            f"har udloddet {beloeb(sm['udloddet_dkk'])} mio. DKK.",
-            f"Den samlede eksponering er {beloeb(sm['eksponering_dkk'])} mio. DKK inklusive NAV, og "
-            f"resttilsagnet på {beloeb(sm['resttilsagn_dkk'])} mio. DKK kan stadig kaldes af "
+            f"Der er indbetalt {beloeb(sm['indbetalt_dkk'])} {enh.tekst('DKK')}, svarende til "
+            f"{pct(sm['picc'])} af tilsagnet på {beloeb(sm['tilsagn_dkk'])} {enh.tekst('DKK')}, og fondene "
+            f"har udloddet {beloeb(sm['udloddet_dkk'])} {enh.tekst('DKK')}.",
+            f"Den samlede eksponering er {beloeb(sm['eksponering_dkk'])} {enh.tekst('DKK')} inklusive NAV, og "
+            f"resttilsagnet på {beloeb(sm['resttilsagn_dkk'])} {enh.tekst('DKK')} kan stadig kaldes af "
             "forvalterne.",
             f"Porteføljens værdi, udlodninger og NAV, er {gange(sm['tvpi'])} den indbetalte "
             "kapital."]
@@ -5497,16 +5503,16 @@ def _hoejdepunkter(r, fod=None):
                        + (f"; {_navne(e['udeladt'])} indgår ikke, da der ikke er "
                           "sammenlignelige beholdninger" if e["udeladt"] else "") + ".")
         punkter.append(f"Største enkelteksponering er {e['navn']} ({e['art']} via "
-                       f"{e['fond']}) med {beloeb(e['dkk'])} mio. DKK, svarende til "
+                       f"{e['fond']}) med {beloeb(e['dkk'])} {enh.tekst('DKK')}, svarende til "
                        f"{pct(e['andel'])} af NAV{m}.")
     u = (r.get("udvikling") or {}).get("kvartal")
     if u:
         nav = u["ultimo"] - u["primo"]
         punkter.append(
             f"I {kvartal(u['til'])} {'steg' if nav >= 0 else 'faldt'} NAV med "
-            f"{beloeb(abs(nav))} mio. DKK til {beloeb(u['ultimo'])} mio. DKK: kapitalkald "
-            f"{beloeb(u['kald'])} mio. DKK, udlodninger {beloeb(u['udlodning'])} mio. DKK og "
-            f"værdiændring {aendring(u['vaerdi'] + u['valuta'])} mio. DKK (afkast "
+            f"{beloeb(abs(nav))} {enh.tekst('DKK')} til {beloeb(u['ultimo'])} {enh.tekst('DKK')}: kapitalkald "
+            f"{beloeb(u['kald'])} {enh.tekst('DKK')}, udlodninger {beloeb(u['udlodning'])} {enh.tekst('DKK')} og "
+            f"værdiændring {aendring(u['vaerdi'] + u['valuta'])} {enh.tekst('DKK')} (afkast "
             f"{pct(u['afkast'])}).")
     dele = []
     for noegle, (grupper, maal) in _sammendragsfordelinger(r).items():
@@ -5585,7 +5591,7 @@ def _fordelingsbjaelker(s, x, y, w, overskrift, grupper, maks, raekke_h=0.23, la
 
 def sammendrag(prs, r):
     """Executive summary: nøgletal for hele porteføljen, højdepunkter og fordeling af NAV."""
-    s = _oversigtsslide(prs, r, "Executive summary", enhed="beløb i mio. DKK")
+    s = _oversigtsslide(prs, r, "Executive summary", enhed=f"beløb i {enh.tekst('DKK')}")
     sm = r["sammendrag"]
 
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")

@@ -23,8 +23,8 @@ MINDST = 3                # kortere navne søges ikke i teksten (de ligner almin
 FJERN = ("kilder", "dokumenter", "kursopslag")
 # GP'ens antal fonde og selskaber kan slås op; kreditfaciliteten er et beløb og skaleres
 FJERN_FAKTA = ("NUMBER_OF_FUNDS", "NUMBER_OF_COMPANIES")
-# et beløb i en notes tekst: "17.574 DKK", "1.026 tDKK", "4,5 mio. EUR"
-BELOEB = re.compile(r"(?<![\d.,])(\d{1,3}(?:\.\d{3})*(?:,\d+)?)( t| mio\. | )([A-Z]{3})\b")
+# et beløb i en notes tekst: "17.574 DKK", "1.026 tDKK", "1.026 t.DKK", "4,5 mio. EUR"
+BELOEB = re.compile(r"(?<![\d.,])(\d{1,3}(?:\.\d{3})*(?:,\d+)?)( t\.?| mio\. | )([A-Z]{3})\b")
 SELSKABSFORM = re.compile(r"^(A/S|ApS|K/S|P/S)\s+|\s+(A/S|ApS|K/S|P/S|L\.P\.|SCSp)$")
 
 

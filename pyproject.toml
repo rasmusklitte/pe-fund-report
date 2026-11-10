@@ -27,7 +27,7 @@ dev = ["pytest", "ruff"]
 pe-fund-report = "pe_fund_report.cli:main"
 
 [tool.setuptools]
-packages = ["pe_fund_report"]
+packages = ["pe_fund_report", "pe_fund_report.demo"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

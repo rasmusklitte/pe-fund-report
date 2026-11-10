@@ -163,7 +163,7 @@ def test_cli_anonym(monkeypatch):
     monkeypatch.setattr(cli, "byg", lambda *a, **k: kald.update(a=a, k=k))
     cli.main(["MOTORTRAMP", "--as-of", "2026-06-30", "--anonym"])
     assert kald["k"] == dict(med_data=True, anonym=True, med_supplerende=True, med_aleta=False,
-                             med_pme=False)
+                             med_pme=False, demo=False, tusinder=False)
     cli.main(["MOTORTRAMP", "--uden-supplerende", "--aleta"])
     assert kald["k"]["anonym"] is False and kald["k"]["med_supplerende"] is False
     assert kald["k"]["med_aleta"] is True
