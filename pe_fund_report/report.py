@@ -7,7 +7,9 @@ from pptx import Presentation
 
 from . import anonym as anonymisering
 from . import data, enhed, excel, log, slides
-from .deck import L_FORSIDE, L_SKILLE, L_SLUT, _find_master, _ny_slide, _ryd_slides, _saet_ph
+from . import master as mst
+from .deck import _find_master, _ny_slide, _ryd_slides
+from .master import L_FORSIDE, L_SKILLE, L_SLUT
 from .paths import EXPORTS, MASTER
 
 
@@ -112,10 +114,9 @@ def _byg_deck(r, master=None, med_pme=False):
     prs = Presentation(str(_find_master(master or MASTER)))
     _ryd_slides(prs)
 
-    s = _ny_slide(prs, L_FORSIDE)
     # porteføljen rummer også private credit og ejendomme, så ikke "private equity"
-    _saet_ph(s, 0, f"{r['navn']} – alternative investeringer")
-    _saet_ph(s, 1, f"Porteføljerapport pr. {r['as_of']:%d.%m.%Y}")
+    mst.forside(_ny_slide(prs, L_FORSIDE), f"{r['navn']} – alternative investeringer",
+                f"Porteføljerapport pr. {r['as_of']:%d.%m.%Y}")
     slides.sammendrag(prs, r)
     slides.udvikling(prs, r)            # springes over uden DKK-kurser for alle fonde
     # samlede investeringer med ejendomsfondene; uden dem står i de supplerende slides
@@ -128,8 +129,8 @@ def _byg_deck(r, master=None, med_pme=False):
     slides.efter_kvartalet(prs, r)
     slides.justeret_nav(prs, r)
 
-    s = _ny_slide(prs, L_SKILLE[0])
-    _saet_ph(s, 0, "Porteføljeoversigt")
+    sektioner = ["Porteføljeoversigt", "Fondsoversigter", "Appendiks"]
+    mst.skilleside(_ny_slide(prs, L_SKILLE[0]), 1, sektioner[0])
     slides.tilsagn_paa_tvaers(prs, r)
     slides.vaerdibevaegelser(prs, r)
     slides.aendringer_pr_fond(prs, r)
@@ -146,18 +147,17 @@ def _byg_deck(r, master=None, med_pme=False):
     # positioner ovenfor er den samme gennemlysning i DKK
     slides.gennemlysning(prs, r)
 
-    s = _ny_slide(prs, L_SKILLE[1])
-    _saet_ph(s, 0, "Fondsoversigter")
+    mst.skilleside(_ny_slide(prs, L_SKILLE[1]), 2, sektioner[1])
     slides.portefoeljeoversigt(prs, r)  # oversigten over fondene indleder fondssiderne
     for f in r["fonde"]:
         slides.fondsside(prs, f, r["navn"])
         slides.virksomhedsprofiler(prs, f, r["navn"])   # kun fonde med porteføljeselskaber
 
-    s = _ny_slide(prs, L_SKILLE[2])
-    _saet_ph(s, 0, "Appendiks")
+    mst.skilleside(_ny_slide(prs, L_SKILLE[2]), 3, sektioner[2])
     slides.definitioner(prs, r, pme=med_pme)
     slides.gics_oversigt(prs, r)       # GICS-sektorerne og deres branchegrupper
     _ny_slide(prs, L_SLUT)
+    _til_ny_master(prs, sektioner)
     slides.sidefod(prs, r["navn"])      # til sidst, så sidetallene er endelige
     return prs
 
@@ -169,9 +169,8 @@ def _byg_supplerende(r, master=None):
     prs = Presentation(str(_find_master(master or MASTER)))
     _ryd_slides(prs)
 
-    s = _ny_slide(prs, L_FORSIDE)
-    _saet_ph(s, 0, f"{r['navn']} – supplerende slides")
-    _saet_ph(s, 1, f"Slides uden for porteføljerapporten pr. {r['as_of']:%d.%m.%Y}")
+    mst.forside(_ny_slide(prs, L_FORSIDE), f"{r['navn']} – supplerende slides",
+                f"Slides uden for porteføljerapporten pr. {r['as_of']:%d.%m.%Y}")
     slides.regnskabstal(prs, r, "kvartal")      # bevægelsesnoten til investors regnskab
     slides.regnskabstal(prs, r, "aar")
     slides.likviditet(prs, r)           # samlede investeringer uden ejendomsfondene
@@ -196,10 +195,11 @@ def _byg_supplerende(r, master=None):
     slides.branchekort_ejendomme(prs, r)        # ejendommene for sig
     slides.regionskort_ejendomme(prs, r)
 
-    s = _ny_slide(prs, L_SKILLE[2])
-    _saet_ph(s, 0, "Appendiks")
+    sektioner = ["Appendiks"]
+    mst.skilleside(_ny_slide(prs, L_SKILLE[2]), 1, sektioner[0])
     slides.definitioner(prs, r, supplerende=True)
     _ny_slide(prs, L_SLUT)
+    _til_ny_master(prs, sektioner)
     slides.sidefod(prs, r["navn"])
     return prs
 
@@ -210,16 +210,23 @@ def _byg_aleta(r, master=None):
     prs = Presentation(str(_find_master(master or MASTER)))
     _ryd_slides(prs)
 
-    s = _ny_slide(prs, L_FORSIDE)
-    _saet_ph(s, 0, f"{r['navn']} – afstemning med Aleta")
-    _saet_ph(s, 1, f"Rapportens tal mod Aleta pr. {r['as_of']:%d.%m.%Y}")
+    mst.forside(_ny_slide(prs, L_FORSIDE), f"{r['navn']} – afstemning med Aleta",
+                f"Rapportens tal mod Aleta pr. {r['as_of']:%d.%m.%Y}")
     sider = [slides.aleta_afstemning(prs, r),   # nøgletallene mod Aleta
              slides.irr_mod_aleta(prs, r)]      # IRR mod Aleta med årsagerne til forskellen
     if not any(sider):
         return None
     _ny_slide(prs, L_SLUT)
+    _til_ny_master(prs, [])
     slides.sidefod(prs, r["navn"])
     return prs
+
+
+def _til_ny_master(prs, sektioner):
+    """Slides.py tegner på den gamle masters flade; flyt alt over på den nye og sæt
+    sektionsrubrikken over titlerne (master.py)."""
+    mst.tilpas(prs)
+    mst.rubrikker(prs, sektioner)
 
 
 def _advarsler(r):

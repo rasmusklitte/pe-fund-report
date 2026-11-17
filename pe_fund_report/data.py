@@ -38,7 +38,7 @@ GEOGRAFIER = {"DENMARK": "Danmark", "NORDICS": "Norden", "EUROPE": "Europa",
 STRUKTURER = {"FUND_OF_FUNDS": "Fund of funds", "SECONDARY": "Secondaries"}
 # buyout, venture og growth står samlet som Private equity
 FOKUS = {"BUYOUT": "Private equity", "VENTURE": "Private equity", "GROWTH": "Private equity",
-         "JUNIOR_DEBT": "Private credit", "SHIPPING": "Shipping",
+         "JUNIOR_DEBT": "Private credit", "SHIPPING": "Real assets",
          "MULTI_STRATEGY": "Multistrategi", "REAL_ESTATE": "Ejendomme"}
 # rækkefølgen, fondene og segmenterne vises i; andre segmenter kommer sidst
 STRATEGI_ORDEN = ["Private equity", "Fund of funds", "Secondaries", "Private credit", "Ejendomme"]
@@ -824,6 +824,19 @@ KATEGORIER = {"United Kingdom": "Storbritannien", "United States": "USA", "Franc
 FORDELINGER = (("INDUSTRY", "Branche"), ("GEOGRAPHY", "Geografi"))
 
 
+# Skibstyperne i en shippingfonds beholdninger (segment i rpt.v_portfolio_holding, Navigares
+# MIF III), på dansk; ukendte typer vises, som forvalteren skriver dem
+SKIBSTYPER = {"CSOV": "Servicefartøj (CSOV)", "SOV": "Servicefartøj (SOV)",
+              "LPG": "LPG-tankskib", "CONTAINER": "Containerskib"}
+
+
+def skibstype(segment):
+    """Forvalterens skibstype på dansk: "Container" -> "Containerskib"; None uden type."""
+    if segment is None or pd.isna(segment) or not str(segment).strip():
+        return None
+    return SKIBSTYPER.get(str(segment).strip().upper(), str(segment).strip())
+
+
 def _feeder_beholdninger(inv, nav_dato, nav):
     """Gennemlysning af en feeder: den underliggende fonds positioner med investors NAV fordelt.
 
@@ -838,6 +851,12 @@ def _feeder_beholdninger(inv, nav_dato, nav):
     beh = _beholdninger(kode, nav_dato, None, nav=nav)
     if beh is None:
         return None
+    if _kode(inv.strategy_focus) == "SHIPPING":
+        # selskaberne er skibe: forvalterens segment er skibstypen og står, hvor kreditfondene
+        # har instrumentet (Navigare oplyser intet instrument)
+        beh["kolonne"] = "Skibstype"
+        for x in beh["raekker"]:
+            x["skibstype"] = skibstype(x["sektor"])
     # nogle forvaltere oplyser kun beløb (NEP); andelen er så beløbet af dimensionens sum
     bd = read_sql("""
         SELECT dimension, category,
@@ -1824,11 +1843,12 @@ def _dkk_paa_dagen(raekker, valuta, kurs):
     return float(sum(a * k for a, k in zip(raekker.amount, kurser)))
 
 
-def justeret_nav(fonde, til, kurs, irr_i_dkk):
+def justeret_nav(fonde, til, kurs, irr_i_dkk, rapport_dato=None):
     """NAV justeret for kapitalstrømme pr. til: hver fonds seneste NAV fra forvalteren plus
     kapitalkald og minus udlodninger efter NAV-datoen og til og med til (rul_nav_frem).
 
-    None, når alle fonde er opgjort pr. til. Ellers {til, linjer, i_alt, tvpi, irr, negative}:
+    None, når alle fonde er opgjort pr. til. Ellers {fra, til, linjer, i_alt, tvpi, irr,
+    negative}, hvor fra er den tidligste NAV-dato blandt fondene bag til (periodens start):
     linjer pr. fond i fondens valuta (nav_dato, nav, kald, udlodning, justeret) med kursen på
     til (kurs) og beløbene i DKK; i_alt i DKK, hvor NAV og den justerede NAV er til
     kursen på til, og kald og udlodninger til kursen på deres egen dato, samt nav_rapport_dkk
@@ -1837,9 +1857,18 @@ def justeret_nav(fonde, til, kurs, irr_i_dkk):
     porteføljens i DKK med de senere cash flows og den justerede NAV som sidste cash flow
     (irr_i_dkk er irr_dkk()'s resultat; None hvis den mangler). negative er de fonde, hvis NAV
     + kald - udlodninger er under nul og sat til 0. Et DKK-beløb er None uden kurs.
+
+    Ligger til efter rapport_dato, deles perioden ved rapportdatoen (skel): fondene bag den
+    rulles først frem til skel, så broen har NAV pr. skel for alle fonde som mellemtotal.
+    efter er {nav_skel_dkk (til kursen på skel), indhent_dkk (forskellen fra rapportens NAV),
+    kald_efter_dkk, udlodning_efter_dkk (kun strømmene efter skel), valuta_efter_dkk
+    (residualen)}, og linjerne har kald_efter / udlodning_efter (+ _dkk) og indhent_dkk (fondens
+    del af indhentningen, så de summerer til efter["indhent_dkk"]). Uden skel
+    (til = rapport_dato) er efters felter None.
     """
     if all(f["nav_dato"] >= til for f in fonde):
         return None
+    skel = rapport_dato if rapport_dato and til > rapport_dato else None
     linjer, senere, negative = [], [], []
     for f in fonde:
         cf = f["kilder"]["cash_flows"]
@@ -1857,6 +1886,25 @@ def justeret_nav(fonde, til, kurs, irr_i_dkk):
             nav_dkk=None if k_til is None else f["n"]["nav"] * k_til,
             kald_dkk=None if kald_dkk is None else -kald_dkk or 0.0, udlodning_dkk=udl_dkk,
             justeret_dkk=None if k_til is None else nav * k_til))
+        if skel:
+            # fonden pr. rapportdatoen (uændret, hvis den er opgjort pr. den) og strømmene efter
+            nav_skel = rul_nav_frem(f["n"]["nav"], cf, f["nav_dato"], skel)[0]
+            k_skel = kurs(f["valuta"], skel)
+            efter_r = raekker[raekker.value_date > skel]
+            kald_e, udl_e = (efter_r[efter_r.flow_class == kl]
+                             for kl in ("CONTRIBUTION", "DISTRIBUTION"))
+            kald_e_dkk, udl_e_dkk = (_dkk_paa_dagen(x, f["valuta"], kurs) for x in (kald_e, udl_e))
+            nav_skel_dkk = None if k_skel is None else nav_skel * k_skel
+            nav_rapport_dkk = f["n"].get("nav_dkk")
+            linjer[-1].update(
+                nav_skel_dkk=nav_skel_dkk,
+                # fondens del af broens indhentningstrin (0 for en fond pr. rapportdatoen)
+                indhent_dkk=(None if None in (nav_skel_dkk, nav_rapport_dkk)
+                             else nav_skel_dkk - nav_rapport_dkk),
+                kald_efter=-float(kald_e.amount.sum()) or 0.0,
+                udlodning_efter=float(udl_e.amount.sum()),
+                kald_efter_dkk=None if kald_e_dkk is None else -kald_e_dkk or 0.0,
+                udlodning_efter_dkk=udl_e_dkk)
         # IRR-cash flows efter NAV-datoen: som irr_flows, uden kildeskat
         efter = cf[(cf.value_date > f["nav_dato"]) & (cf.value_date <= til)
                    & (cf.flow_class != "WITHHOLDING_TAX")]
@@ -1873,6 +1921,16 @@ def justeret_nav(fonde, til, kurs, irr_i_dkk):
     i_alt["valuta_dkk"] = (None if None in i_alt.values() else
                            i_alt["justeret_dkk"] - i_alt["nav_rapport_dkk"] - i_alt["kald_dkk"]
                            + i_alt["udlodning_dkk"])
+    # to trin: fondene bag rapportdatoen indhentes til den, derefter strømmene efter den
+    trin2 = ("nav_skel_dkk", "kald_efter_dkk", "udlodning_efter_dkk")
+    efter = {k: None if not skel or any(x[k] is None for x in linjer)
+             else sum(x[k] for x in linjer) for k in trin2}
+    if None in efter.values() or None in i_alt.values():
+        efter |= dict(indhent_dkk=None, valuta_efter_dkk=None)
+    else:
+        efter |= dict(indhent_dkk=efter["nav_skel_dkk"] - i_alt["nav_rapport_dkk"],
+                      valuta_efter_dkk=i_alt["justeret_dkk"] - efter["nav_skel_dkk"]
+                      - efter["kald_efter_dkk"] + efter["udlodning_efter_dkk"])
     tvpi = irr = None
     if None not in i_alt.values():
         ind = sum(f["n"].get("indbetalt_dkk") or 0 for f in fonde) + i_alt["kald_dkk"]
@@ -1885,7 +1943,9 @@ def justeret_nav(fonde, til, kurs, irr_i_dkk):
             flows += [x for s in senere for x in s]
             flows += [(til, x["justeret_dkk"]) for x in linjer]
             irr = xirr(sorted(flows))
-    return dict(til=til, linjer=linjer, i_alt=i_alt, tvpi=tvpi, irr=irr, negative=negative)
+    fra = min(f["nav_dato"] for f in fonde if f["nav_dato"] < til)
+    return dict(fra=fra, til=til, skel=skel, linjer=linjer, i_alt=i_alt, efter=efter,
+                tvpi=tvpi, irr=irr, negative=negative)
 
 
 def _kursserie(valuta, til):
@@ -3099,7 +3159,7 @@ def investor_rapport(investor_code, as_of=None, med_aleta=False):
                 as_of=rapport_dato, fonde=fonde, total=total(fonde),
                 # NAV justeret for kapitalstrømme frem til den ønskede dato (egen slide)
                 justeret_til=justeret_til,
-                justeret_nav=justeret_nav(fonde, justeret_til, kurs, irr_i_dkk),
+                justeret_nav=justeret_nav(fonde, justeret_til, kurs, irr_i_dkk, rapport_dato),
                 kurser=kurser, total_dkk=total_dkk, irr_dkk=irr_i_dkk, pme=pme_i_dkk,
                 pme_relevant=pme_relevant,
                 sammendrag=sammendrag(fonde, total_dkk, irr_i_dkk and irr_i_dkk["irr"]),

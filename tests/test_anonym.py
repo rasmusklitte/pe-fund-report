@@ -9,7 +9,8 @@ from pptx.util import Inches
 
 from pe_fund_report import anonym, cli, slides
 from pe_fund_report.data import Note
-from pe_fund_report.deck import L_TEKST, _ny_slide, _ryd_slides
+from pe_fund_report.deck import _ny_slide, _ryd_slides
+from pe_fund_report.master import L_TEKST
 from pe_fund_report.paths import MASTER
 
 
@@ -176,3 +177,13 @@ def test_kort_fondsnavn_beholder_loebenummer():
     assert slides._kort_fondsnavn("Private Credit-fond 1") == "Private Credit-fond 1"
     assert slides._kort_fondsnavn("Fund of funds 2") == "Fund of funds 2"
     assert slides._kort_fondsnavn("K Alternativ Private Equity 2020 K/S") == "KAPE 2020"
+
+
+def test_kort_fondsnavn_skelner_samme_forvalter():
+    """Fonde fra samme forvalter uden årstal eller romertal må ikke få samme korte navn."""
+    korte = [slides._kort_fondsnavn(n) for n in (
+        "Petersen & Partners Private Equity A/S", "Petersen & Partners Private Credit A/S",
+        "Petersen & Partners Maritime A/S", "Petersen & Partners Private Equity II A/S",
+        "Petersen & Partners Private Credit II A/S")]
+    assert korte == ["PPPE", "PPPC", "PPM", "PPPE II", "PPPC II"]
+    assert slides._kort_fondsnavn("Commercial Real Estate Denmark P/S") == "CRED"

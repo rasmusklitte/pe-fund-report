@@ -17,7 +17,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.chart import (XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION,
                              XL_MARKER_STYLE, XL_TICK_LABEL_POSITION)
 from pptx.enum.dml import MSO_LINE_DASH_STYLE
-from pptx.enum.shapes import MSO_SHAPE, PP_PLACEHOLDER
+from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE, PP_PLACEHOLDER
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml import parse_xml
 from pptx.oxml.ns import nsdecls, qn
@@ -30,12 +30,15 @@ from .data import (BRANCHEGRUPPER, GICS_STRUKTUR, IKKE_KLASSIFICERET, NAV_SYNLIG
                    _kvartalsslut, _vaerdiskabt, uaendret)
 from .data import multiple as _multiple
 from .data import uden_selskabsform as _uden_selskabsform
-from .deck import BROED_FONT, L_TEKST, _fjern_tomme_ph, _ny_slide, _saet_ph
+from . import master as mst
+from .deck import BROED_FONT, _fjern_tomme_ph, _ny_slide, _saet_ph
+from .master import L_TEKST
 
 IKKE_OPLYST = "n/a"
 INGEN_TABELSTIL = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"   # "No Style, No Grid"
 
-# Indholdsfladen på Layout_basic_2 (tommer)
+# Indholdsfladen på den gamle masters Layout_basic_2 (tommer); master.tilpas() flytter det
+# færdige deck over på den nye master
 X0, X1 = 0.66, 11.04
 Y_UNDERTITEL, Y_TOP, Y_BUND, Y_NOTER = 0.86, 1.22, 2.95, 5.90
 
@@ -346,25 +349,50 @@ def _historik_graf(slide, x, y, w, h, historik):
     return diagram
 
 
-def _beholdningstabel(s, y, beh, f, investor_navn, maerker=None):
+BEH_RAEKKE_H = (0.215, 0.185)   # rækkehøjden i beholdningstabellen: op til 8 rækker / flere
+BEH_MIN_H = 0.165                # laveste rækkehøjde, før de mindste linjer samles i »Øvrige«
+
+
+def _beholdningsplads(antal, plads):
+    """(rækkehøjde, antal linjer, der vises enkeltvis) for en tabel med antal linjer plus
+    overskrift og »I alt« på plads tommer. Er der ikke plads til alle selv ved BEH_MIN_H,
+    vises de første enkeltvis og resten samlet i én »Øvrige«-række."""
+    h = BEH_RAEKKE_H[0] if antal + 2 <= 8 else BEH_RAEKKE_H[1]
+    if plads is None or (antal + 2) * h <= plads:
+        return h, antal
+    h = max(BEH_MIN_H, plads / (antal + 2))
+    if (antal + 2) * h <= plads + 1e-9:
+        return h, antal
+    return BEH_MIN_H, max(1, floor(plads / BEH_MIN_H) - 3)     # overskrift, Øvrige og I alt
+
+
+def _beholdningstabel(s, y, beh, f, investor_navn, maerker=None, bund=None):
     """Tabel over underliggende fonde eller porteføljeselskaber. Returnerer y under tabellen.
 
-    maerker er {kolonnenavn: fodnotemærke}, fx ved Branche og Dagsværdi."""
+    maerker er {kolonnenavn: fodnotemærke}, fx ved Branche og Dagsværdi. Med bund holdes
+    tabellen over bund: først med lavere rækker, så med de mindste linjer (rækkerne står
+    efter total værdi) samlet i »Øvrige (n)«."""
     maerker = maerker or {}
     hvem = f"{investor_navn}s andel" if beh["skaleret"] else "hele fonden"
-    r_ = beh["raekker"]
-    sum_ = lambda k: sum(r[k] or 0 for r in r_)
-    kost = sum_("kostpris")
+    alle = beh["raekker"]
+    raekke_h, vist = _beholdningsplads(len(alle), None if bund is None else bund - (y + 0.28))
+    r_, oevrige = alle[:vist], alle[vist:]
+    sum_ = lambda k, rk=alle: sum(r[k] or 0 for r in rk)
     tal = lambda r: [beloeb(r["kostpris"]), beloeb(r["dagsvaerdi"]), beloeb(r["udloddet"]),
                      beloeb(r["total"]), gange(r["tvpi"])]
-    total = [beloeb(kost), beloeb(sum_("dagsvaerdi")), beloeb(sum_("udloddet")),
-             beloeb(sum_("total")), gange(sum_("total") / kost) if kost else IKKE_OPLYST]
+    samlet = lambda rk: [beloeb(sum_("kostpris", rk)), beloeb(sum_("dagsvaerdi", rk)),
+                         beloeb(sum_("udloddet", rk)), beloeb(sum_("total", rk)),
+                         gange(sum_("total", rk) / sum_("kostpris", rk))
+                         if sum_("kostpris", rk) else IKKE_OPLYST]
+    total = samlet(alle)
     if beh["type"] == "fonde":
         titel = "Underliggende fonde"
         raekker = [["Fond", "Vintage", "Kostpris", "Dagsværdi", "Udloddet", "Total værdi",
                     "TVPI", "IRR"]]
         raekker += [[r["navn"], r["vintage"] or IKKE_OPLYST] + tal(r)
                     + [IKKE_OPLYST if r["irr"] is None else pct(r["irr"] / 100)] for r in r_]
+        if oevrige:
+            raekker.append([f"Øvrige ({len(oevrige)})", ""] + samlet(oevrige) + [""])
         raekker.append(["I alt", ""] + total + [""])
         bredder, just = [3.2, 0.9, 1.2, 1.2, 1.2, 1.2, 0.9, 0.9], [V, C, H, H, H, H, H, H]
     else:
@@ -377,10 +405,11 @@ def _beholdningstabel(s, y, beh, f, investor_navn, maerker=None):
         raekker += [[r["navn"], r.get("industri") or IKKE_OPLYST,
                      f"{r['closing']:%m.%Y}" if r["closing"] else r["vintage"] or IKKE_OPLYST]
                     + tal(r) for r in r_]
+        if oevrige:
+            raekker.append([f"Øvrige ({len(oevrige)})", "", ""] + samlet(oevrige))
         raekker.append(["I alt", "", ""] + total)
         bredder, just = [3.2, 1.9, 0.9, 1.1, 1.1, 1.1, 1.1, 0.9], [V, V, C, H, H, H, H, H]
     raekker[0] = [k + maerker.get(k, "") for k in raekker[0]]
-    raekke_h = 0.185 if len(raekker) > 8 else 0.215
     _tekst(s, X0, y, X1 - X0, 0.22, f"{titel} – {hvem} ({enh.tekst(f['valuta'])})", 10.5, fed=True,
            farve=SAGE)
     _tabel(s, X0, y + 0.28, X1 - X0, raekker, bredder=bredder, just=just, raekke_h=raekke_h,
@@ -503,8 +532,11 @@ def _gennemlysningsblok(s, y, beh, f, investor_navn, bund=Y_NOTER):
                                  gange(multiple(rk))]
         bredder, just = [2.45, 0.95, 0.6, 0.75, 0.75, 0.7, 0.55], [V, V, C, H, H, H, H]
     else:
-        raekker = [["Selskab", "Instrument", "Investeret", "Kostpris", "Dagsværdi", "Multiple"]]
-        raekker += [[r["navn"], r.get("instrument") or IKKE_OPLYST,
+        # kreditfondene viser trancherne (instrument), shippingfonden skibstypen (data.py)
+        kolonne = beh.get("kolonne", "Instrument")
+        felt = "skibstype" if kolonne == "Skibstype" else "instrument"
+        raekker = [["Selskab", kolonne, "Investeret", "Kostpris", "Dagsværdi", "Multiple"]]
+        raekker += [[r["navn"], r.get(felt) or IKKE_OPLYST,
                      f"{r['closing']:%m.%Y}" if r["closing"] else IKKE_OPLYST,
                      beloeb(r["kostpris"]), beloeb(r["dagsvaerdi"]), gange(multiple([r]))]
                     for r in top]
@@ -544,7 +576,12 @@ def _gennemlysningskilde(beh, f, investor_navn):
     tekst = (f"Positionerne er pr. {beh['dato']:%d.%m.%Y}." if beh["dato"] != f["nav_dato"]
              else "")
     if beh["type"] != "fonde":
-        tekst += " Trancher i samme selskab er lagt sammen; multiple er (dagsværdi + udloddet) / kostpris."
+        # trancherne samles kun, hvor forvalteren oplyser instrumentet (data._beholdningslinjer)
+        if any(r.get("instrument") for r in beh["raekker"]):
+            tekst += " Trancher i samme selskab er lagt sammen;"
+            tekst += " multiple er (dagsværdi + udloddet) / kostpris."
+        else:
+            tekst += " Multiple er (dagsværdi + udloddet) / kostpris."
     blokke = [b for b, _ in _feederfordeling(beh, f)]
     if f.get("brancher") or f.get("regioner"):
         tekst += (" Branche (GICS-sektor) og geografi er fordelt efter forvalterens fordeling "
@@ -748,7 +785,7 @@ def fondsside(prs, f, investor_navn):
         _ejendomsblok(s, y, beh, f, investor_navn, bund=bund)
         y = bund
     elif beh:
-        y = _beholdningstabel(s, y, beh, f, investor_navn, tabel_m)
+        y = _beholdningstabel(s, y, beh, f, investor_navn, tabel_m, bund=bund)
     # en tabel over underliggende fonde står alene; graf og værdibro kun ved selskaber og fonde
     # uden beholdninger, og kun hvor der er plads
     if bund - y >= 1.5 and not (beh and beh["type"] == "fonde"):
@@ -757,7 +794,9 @@ def fondsside(prs, f, investor_navn):
     return s
 
 
-NOTE_TEGN = 200           # tegn pr. linje i noterne ved 7 pt i hele bredden; hellere for lavt
+# tegn pr. linje i noterne ved 7 pt i hele bredden; hellere for lavt. På den nye master er
+# linjen 14 % bredere og skriften 3 % større (master.SX / master.SKRIFT): 200 -> 215
+NOTE_TEGN = 215
 NOTE_LINJE = 0.118        # linjehøjde ved 7 pt
 NOTE_BUND = 6.28          # noterne skal slutte over Petersen & Partners-linjen og sidefoden
 
@@ -807,10 +846,48 @@ class Fodnoter:
         return " ".join(self.generelle + nummererede)
 
     def tegn(self, s, y=Y_NOTER):
-        """Noterne ved y, eller højere, hvis de ellers løber ned i logoet."""
+        """Noterne ved y, eller højere, hvis de ellers løber ned i logoet. Rækker indholdet
+        ned i noterne, presses det sammen over dem (_klem)."""
         tekst = self.tekst()
         if tekst:
-            _tekst(s, X0, _noter_y(tekst, y), X1 - X0, 0.5, tekst, 7, kursiv=True)
+            ny = _noter_y(tekst, y)
+            _klem(s, ny - NOTE_LUFT)
+            _tekst(s, X0, ny, X1 - X0, 0.5, tekst, 7, kursiv=True)
+
+
+NOTE_LUFT = 0.05          # luft mellem indholdet og noterne, når indholdet presses sammen
+
+
+def _klem(s, bund, top=Y_TOP):
+    """Pres indholdet mellem top og bund lodret sammen, hvis noget rækker ned under bund.
+
+    Mange slides lægger indholdet ud til en fast notelinje, men noterne opstår først, mens
+    sliden tegnes (kassernes, rækkernes og båndenes mærker), og lange noter rykker op
+    (_noter_y). Så skaleres alt, der starter under top, mod top, så det nederste slutter ved
+    bund: tabelrækker, diagrammer, kasser og streger følger med; billeder og cirkler beholder
+    deres størrelse og flyttes med deres midte. Skrifterne er uændrede. Slides, hvis indhold
+    allerede slutter over bund, røres ikke.
+    """
+    t0, b = Inches(top), Inches(bund)
+    figurer = [sh for sh in s.shapes if not sh.is_placeholder and sh.top is not None
+               and sh.top >= t0 - Inches(0.01)]
+    nederst = max((sh.top + sh.height for sh in figurer), default=0)
+    if nederst <= b or nederst <= t0:
+        return
+    k = (b - t0) / (nederst - t0)
+    flyt = lambda emu: round(t0 + (emu - t0) * k)
+    for sh in figurer:
+        el = sh._element
+        geom = el.find(".//" + qn("a:prstGeom"))
+        fast = (sh.shape_type == MSO_SHAPE_TYPE.PICTURE
+                or (geom is not None and geom.get("prst") == "ellipse"))
+        if fast:
+            sh.top = flyt(sh.top + sh.height / 2) - sh.height // 2
+            continue
+        if sh.has_table:
+            for raekke in sh.table.rows:
+                raekke.height = round(raekke.height * k)
+        sh.top, sh.height = flyt(sh.top), round(sh.height * k)
 
 
 KORT_FAST = 1.84          # alt på et virksomhedskort undtagen beskrivelsen (tommer)
@@ -1013,14 +1090,10 @@ def _fondscelle(s, r, f, kol, i, y, raekke_h, maerke=""):
     if f["benchmark"]:
         _tekst(s, _lt_x(0, kol), y + 0.06, kol[0][1], 0.14, f"Benchmark: {f['benchmark']}", 6.5,
                farve=SAGE, kursiv=True)
-    afvigende = _foraeldede(r).get(f["fund_name"])
-    _tekst(s, _lt_x(0, kol), y + 0.20, kol[0][1] - 0.1,
-           raekke_h - (0.46 if afvigende else 0.26),
+    # en fond bag rapportdatoen har kun sin dagger her; datoen står i datonoten
+    _tekst(s, _lt_x(0, kol), y + 0.20, kol[0][1] - 0.1, raekke_h - 0.26,
            f["fund_name"] + _datomarkering(r, f["fund_name"]) + maerke, 9,
            anker=MSO_ANCHOR.MIDDLE)
-    if afvigende:
-        _tekst(s, _lt_x(0, kol), y + raekke_h - 0.26, kol[0][1], 0.16,
-               f"opgjort pr. {afvigende:%d.%m.%Y}", 6.5, farve=TERRA)
     if f["logo"]:
         _logo(s, f["logo"], x_midt=_lt_x(1, kol) + kol[1][1] / 2, y_midt=midt,
               maks_b=min(1.05, kol[1][1] - 0.15), maks_h=min(0.34, raekke_h - 0.2))
@@ -1582,8 +1655,9 @@ def _kort_fondsnavn(navn):
     """Kort navn til smalle kolonner.
 
     "K Alternativ Private Equity 2020 K/S" -> "KAPE 2020", "Petersen & Partners Private
-    Credit II A/S" -> "PPPC II"; ellers de første to ord. Et navn, der slutter med et
-    løbenummer (den anonymiserede udgaves "Private Equity-fond 1"), står helt.
+    Credit II A/S" -> "PPPC II"; ellers forbogstaverne ("Petersen & Partners Maritime A/S"
+    -> "PPM"), så to fonde fra samme forvalter ikke får samme korte navn. Et navn, der
+    slutter med et løbenummer (den anonymiserede udgaves "Private Equity-fond 1"), står helt.
     """
     uden = _uden_selskabsform(navn)
     ord_ = uden.split()
@@ -1596,7 +1670,8 @@ def _kort_fondsnavn(navn):
     nummer = next((i for i, o in enumerate(ord_) if i and _romertal(o)), None)
     if nummer:
         return "".join(o[0] for o in ord_[:nummer] if o[0].isupper()) + " " + ord_[nummer]
-    return " ".join(ord_[:2])
+    forbogstaver = "".join(o[0] for o in ord_ if o[0].isupper())
+    return forbogstaver if len(forbogstaver) >= 2 else " ".join(ord_[:2])
 
 
 def _fakta_flise(slide, x, y, w, h, tal, label):
@@ -3207,13 +3282,17 @@ def _efter_kurser(j):
             + "; ".join(f"{v} {style._dk(k, 4)}" for v, k in kurser) + ".")
 
 
-def _efter_hoved(prs, r, j, titel, enhed):
-    """Slide med perioden fra rapportdatoen til den ønskede dato i undertitlen."""
+def _efter_hoved(prs, r, j, titel, enhed, fra=None, nav_datoer=False):
+    """Slide med perioden i undertitlen: fra fra (som standard den tidligste NAV-dato blandt
+    fondene bag den ønskede dato) til den ønskede dato. nav_datoer: halter en fond efter
+    rapportdatoen, siger undertitlen også, hvilke datoer rapportens NAV er fra."""
     s = _ny_slide(prs, L_TEKST)
     _titel(s, titel)
     _fjern_tomme_ph(s)
-    _tekst(s, X0, Y_UNDERTITEL, X1 - X0, 0.22,
-           f"{r['navn']}  ·  {r['as_of']:%d.%m.%Y} – {j['til']:%d.%m.%Y}  ·  {enhed}", 9.5)
+    dele = [r["navn"], f"{fra or j['fra']:%d.%m.%Y} – {j['til']:%d.%m.%Y}"]
+    if nav_datoer and (halter := _foraeldede(r)):
+        dele.append(f"NAV i rapporten pr. {_datoliste([*halter.values(), r['as_of']])}")
+    _tekst(s, X0, Y_UNDERTITEL, X1 - X0, 0.22, "  ·  ".join(dele + [enhed]), 9.5)
     return s
 
 
@@ -3221,20 +3300,49 @@ def efter_kvartalet(prs, r):
     """Udvikling efter kvartalets afslutning, visuelt: broen fra rapportens NAV i DKK over
     kapitalkald, udlodninger og valutakurs til NAV justeret for kapitalstrømme, og hver fonds
     kald og udlodninger efter dens NAV-dato. Data fra data.justeret_nav(); None, når alle
-    fonde er opgjort pr. den ønskede dato eller et DKK-beløb mangler."""
+    fonde er opgjort pr. den ønskede dato eller et DKK-beløb mangler.
+
+    Ligger den ønskede dato efter rapportdatoen, og halter en fond efter rapportdatoen, har
+    broen to trin: først indhentes fondene med dagger til rapportdatoen (mellemtotal: NAV pr.
+    rapportdatoen for alle fonde), derefter kun strømmene efter rapportdatoen, som også er
+    perioden i undertitlen og i panelet pr. fond."""
     j = r.get("justeret_nav")
     if not j or None in j["i_alt"].values():
         return None
     t = j["i_alt"]
-    s = _efter_hoved(prs, r, j, EFTER_TITEL, f"beløb i {enh.tekst('DKK')}")
+    e = j.get("efter") or {}
+    # to trin: perioden er fra rapportdatoen, og panelet viser kun strømmene efter den
+    to_trin = bool(j.get("skel")) and e and None not in e.values()
+    kald_k, udl_k = (("kald_efter_dkk", "udlodning_efter_dkk") if to_trin
+                     else ("kald_dkk", "udlodning_dkk"))
+    s = _efter_hoved(prs, r, j, EFTER_TITEL, f"beløb i {enh.tekst('DKK')}",
+                     fra=r["as_of"] if to_trin else None, nav_datoer=True)
     fod = Fodnoter("Kilde: Forvalterrapporter, Danmarks Nationalbank og egne beregninger.")
     fod.generel(_efter_kurser(j))
-    valuta_m = fod.maerke("Forskellen mellem rapportens NAV omregnet med kursen på "
-                          f"{r['as_of']:%d.%m.%Y} og med kursen på {j['til']:%d.%m.%Y}; "
-                          "kapitalkald og udlodninger er omregnet med kursen på deres dato.")
-    just_m = fod.maerke("Uden værdiændring: forvalterne har endnu ikke opgjort NAV efter "
-                        f"{r['as_of']:%d.%m.%Y}.")
-    med = [x for x in j["linjer"] if x["kald_dkk"] or x["udlodning_dkk"]]
+    for n in _datonoter(r):
+        fod.generel(n)
+    # ønsket dato = rapportdatoen: kun fondene bag den rulles frem, og NAV-kursen er den samme
+    samme_dag = j["til"] == r["as_of"]
+    if samme_dag:
+        valuta_m = fod.maerke(f"NAV er omregnet med kursen på {j['til']:%d.%m.%Y}, "
+                              "kapitalkald og udlodninger med kursen på deres dato.")
+    else:
+        valuta_m = fod.maerke("Forskellen mellem rapportens NAV omregnet med kursen på "
+                              f"{r['as_of']:%d.%m.%Y} og med kursen på {j['til']:%d.%m.%Y}; "
+                              "kapitalkald og udlodninger er omregnet med kursen på deres dato.")
+    just_m = fod.maerke("Uden værdiændring: kun kapitalkald og udlodninger efter fondens "
+                        "seneste NAV fra forvalteren.")
+    halter = bool(_foraeldede(r))
+    indhent = to_trin and halter
+    if indhent:
+        indhent_m = fod.maerke(f"Kapitalkald og udlodninger fra fondens NAV-dato til "
+                               f"{r['as_of']:%d.%m.%Y}, omregnet med kursen på "
+                               f"{r['as_of']:%d.%m.%Y}.")
+    # med indhentning viser panelet hver fonds strømme efter dens seneste NAV: nettoen frem
+    # til rapportdatoen (fondens del af broens indhentningstrin) og kald og udlodninger efter
+    ind_k = "indhent_dkk" if indhent else None
+    med = [x for x in j["linjer"]
+           if x[kald_k] or x[udl_k] or (ind_k and abs(x[ind_k] or 0) > 1e-6)]
     uden = [x["fund_name"] for x in j["linjer"] if x not in med]
     if med and uden:
         fod.generel(f"Ingen kapitalstrømme i perioden: {_navne(uden)}.")
@@ -3242,11 +3350,17 @@ def efter_kvartalet(prs, r):
 
     # venstre: broen fra rapportens NAV til den justerede NAV
     bro_b = 6.25
-    trin = [(f"NAV {r['as_of']:%d.%m.%Y}", t["nav_rapport_dkk"], SAGE, True),
-            ("Kapitalkald", t["kald_dkk"], TERRA, False),
-            ("Udlodninger", -t["udlodning_dkk"], TAUPE, False),
-            ("Valutakurs" + valuta_m, t["valuta_dkk"], SAGE_MID, False),
-            (f"Justeret NAV {j['til']:%d.%m.%Y}{just_m}", t["justeret_dkk"], SAGE, True)]
+    trin = [("NAV i rapporten" if halter else f"NAV {r['as_of']:%d.%m.%Y}",
+             t["nav_rapport_dkk"], SAGE, True)]
+    if indhent:
+        trin += [(f"Kapitalstrømme i {DAGGER} fonde{indhent_m}", e["indhent_dkk"], SAGE_MID, False),
+                 (f"NAV {r['as_of']:%d.%m.%Y}, alle fonde", e["nav_skel_dkk"], SAGE, True)]
+    kilde = e if to_trin else t
+    trin += [("Kapitalkald", kilde[kald_k], TERRA, False),
+             ("Udlodninger", -kilde[udl_k], TAUPE, False),
+             ("Valutakurs" + valuta_m, e["valuta_efter_dkk"] if to_trin else t["valuta_dkk"],
+              SAGE_MID, False),
+             (f"Justeret NAV {j['til']:%d.%m.%Y}{just_m}", t["justeret_dkk"], SAGE, True)]
     gulv, loft = _akse([trin])
     _tekst(s, X0, Y_TOP, bro_b, 0.22, "Fra rapportens NAV til den justerede NAV", 10.5,
            fed=True, farve=SAGE)
@@ -3268,16 +3382,28 @@ def efter_kvartalet(prs, r):
         _tekst(s, hx, Y_TOP + 0.4, hw, 0.3, "Ingen kapitalkald eller udlodninger.", 9)
         fod.tegn(s, noter_y)
         return s
+    kolonner = ([ind_k] if ind_k else []) + [kald_k, udl_k]
     navn_b, tal_b = 1.45, 0.55
-    zone_x, zone_b = hx + navn_b, hw - navn_b - 2 * tal_b - 0.1
+    zone_x, zone_b = hx + navn_b, hw - navn_b - len(kolonner) * tal_b - 0.1
     tal_x = zone_x + zone_b + 0.1
     y = Y_TOP + 0.36
-    for k, tekst in enumerate(("Kald", "Udlodn.")):
+    if ind_k:
+        # to kolonnegrupper: frem til rapportdatoen og efter den
+        # »Til« højrestillet over sin ene kolonne (den er bredere end kolonnen), »Efter«
+        # centreret over de to
+        _tekst(s, tal_x - 0.3, y - 0.06, tal_b + 0.26, 0.16, f"Til {r['as_of']:%d.%m.%Y}", 7,
+               farve=SAGE, just=H)
+        _tekst(s, tal_x + tal_b, y - 0.06, 2 * tal_b - 0.04, 0.16,
+               f"Efter {r['as_of']:%d.%m.%Y}", 7, farve=SAGE, just=C)
+        y += 0.14
+    hoveder = ([f"Netto{indhent_m}"] if ind_k else []) + ["Kald", "Udlodn."]
+    for k, tekst in enumerate(hoveder):
         _tekst(s, tal_x + k * tal_b, y, tal_b - 0.04, 0.18, tekst, 8, fed=True, farve=SAGE,
                just=H)
     y += 0.24
-    neg = max(x["udlodning_dkk"] for x in med)
-    pos = max(x["kald_dkk"] for x in med)
+    # nettoen frem til rapportdatoen er en NAV-ændring: positiv (kald) til højre
+    neg = max([x[udl_k] for x in med] + [-(x[ind_k] or 0) for x in med if ind_k] + [0])
+    pos = max([x[kald_k] for x in med] + [x[ind_k] or 0 for x in med if ind_k] + [0])
     nul = _nullinje(zone_x, zone_b, neg, pos)
     skala = zone_b / (neg + pos) if neg + pos else 0
     raekke_h = min(0.42, (noter_y - y - 0.1) / (len(med) + 1))
@@ -3285,21 +3411,30 @@ def efter_kvartalet(prs, r):
         ry = y + i * raekke_h
         if x is None:
             _bjaelke(s, hx - 0.05, ry, hw + 0.05, raekke_h, SAGE_LYS)
-            kald, udl = t["kald_dkk"], t["udlodning_dkk"]
+            kilde_ = e if to_trin else t
+            vaerdier = [kilde_[k] for k in kolonner]
         else:
             if i % 2 == 1:
                 _bjaelke(s, hx - 0.05, ry, hw + 0.05, raekke_h, CREAM)
-            kald, udl = x["kald_dkk"], x["udlodning_dkk"]
+            vaerdier = [x[k] for k in kolonner]
+            kald, udl = x[kald_k], x[udl_k]
+            # med nettoen: den øverst, kald og udlodninger under
+            by, bh = ((ry + raekke_h * 0.5, raekke_h * 0.28) if ind_k
+                      else (ry + raekke_h * 0.3, raekke_h * 0.4))
+            if ind_k and abs(ind := x[ind_k] or 0) > 1e-6:
+                _bjaelke(s, nul if ind > 0 else nul + ind * skala, ry + raekke_h * 0.18,
+                         abs(ind) * skala, raekke_h * 0.28, SAGE_MID)
             if kald:
-                _bjaelke(s, nul, ry + raekke_h * 0.3, kald * skala, raekke_h * 0.4, TERRA)
+                _bjaelke(s, nul, by, kald * skala, bh, TERRA)
             if udl:
-                _bjaelke(s, nul - udl * skala, ry + raekke_h * 0.3, udl * skala,
-                         raekke_h * 0.4, TAUPE)
+                _bjaelke(s, nul - udl * skala, by, udl * skala, bh, TAUPE)
         _tekst(s, hx, ry, navn_b - 0.08, raekke_h,
-               "I alt" if x is None else _uden_selskabsform(x["fund_name"]), 7.5,
+               "I alt" if x is None else (_uden_selskabsform(x["fund_name"])
+                                          + _datomarkering(r, x["fund_name"])), 7.5,
                fed=x is None, anker=MSO_ANCHOR.MIDDLE)
-        for k, v in enumerate((kald, udl)):
-            _tekst(s, tal_x + k * tal_b, ry, tal_b - 0.04, raekke_h, beloeb(v), 8,
+        for k, v in enumerate(vaerdier):
+            tekst = aendring(v) if kolonner[k] == ind_k else beloeb(v)
+            _tekst(s, tal_x + k * tal_b, ry, tal_b - 0.04, raekke_h, tekst, 8,
                    fed=x is None, just=H, anker=MSO_ANCHOR.MIDDLE)
     _streg(s, nul, y, nul, y + len(med) * raekke_h, farve=STREG, pt=0.5)
     fod.tegn(s, noter_y)
@@ -3806,8 +3941,9 @@ def likviditet(prs, r, med_ejendomme=False):
     kaldt = _KALDT_LABEL[lq["genkaldelige"]]
     _tekst(s, X0, LQ_BUND_Y, bw, 0.22, "Kapitaltilsagn ved årets udgang", 11, fed=True)
     def mio(noegle, farve, navn):
+        # etiketterne uden enhed: den står i undertitlen
         return (navn, [_mio(a[noegle]) for a in lq["aar"]], farve,
-                [million(a[noegle]) + enh.diagramsuffiks() for a in lq["aar"]])
+                [million(a[noegle]) for a in lq["aar"]])
 
     _stablede_soejler(s, X0, by, bw, bh, kategorier,
                       [mio("resttilsagn", SAGE, "Resttilsagn"), mio("kaldt", SAGE_LYS, kaldt)],
@@ -5658,6 +5794,7 @@ def sidefod(prs, investor_navn):
         s.shapes.clone_placeholder(ph_layout)
         ph = next(ph for ph in s.placeholders
                   if ph.placeholder_format.type == PP_PLACEHOLDER.SLIDE_NUMBER)
+        mst.sidefod_bredde(ph)
         p = ph.text_frame.paragraphs[0]
         navn = p.add_run()
         navn.text, navn.font.bold = investor_navn, True

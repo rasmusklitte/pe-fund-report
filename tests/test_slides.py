@@ -7,13 +7,15 @@ from itertools import pairwise
 import pytest
 from pptx import Presentation
 from pptx.enum.chart import XL_CHART_TYPE
-from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE, PP_PLACEHOLDER
 from pptx.oxml.ns import qn
-from pptx.util import Emu, Inches
+from pptx.util import Emu, Inches, Pt
 from test_data import LQ_KURSER, _lq_fond
 
 from pe_fund_report import anonym, data, enhed, slides
-from pe_fund_report.deck import L_FORSIDE, L_SKILLE, L_SLUT, L_TEKST, _ny_slide, _ryd_slides
+from pe_fund_report import master as mst
+from pe_fund_report.deck import _fjern_tomme_ph, _ny_slide, _ryd_slides
+from pe_fund_report.master import L_FORSIDE, L_SKILLE, L_SLUT, L_TEKST
 from pe_fund_report.paths import MASTER
 
 
@@ -191,8 +193,9 @@ def test_lange_tilsagn_markerer_fond_med_afvigende_opgoerelsesdato():
     t = _tekster(slides.lange_tilsagn(_prs(), r))
     assert f"Seed {slides.DAGGER}" in t          # dagger i selve rækken
     assert "Fond A" in t                         # fonden uden afvigelse står urørt
-    assert "opgjort pr. 30.09.2025" in t
-    assert any("Totaler og fordelinger blander" in x for x in t)
+    # datoen står kun i datonoten, ikke som en ekstra linje i rækken
+    assert "opgjort pr. 30.09.2025" not in t
+    assert any("Seed pr. 30.09.2025" in x and "Totaler og fordelinger blander" in x for x in t)
 
 
 def test_lange_tilsagn_uden_datoafvigelser_har_ingen_markering():
@@ -391,7 +394,8 @@ def test_tilsagn_paa_tvaers_markerer_fond_med_afvigende_opgoerelsesdato():
     r = _tpt_rapport([_tpt_fond("Fond A", 100.0), _tpt_fond("Seed", 50.0)],
                      foraeldede=[dict(fond="Seed", dato=date(2025, 9, 30), kvartaler=3)])
     t = _tekster(slides.tilsagn_paa_tvaers(_prs(), r))
-    assert f"Seed {slides.DAGGER}" in t and "opgjort pr. 30.09.2025" in t
+    assert f"Seed {slides.DAGGER}" in t and "opgjort pr. 30.09.2025" not in t
+    assert any("Seed pr. 30.09.2025" in x for x in t)
 
 
 def test_loebetid_staar_i_portefoeljeoversigten_ikke_i_tilsagn_paa_tvaers():
@@ -519,7 +523,7 @@ def _justeret_rapport():
     i_alt = {k: sum(x[k] for x in linjer) for k in
              ("nav_dkk", "kald_dkk", "udlodning_dkk", "justeret_dkk")}
     i_alt |= dict(nav_rapport_dkk=129.5e6, valuta_dkk=131e6 - 129.5e6 - 2e6 + 1e6)
-    r["justeret_nav"] = dict(til=date(2026, 9, 30), linjer=linjer, negative=[], i_alt=i_alt,
+    r["justeret_nav"] = dict(fra=date(2026, 6, 30), til=date(2026, 9, 30), linjer=linjer, negative=[], i_alt=i_alt,
                              tvpi=1.4, irr=0.11)
     return r
 
@@ -541,6 +545,38 @@ def test_efter_kvartalet_viser_broen_og_kapitalstroemmene():
     assert "Udvikling efter kvartalets afslutning" in t
     assert "NAV +1,5 mio. DKK" in t and "TVPI 1,40x" in t and "IRR 11,0 %" in t
     assert "Beta" in t and "Ingen kapitalstrømme i perioden: Alfa." in t
+    assert "30.06.2026 – 30.09.2026" in t and "NAV 30.06.2026" in t
+
+
+def test_efter_kvartalet_naar_den_oenskede_dato_er_rapportdatoen():
+    # --as-of = rapportdatoen: kun fonden bag den rulles frem, fra sin egen NAV-dato
+    r = _justeret_rapport()
+    r["justeret_nav"] |= dict(fra=date(2026, 3, 31), til=date(2026, 6, 30))
+    r["datotjek"] |= dict(ens=False, foraeldede=[dict(fond="Beta", dato=date(2026, 3, 31))])
+    t = " ".join(_tekster(slides.efter_kvartalet(_prs(), r)))
+    assert "31.03.2026 – 30.06.2026" in t and "30.06.2026 – 30.06.2026" not in t
+    assert "NAV i rapporten" in t and "Beta pr. 31.03.2026" in t
+    assert "kursen på 30.06.2026 og med kursen på 30.06.2026" not in t
+
+
+def test_efter_kvartalet_indhenter_fonde_bag_rapportdatoen_i_to_trin():
+    # rapportdato 30.06, ønsket 30.09, Beta pr. 31.03: Beta indhentes først til 30.06
+    r = _justeret_rapport()
+    for x, (ke, ue, ind) in zip(r["justeret_nav"]["linjer"],
+                                ((0.0, 0.0, 0.0), (0.5, 1.0, 1.5e6))):
+        x |= dict(kald_efter_dkk=ke, udlodning_efter_dkk=ue, indhent_dkk=ind)
+    r["justeret_nav"] |= dict(fra=date(2026, 3, 31), skel=date(2026, 6, 30), efter=dict(
+        nav_skel_dkk=131.0e6, indhent_dkk=1.5e6, kald_efter_dkk=0.5, udlodning_efter_dkk=1.0,
+        valuta_efter_dkk=0.5))
+    r["datotjek"] |= dict(ens=False, foraeldede=[dict(fond="Beta", dato=date(2026, 3, 31))])
+    t = " ".join(_tekster(slides.efter_kvartalet(_prs(), r)))
+    assert "30.06.2026 – 30.09.2026" in t and "31.03.2026 – 30.09.2026" not in t
+    assert "NAV i rapporten" in t and f"Kapitalstrømme i {slides.DAGGER} fonde" in t
+    assert "NAV 30.06.2026, alle fonde" in t
+    assert "NAV i rapporten pr. 31.03.2026 og 30.06.2026" in t   # undertitlen
+    assert "Ingen kapitalstrømme i perioden: Alfa." in t
+    # panelet: Betas netto frem til 30.06 (= broens indhentningstrin) og strømmene efter
+    assert "Til 30.06.2026" in t and "Efter 30.06.2026" in t and "+1,5" in t
 
 
 def test_definitioner_viser_justeret_nav_kun_naar_en_fond_er_justeret():
@@ -824,6 +860,31 @@ def test_feederside_viser_gennemlysning_i_stedet_for_historik():
     navne = [rk.cells[0].text for rk in tabel.rows]
     assert navne[1] == "Selskab 14" and navne[-2] == "Øvrige (4)" and navne[-1] == "I alt"
     assert "Industri" in t and any("kreditfacilitet" in x for x in t)
+    assert tabel.cell(0, 1).text == "Instrument" and tabel.cell(1, 1).text == "PIK"
+    assert any("Trancher i samme selskab" in x for x in t)
+
+
+def test_shippingfeeder_viser_skibstype_i_stedet_for_instrument():
+    f = _feeder()
+    beh = f["beholdninger"]
+    beh["kolonne"] = "Skibstype"
+    for i, r in enumerate(beh["raekker"]):
+        r.update(instrument=None, sektor="Container" if i % 2 else None)
+        r["skibstype"] = data.skibstype(r["sektor"])
+    s = slides.fondsside(_prs(), f, "Investor A/S")
+    tabel = next(sh.table for sh in s.shapes
+                 if sh.has_table and sh.table.cell(0, 0).text == "Selskab")
+    assert tabel.cell(0, 1).text == "Skibstype"
+    assert {tabel.cell(i, 1).text for i in (1, 2)} == {"Containerskib", "n/a"}
+    assert not any("Trancher" in x for x in _tekster(s))     # skibe har ingen trancher
+
+
+def test_skibstype_paa_dansk():
+    assert data.skibstype("CSOV") == "Servicefartøj (CSOV)"
+    assert data.skibstype("Container") == "Containerskib"
+    assert data.skibstype("LPG") == "LPG-tankskib"
+    assert data.skibstype("Bulk") == "Bulk"                  # ukendt: som forvalteren skriver
+    assert data.skibstype(None) is None and data.skibstype(float("nan")) is None
 
 
 def test_sidefod_kun_paa_indholdsslides_med_investor_og_slidenummer():
@@ -842,6 +903,48 @@ def test_sidefod_kun_paa_indholdsslides_med_investor_og_slidenummer():
     p = fod(alle[1])[0].text_frame.paragraphs[0]
     assert p.runs[0].font.bold and not p.runs[1].font.bold
     assert p._p.find(qn("a:fld")).get("type") == "slidenum"
+    # feltet er gjort bredere mod venstre, men står stadig i masterens sidefod
+    ph = fod(alle[1])[0]
+    assert abs((ph.left + ph.width) / 914400 - 12.58) < 0.01 and ph.top / 914400 > 6.9
+
+
+def test_master_layouts_har_de_forventede_navne():
+    prs = _prs()
+    for idx, navn in mst.LAYOUT_NAVNE.items():
+        assert prs.slide_layouts[idx].name == navn
+
+
+def test_tilpas_flytter_den_gamle_flade_over_paa_den_nye():
+    prs = _prs()
+    s = _ny_slide(prs, L_TEKST)
+    boks = s.shapes.add_textbox(Inches(slides.X0), Inches(slides.Y_UNDERTITEL),
+                                Inches(slides.X1 - slides.X0), Inches(1))
+    boks.text_frame.text = "x"
+    boks.text_frame.paragraphs[0].runs[0].font.size = Pt(10)
+    prik = s.shapes.add_shape(MSO_SHAPE.OVAL, Inches(5), Inches(3), Inches(0.2), Inches(0.2))
+    mst.tilpas(prs)
+    tommer = lambda emu: emu / 914400
+    assert tommer(boks.left) == pytest.approx(mst.NY_X0, abs=1e-4)
+    assert tommer(boks.left + boks.width) == pytest.approx(mst.NY_X1, abs=1e-4)
+    assert tommer(boks.top) == pytest.approx(mst.NY_Y0, abs=1e-4)
+    assert boks.text_frame.paragraphs[0].runs[0].font.size.pt == pytest.approx(10 * mst.SKRIFT, abs=0.01)
+    assert prik.width == prik.height             # cirkler forbliver runde
+
+
+def test_rubrik_naevner_sektionen_efter_skillesiden():
+    prs = _prs()
+    for layout in (L_FORSIDE, L_TEKST, L_SKILLE[0], L_TEKST, L_SKILLE[1], L_TEKST):
+        _fjern_tomme_ph(_ny_slide(prs, layout))     # som slides.py gør
+    mst.rubrikker(prs, ["Porteføljeoversigt", "Fondsoversigter"])
+
+    def rubrik(s):
+        return [ph.text_frame.text for ph in s.placeholders
+                if ph.placeholder_format.idx == mst.PH_RUBRIK]
+
+    alle = list(prs.slides)
+    assert rubrik(alle[1]) == []                  # før første skilleside
+    assert rubrik(alle[3]) == ["01  Porteføljeoversigt"]
+    assert rubrik(alle[5]) == ["02  Fondsoversigter"]
 
 
 def _branche_rapport(sektorer, foreloebig_andel=0.0, art="brancher"):
@@ -1684,7 +1787,7 @@ def test_likviditet_soejlerne_har_etiketter_og_forklaring():
     assert etiketter(rvpi) == [slides.gange(a["rvpi"]) for a in lq["aar"]]
     # 2024: resttilsagn 60 EUR og kaldt 40 EUR til 7,2
     rest, kaldt = tilsagn.plots[0].series
-    assert (etiketter(rest)[0], etiketter(kaldt)[0]) == ("432 mio.", "288 mio.")
+    assert (etiketter(rest)[0], etiketter(kaldt)[0]) == ("432", "288")    # uden »mio.«
     # forklaring på begge; den usynlige totalserie er slettet fra TVPI-forklaringen
     assert tilsagn.has_legend and tvpi.has_legend
     slettet = tvpi.legend._element.findall(qn("c:legendEntry"))
@@ -2225,3 +2328,44 @@ def test_definitioner_med_pme_viser_kun_pme_begreberne():
 def test_pme_relevante_kolonner_fylder_indholdsbredden():
     assert sum(b for _, b, _ in slides.PME_REL_KOL) == pytest.approx(
         sum(b for _, b, _ in slides.PME_KOL))
+
+
+def test_beholdningstabel_samler_de_mindste_i_oevrige_naar_pladsen_slipper_op():
+    # god plads: 6 linjer ved 0,215" og 8 ved 0,185" (over 8 rækker i alt), som før
+    assert slides._beholdningsplads(6, 3.0) == (0.215, 6)
+    assert slides._beholdningsplads(8, 3.0) == (0.185, 8)
+    # 14 linjer på 2,75": lavere rækker er nok; 30 linjer: de mindste samles i »Øvrige«
+    h, vist = slides._beholdningsplads(14, 2.75)
+    assert vist == 14 and h <= 0.185 and 16 * h <= 2.75 + 1e-9
+    h, vist = slides._beholdningsplads(30, 2.75)
+    assert h == slides.BEH_MIN_H and (vist + 3) * h <= 2.75 and vist < 30
+
+
+def test_klem_presser_indhold_over_noterne_og_lader_resten_vaere():
+    s = _ny_slide(_prs(), L_TEKST)
+    oppe = s.shapes.add_textbox(Inches(slides.X0), Inches(0.5), Inches(2), Inches(0.2))
+    kasse = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(slides.X0), Inches(slides.Y_TOP),
+                               Inches(2), Inches(5.0))
+    prik = s.shapes.add_shape(MSO_SHAPE.OVAL, Inches(5), Inches(5.5), Inches(0.2), Inches(0.2))
+    slides._klem(s, 5.5)
+    assert (kasse.top + kasse.height) / 914400 == pytest.approx(5.5, abs=1e-3)
+    assert prik.width == prik.height == Inches(0.2)          # cirkler beholder størrelsen
+    assert (prik.top + prik.height) / 914400 <= 5.5 + 1e-3
+    assert oppe.top == Inches(0.5)                            # over indholdet røres intet
+    foer = kasse.top, kasse.height
+    slides._klem(s, 6.0)                                      # passer allerede: uændret
+    assert (kasse.top, kasse.height) == foer
+
+
+def test_forsidens_titel_holdes_fri_af_logoet():
+    assert mst.forsidens_skrift("Kort titel") == mst.FORSIDE_PT[0]       # masterens 58 pt
+    lang = "A/S Motortramp – alternative investeringer"
+    pt = mst.forsidens_skrift(lang)
+    assert mst.FORSIDE_PT[1] <= pt < mst.FORSIDE_PT[0]
+    assert mst.forsidens_skrift("15. JF Invest A/S – alternative investeringer") <= pt
+    prs = _prs()
+    s = _ny_slide(prs, L_FORSIDE)
+    mst.forside(s, lang, "Porteføljerapport pr. 30.09.2026")
+    titel = next(ph for ph in s.placeholders if ph.placeholder_format.idx == 0)
+    assert titel.text_frame.paragraphs[0].runs[0].font.size.pt == pt
+    assert sorted(ph.placeholder_format.idx for ph in s.placeholders) == [0, 1]

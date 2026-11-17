@@ -374,7 +374,36 @@ def test_justeret_nav_ruller_kun_de_fonde_der_halter_frem():
     assert t["nav_rapport_dkk"] + t["kald_dkk"] - t["udlodning_dkk"] + t["valuta_dkk"] == \
         pytest.approx(t["justeret_dkk"])
     assert j["negative"] == []
+    assert j["fra"] == q2                     # perioden starter ved B's NAV-dato
     assert data.justeret_nav([a], q3, kurs, irr_dkk) is None
+
+
+def test_justeret_nav_deler_perioden_ved_rapportdatoen():
+    # rapportdato q2, ønsket dato q3: B halter (q1) og indhentes til q2, før strømmene efter q2
+    q1, q2, q3 = date(2026, 3, 31), date(2026, 6, 30), date(2026, 9, 30)
+    kurs = lambda v, d: 1.0 if v == "DKK" else {q2: 7.2, q3: 7.5}.get(d, 7.0)
+    a = _just_fond("A", "DKK", q2, 120.0, [(date(2026, 8, 1), "CONTRIBUTION", -10.0)])
+    b = _just_fond("B", "EUR", q1, 10.0, [(date(2026, 5, 1), "CONTRIBUTION", -2.0),
+                                          (date(2026, 8, 1), "DISTRIBUTION", 1.0)])
+    irr_dkk = dict(flows=[dict(dato=date(2024, 1, 1), dkk=-100.0, type="Cash flow")])
+    j = data.justeret_nav([a, b], q3, kurs, irr_dkk, rapport_dato=q2)
+    la, lb = j["linjer"]
+    assert j["skel"] == q2 and j["fra"] == q1
+    assert (la["kald_efter"], la["udlodning_efter"]) == (10.0, 0.0)
+    assert (lb["kald_efter"], lb["udlodning_efter"]) == (0.0, 1.0)     # B's kald er før q2
+    e, t = j["efter"], j["i_alt"]
+    assert e["nav_skel_dkk"] == pytest.approx(120.0 + 12.0 * 7.2)
+    assert e["indhent_dkk"] == pytest.approx(e["nav_skel_dkk"] - t["nav_rapport_dkk"])
+    assert e["kald_efter_dkk"] == 10.0 and e["udlodning_efter_dkk"] == 7.0
+    # panelets netto pr. fond summerer til broens indhentningstrin; A er pr. rapportdatoen
+    assert la["indhent_dkk"] == 0.0
+    assert la["indhent_dkk"] + lb["indhent_dkk"] == pytest.approx(e["indhent_dkk"])
+    # begge trin går op til den justerede NAV
+    assert (t["nav_rapport_dkk"] + e["indhent_dkk"] + e["kald_efter_dkk"]
+            - e["udlodning_efter_dkk"] + e["valuta_efter_dkk"]) == pytest.approx(t["justeret_dkk"])
+    # ønsket dato = rapportdatoen: ét trin
+    j = data.justeret_nav([a, b], q2, kurs, irr_dkk, rapport_dato=q2)
+    assert j["skel"] is None and set(j["efter"].values()) == {None}
 
 
 def test_fond_bag_rapportdatoen_har_sit_eget_kvartal():
@@ -1236,7 +1265,7 @@ def test_benchmark_uden_fil_er_none(tmp_path):
 def test_benchmark_regioner_har_regionskoderne_og_summerer_til_hundrede():
     bm = data.benchmark()
     assert set(bm["regioner"]) == set(bm["indeks"])
-    assert bm["regioner"]["MSCI ACWI"]["NORTH_AMERICA"] == pytest.approx(0.6664)
+    assert bm["regioner"]["MSCI ACWI"]["NORTH_AMERICA"] == pytest.approx(0.6644)
     for vaegte in bm["regioner"].values():
         assert set(vaegte) <= set(data.REGIONER)
         assert sum(vaegte.values()) == pytest.approx(1.0, abs=0.001)

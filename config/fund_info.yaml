@@ -69,6 +69,64 @@ SEED4:
   # Draw down 14 og 16 stod her som skønnede kapitalkald; de er nu registreret i databasen
   # (dokument 66005 og 66006) og er derfor slettet her.
 
+# SEED5 bygger på Seed Capital V's kvartalsrapport for Q3 2026 (dokument 91558): fondsoversigten
+# s. 1 og selskabssiderne s. 5-13. Ejerandelene er udvandede (»undiluted«); Oplanes står ikke i
+# rapporten.
+
+SEED5:
+  status: udkast
+  beskrivelse: >-
+    Seed Capital V er Seed Capitals femte danske venturefond. Fonden investerer i tech- og
+    softwarevirksomheder i seed-fasen, af og til pre-seed og series A, i Norden og Baltikum
+    med hovedvægt på Danmark. Fonden lukkede endeligt i august 2026 med tilsagn på 967 mio.
+    kr., og ultimo september 2026 bestod porteføljen af ni selskaber inden for bl.a. software,
+    cybersikkerhed, fintech og AI.
+  virksomheder:
+    Blackbird Coffee:
+      beskrivelse: >-
+        Investeret i 2025. Kaffemaskiner, kaffe og service til virksomheder som abonnement
+        med et fast antal kopper om måneden, styret af egen software.
+      ejerandel: 0.236
+    Pluto.markets:
+      beskrivelse: >-
+        Investeret i 2026. Investeringsplatform uden kurtage til aktier, ETF'er og krypto med
+        brøkdele af aktier og flere valutaer.
+      ejerandel: 0.185
+    Norlix:
+      beskrivelse: >-
+        Investeret i 2026. Digital platform for forsikrings- og pensionsmægling til
+        virksomheder.
+      ejerandel: 0.251
+    Moxso:
+      beskrivelse: >-
+        Investeret i 2025. AI-drevet træning i cybersikkerhed for medarbejdere med
+        phishing-simuleringer og overvågning af datalæk.
+      ejerandel: 0.206
+    Oplane:
+      beskrivelse: >-
+        Investeret i 2026. AI-værktøj, der løbende gennemgår softwarekode for
+        sikkerhedsrisici.
+    Cernel:
+      beskrivelse: >-
+        Investeret i 2025. AI-værktøj, der strukturerer og beriger produktdata for
+        webbutikker og forbedrer søgemaskineplacering og konvertering.
+      ejerandel: 0.214
+    Fortiv:
+      beskrivelse: >-
+        Investeret i 2025. Software til beredskabsstyring (business continuity), compliance og
+        risiko i store virksomheder.
+      ejerandel: 0.208
+    Repodo:
+      beskrivelse: >-
+        Investeret i 2026. AI-baseret revisionsfirma, der reviderer alle transaktioner
+        løbende med AI-agenter.
+      ejerandel: 0.067
+    Berserk:
+      beskrivelse: >-
+        Investeret i 2026. AI-baseret platform, der samler virksomheders værktøjer til
+        overvågning af software og finder årsagen til fejl.
+      ejerandel: 0.028
+
 KAPE20:
   status: ok
   beskrivelse: >-
@@ -91,9 +149,44 @@ KAPE22:
     til 11 underliggende kapitalfonde hos otte forvaltere, primært buyout-fonde i
     Europa og Nordamerika.
 
+# VINTAGEX bygger på Goldman Sachs' kapitalindkaldelser af 02.03, 27.08 og 20.10.2026 (dokument
+# 91559-91561), som beskriver de opkøb, kaldene finansierer. Der er endnu ingen kvartalsrapport.
+
+VINTAGEX:
+  status: udkast
+  beskrivelse: >-
+    Vintage X er Goldman Sachs Asset Managements secondaries-fond i Vintage-serien.
+    Fonden køber eksisterende fondsandele af institutionelle investorer, der ønsker at
+    sælge, typisk porteføljer af andele i buyout-fonde i Nordamerika og Europa, og
+    investerer desuden i continuation vehicles, hvor en forvalter fører et enkelt selskab
+    videre i en ny struktur. Fonden er i sin investeringsperiode og har bl.a. købt
+    porteføljer fra statsinvesteringsfonde og pensionskasser.
+
 # PPPE2 og PPPC2 er Petersen & Partners' egne feeder-selskaber: Motortramp investerer i dem,
 # og de investerer videre i én underliggende fond hver. Beskrivelserne handler derfor om den
 # underliggende fond. Benchmark er hentet fra "Slides vdr. Alternativer".
+# PPPE og PPPC bygger på NEP V's rapport (dokument 13691) og PSCP IV's regnskab (dokument
+# 13693) for Q2 2026.
+
+PPPE:
+  status: udkast
+  beskrivelse: >-
+    Petersen & Partners Private Equity investerer i Newbury Equity Partners V, en
+    sekundærfond, der køber eksisterende fondsandele af investorer, der ønsker at sælge,
+    suppleret med enkelte co-investeringer. Fonden er fuldt investeret, og fremtidige
+    kapitalkald går primært til de underliggende fondes resterende tilsagn. Ultimo juni 2026
+    havde fonden eksponering til 119 underliggende fonde, ni co-investeringer og omkring
+    1.800 selskaber, hovedsageligt i Nordamerika (76 %) og Europa (23 %).
+
+PPPC:
+  status: udkast
+  beskrivelse: >-
+    Petersen & Partners Private Credit investerer i Park Square Capital Partners IV, der yder
+    juniorlån til kapitalfondes opkøb af mellemstore og store virksomheder. Fondens
+    investeringsperiode sluttede i juli 2025, og løbetiden udløber i juli 2030. Ultimo juni
+    2026 bestod porteføljen af 29 investeringer, koncentreret om sundhed og life science,
+    software og IT samt erhvervsservice, og de største lande er USA, Storbritannien og
+    Frankrig.
 
 PPPE2:
   status: ok
@@ -112,6 +205,18 @@ PPPC2:
     forbindelse med kapitalfondes opkøb. Porteføljen er koncentreret om sundhed og life
     science, industri samt software og IT, og de største lande er Storbritannien, USA,
     DACH og Frankrig.
+
+# PPMAR er Petersen & Partners' feeder-selskab i Maritime Investment Fund III (MIF3).
+# Beskrivelsen bygger på MIF III's kvartalsrapport for Q2 2026 (dokument 13690, s. 5-7).
+
+PPMAR:
+  status: udkast
+  beskrivelse: >-
+    Petersen & Partners Maritime investerer i Maritime Investment Fund III, der forvaltes af
+    Navigare Capital Partners. Fonden køber moderne skibe med faste lange lejeaftaler med
+    en række modparter og finansierer dem konservativt med sigte på et stabilt tocifret
+    driftsafkast. Ultimo juni 2026 bestod porteføljen af 12 skibe, heraf fem nybygninger:
+    offshore wind-servicefartøjer, et LPG-tankskib og fire containerskibe.
 
 # PD3LGT er en fund of funds fra Alternative Equity Partners, der investerer i LGT's to
 # europæiske private debt-fonde. Beskrivelsen bygger på fondsinformationen i Q2 2026-rapporten

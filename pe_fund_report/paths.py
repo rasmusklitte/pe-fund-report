@@ -13,7 +13,7 @@ PROGNOSE = ROOT / "config" / "cashflow_profiler.yaml"  # profilerne til cash flo
 PME_BENCHMARKS = ROOT / "config" / "pme_benchmarks.yaml"  # relevant indeks pr. segment/fond
 ALETA = ROOT / "data" / "aleta"                       # Aletas udtræk pr. investor
 INDEKS = ROOT / "data" / "indeks"                     # benchmarkindeksets kurser fra yfinance
-MASTER = ROOT / "assets" / "ppim_slidemaster.pptx"   # PPIM-slidemasteren
+MASTER = ROOT / "assets" / "PPIM_slidemaster_2026.pptx"   # PPIM-slidemasteren (master.py)
 EXPORTS = ROOT / "exports"                           # færdige rapporter (ikke i git)
 LOG = ROOT / "log"                                   # byggeloggen, én fil pr. bygning (ikke i git)
 # kildedokumenterne; fund.document.rel_path er relativ til denne mappe

@@ -70,9 +70,16 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   aggregates there, not in a slide builder, so they stay testable without the database.
 - `slides.py` builds each page as native PowerPoint tables, text boxes, charts and shapes (no
   images), so the deck stays editable. All geometry comes from the module constants `X0/X1` and
-  `Y_UNDERTITEL/Y_TOP/Y_BUND/Y_NOTER` (inches on `Layout_basic_2`, a 11.693 × 6.575 in canvas —
-  not the 13.333 × 7.5 of a standard 16:9 deck) — change those, not per-shape numbers, to move
-  content. Real chart objects (`_historik_graf`, the look-through bar chart) are used where the
+  `Y_UNDERTITEL/Y_TOP/Y_BUND/Y_NOTER` (inches on the **old** master's `Layout_basic_2`, a
+  11.693 × 6.575 in canvas) — change those, not per-shape numbers, to move content. The deck is
+  on the 2026 master (`assets/PPIM_slidemaster_2026.pptx`, 13.333 × 7.5 in): slides.py still
+  draws on the old canvas, and `master.tilpas()` (called in `report._til_ny_master`, before
+  `sidefod`) moves every non-placeholder shape on `L_TEKST` slides onto the new one —
+  horizontally ×1.14 so X0–X1 lands on the master's 0.75–12.58 margins, vertically ×1.03 so
+  `Y_UNDERTITEL` sits under the new, lower title (0.78 in, with the section kicker above it) and
+  `NOTE_BUND` above the new footer (7.03 in); fonts, row heights and line spacing scale with the
+  vertical factor (`SKRIFT`), pictures, ovals and pie/doughnut charts keep their aspect. So keep
+  drawing in old inches; `tests/test_slides.py` checks geometry before the move. Real chart objects (`_historik_graf`, the look-through bar chart) are used where the
   data should stay editable in PowerPoint; the in-row bars on *Lange tilsagn* and the company
   cards are drawn rectangles (`_bjaelke`, `_soejler`, `_vandfald`, `_noegletalsbjaelke`), because
   one chart object per row is unwieldy.
@@ -306,7 +313,10 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   currency in `VALUTA_FARVER`.
 - Page footer: `slides.sidefod()` runs last in `report.byg()` and clones the master's slide-number
   placeholder onto every `L_TEKST` slide as "**<investor>** | Side n" (n is a `slidenum` field).
-  Cover, dividers and end slide get none but still count. *Lange tilsagn* (`slides.lange_tilsagn`,
+  Cover, dividers and end slide get none but still count. The field is widened leftwards
+  (`master.sidefod_bredde`). Content slides after a divider carry the section as the master's
+  kicker (»01  Porteføljeoversigt«, `master.rubrikker`); dividers show the section number
+  (`master.skilleside`). Slides before the first divider have no kicker. *Lange tilsagn* (`slides.lange_tilsagn`,
   the only user of `benchmark`) is in the supplerende slides, not the report.
 - **Feeder look-through.** PPPC2 and PPPE2 are our feeders into PSCP5 and NEP6
   (`underlying_fund_code`). When a feeder has no holdings of its own,
@@ -317,7 +327,11 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   positions + the GP's breakdown from `rpt.v_portfolio_breakdown`) instead of the NAV chart and
   bridge, and makes `virksomhedsprofiler` skip the fund. `_beholdninger()` adds up lines with
   the same name, and in tranche tables (`instrument` set) it groups by company via `_selskab()`,
-  which strips instrument words. Matching between quarters ignores case.
+  which strips instrument words. Matching between quarters ignores case. A shipping feeder
+  (`strategy_focus = SHIPPING`, PPMAR into Navigare's MIF3, which reports no instrument) shows
+  »Skibstype« instead of »Instrument« (`beh["kolonne"]`): the GP's `segment` in Danish via
+  `data.SKIBSTYPER` (CSOV → »Servicefartøj (CSOV)«, Container → »Containerskib«; unknown types
+  as written). The source note mentions merged tranches only when instrument is filled.
 - **Property funds.** Home.Earth reports properties (`section = 'PROPERTY'`), not companies.
   `data._ejendomme()` keeps them as whole-fund values before debt (they sum to GAV, while the
   investor's share is NAV after debt), so they are not scaled by ownership, and translates the
@@ -533,7 +547,9 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
 - `deck.py` + `style.py` are the shared PPIM house-style modules, **kept byte-identical to the
   other PE repos** (`pe-analysis`, `pe-quarterly-report`, …). They are excluded from ruff in
   `pyproject.toml`. Do not refactor them here; port a change to the other repos or not at all.
-  `deck.py` also holds the slide-master layout indices (`L_FORSIDE`, `L_TEKST`, `L_SKILLE`, …).
+  `deck.py`'s layout indices (`L_FORSIDE`, `L_TEKST`, …) describe the old master; this repo
+  takes them from `master.py` (the 2026 master) and uses only deck.py's master-independent
+  helpers (`_ny_slide`, `_saet_ph`, `_ryd_slides`, `_fjern_tomme_ph`, `BROED_FONT`).
 
 **Anonymized deck** (`--anonym`, `report.byg(anonym=True)`): the same report built from the real
 data, then rewritten by `anonym.anonymiser()` (pure), so every calculation and the
@@ -606,7 +622,11 @@ one column, row, box or figure — it returns the superscript mark (»¹«) to p
 the order marks are set, and reuses the number for the same text. `tegn(s, y)` prints it all
 (moving up when long, `_noter_y`). Where the layout depends on the notes' height, set every mark
 before drawing and size the content to `_noter_y(fod.tekst())` (see `udvikling`,
-`tilsagn_paa_tvaers`, `aendringer_pr_fond`, `fondsside`). Treemap boxes get their marks from
+`tilsagn_paa_tvaers`, `aendringer_pr_fond`, `fondsside`). Where a slide can't (treemap marks arise while
+drawing), `tegn` calls `_klem`: content below `Y_TOP` that reaches into the notes is squeezed
+vertically to end above them (pictures and ovals keep their size); a slide that fits is left
+alone. The fund page's holdings table gets the bottom too (`_beholdningsplads`): lower rows
+first, then the smallest lines in one »Øvrige (n)« row. Treemap boxes get their marks from
 `_kortkasse` (»Øvrige«, Diversificeret, an enlarged box, a box with room only for its %); bands
 and the benchmark bar carry the notes for their part. The † date mark stays as it is.
 
@@ -737,5 +757,6 @@ and that none carries a field the master view now owns.
 
 `docs/reference/2026 Q2 ATP PEP IX B - Quarterly Internal Report.pdf` is the model for the layout
 and the metric set — consult it before changing what a fund page shows.
-`assets/ppim_slidemaster.pptx` is the slide master; `tests/test_slides.py` builds against the real
-file, so tests break if its layouts move.
+`assets/PPIM_slidemaster_2026.pptx` is the slide master (`paths.MASTER`, layouts in
+`master.py`, checked by name in `master.LAYOUT_NAVNE`); `tests/test_slides.py` builds against the
+real file, so tests break if its layouts move.
