@@ -26,12 +26,19 @@
 #                     prognose: {profil: Secondaries, bow: 1.2}. Felterne er profilens
 #                     (kaldsrater, kald_til_aar, vaekst, bow, udbytte, loebetid_aar).
 
+# CATACAP3 bygger på CataCap III's kvartalsrapport for Q3 2026 (dokument 91565, s. 3-6, 15,
+# 20, 23 og 28-29); SEED4 på Seed Capital IV's for Q3 2026 (dokument 91154, s. 3-13).
+# Ejerandelene er uudvandede (»undiluted«), som for SEED5.
+
 CATACAP3:
-  status: ok
+  status: udkast
   beskrivelse: >-
-    CataCap er en dansk kapitalfond med base i København. CataCap III investerer i
-    små og mellemstore danske virksomheder, typisk som majoritetsejer, og arbejder med
-    vækst, internationalisering og opkøb i partnerskab med ledelse og medejere.
+    CataCap er en dansk kapitalfond med base i København. CataCap III investerer i små og
+    mellemstore danske virksomheder, typisk som majoritetsejer, og arbejder med vækst,
+    internationalisering og tilkøb i partnerskab med ledelse og medejere. Ultimo september
+    2026 bestod porteføljen af fem selskaber inden for hobbyartikler, genanvendelse, digital
+    kommunikation, ingeniørrådgivning og databeskyttelse. I kvartalet købte fonden
+    B4Restore, Thranekær gennemførte tre tilkøb, og en salgsproces for Enwerdi er indledt.
   virksomheder:
     The Army Painter:
       beskrivelse: >-
@@ -40,8 +47,8 @@ CATACAP3:
       stemmer: 0.67
     Enwerdi:
       beskrivelse: >-
-        NLM Vantinge, opkøbt i 2023, arbejder med genanvendelse af organiske biprodukter
-        inden for bio-olie, biogas og foder.
+        Opkøbt i 2023. NLM Vantinge genanvender organiske biprodukter til bio-olie, biogas
+        og foder.
       ejerandel: 0.80
       stemmer: 0.70
     e-Boks:
@@ -50,28 +57,69 @@ CATACAP3:
         virksomheder og privatpersoner.
       ejerandel: 1.00
       stemmer: 1.00
+    Thranekær:
+      beskrivelse: >-
+        Opkøbt i 2025. Dansk ingeniørrådgivning, dannet ved en fusion af BSL, Ucon og
+        Dominia.
+      ejerandel: 0.52
+      stemmer: 0.67
+    B4Restore:
+      beskrivelse: >-
+        Opkøbt i 2026. Backup, lagring og business continuity som abonnement til
+        virksomheder.
+      ejerandel: 0.60
+      stemmer: 0.60
 
 SEED4:
-  status: ok
+  status: udkast
   beskrivelse: >-
     Seed Capital er en dansk venturefond, der investerer i teknologivirksomheder i de
-    tidligste faser (pre-seed og seed) og følger op i senere runder. Fond IV har
-    primært fokus på danske og nordiske software- og techselskaber.
+    tidligste faser (pre-seed og seed) og følger op i senere runder. Fond IV har primært
+    fokus på danske software- og techselskaber, og investeringsperioden udløb i marts 2025.
+    Ultimo september 2026 bestod porteføljen af otte danske selskaber, primært inden for
+    software, desuden fintech, markedspladser og digital sundhed, med FLATPAY som langt den
+    største position. I kvartalet deltog fonden i interne kapitalrunder i Landfolk og Embla;
+    der var ingen exits.
   virksomheder:
     FLATPAY:
       beskrivelse: >-
-        Opkøbt i 2022. Leverandør af betalingstransaktioner og POS-løsninger.
-      ejerandel: 0.208
+        Investeret i 2022. Leverandør af betalingstransaktioner og POS-løsninger.
+      ejerandel: 0.176
     Landfolk:
       beskrivelse: >-
-        Opkøbt i 2023. Online platform for high-end ferieudlejning.
-      ejerandel: 0.201
+        Investeret i 2023. Online platform for high-end ferieudlejning.
+      ejerandel: 0.210
+    Starred:
+      beskrivelse: >-
+        Investeret i 2022. SaaS-værktøj til at måle og styre kandidaters oplevelse i
+        rekrutteringsforløb.
+      ejerandel: 0.099
+    Understory:
+      beskrivelse: >-
+        Investeret i 2024. Samlet SaaS-løsning til udbydere af ture og oplevelser.
+      ejerandel: 0.204
+    Risika:
+      beskrivelse: >-
+        Investeret i 2021. SaaS-værktøj til kreditvurdering af virksomheder.
+      ejerandel: 0.217
+    Embla:
+      beskrivelse: >-
+        Investeret i 2023. Online vægttabsprogram med eller uden GLP-1-medicin.
+      ejerandel: 0.270
+    Embankment:
+      beskrivelse: >-
+        Investeret i 2024. Teknologibaseret fondsadministration for kapitalforvaltere og
+        deres investorer.
+      ejerandel: 0.178
+    Tembi:
+      beskrivelse: >-
+        Investeret i 2024. Online platform til markedsindsigt.
+      ejerandel: 0.225
   # Draw down 14 og 16 stod her som skønnede kapitalkald; de er nu registreret i databasen
   # (dokument 66005 og 66006) og er derfor slettet her.
 
 # SEED5 bygger på Seed Capital V's kvartalsrapport for Q3 2026 (dokument 91558): fondsoversigten
-# s. 1 og selskabssiderne s. 5-13. Ejerandelene er udvandede (»undiluted«); Oplanes står ikke i
-# rapporten.
+# s. 1 og selskabssiderne s. 5-13. Ejerandelene er uudvandede (»undiluted«).
 
 SEED5:
   status: udkast
@@ -106,6 +154,7 @@ SEED5:
       beskrivelse: >-
         Investeret i 2026. AI-værktøj, der løbende gennemgår softwarekode for
         sikkerhedsrisici.
+      ejerandel: 0.198
     Cernel:
       beskrivelse: >-
         Investeret i 2025. AI-værktøj, der strukturerer og beriger produktdata for
@@ -153,7 +202,7 @@ KAPE22:
 # 91559-91561), som beskriver de opkøb, kaldene finansierer. Der er endnu ingen kvartalsrapport.
 
 VINTAGEX:
-  status: udkast
+  status: ok
   beskrivelse: >-
     Vintage X er Goldman Sachs Asset Managements secondaries-fond i Vintage-serien.
     Fonden køber eksisterende fondsandele af institutionelle investorer, der ønsker at
@@ -165,37 +214,42 @@ VINTAGEX:
 # PPPE2 og PPPC2 er Petersen & Partners' egne feeder-selskaber: Motortramp investerer i dem,
 # og de investerer videre i én underliggende fond hver. Beskrivelserne handler derfor om den
 # underliggende fond. Benchmark er hentet fra "Slides vdr. Alternativer".
-# PPPE og PPPC bygger på NEP V's rapport (dokument 13691) og PSCP IV's regnskab (dokument
-# 13693) for Q2 2026.
+# PPPC bygger på PSCP IV's regnskab (dokument 13693) for Q2 2026. PPPE og PPPE2 bygger på
+# NEP V's og NEP VI's rapporter pr. 30.09.2026, som endnu er udkast ("... September 30,
+# 2026 - DRAFT").
 
 PPPE:
   status: udkast
   beskrivelse: >-
     Petersen & Partners Private Equity investerer i Newbury Equity Partners V, en
     sekundærfond, der køber eksisterende fondsandele af investorer, der ønsker at sælge,
-    suppleret med enkelte co-investeringer. Fonden er fuldt investeret, og fremtidige
-    kapitalkald går primært til de underliggende fondes resterende tilsagn. Ultimo juni 2026
-    havde fonden eksponering til 119 underliggende fonde, ni co-investeringer og omkring
-    1.800 selskaber, hovedsageligt i Nordamerika (76 %) og Europa (23 %).
+    suppleret med enkelte co-investeringer. Fonden har givet tilsagn for hele sin kapital og
+    foretager ikke flere nye transaktioner, så fremtidige kapitalkald går primært til de
+    underliggende fondes resterende tilsagn. Ultimo september 2026 havde fonden eksponering
+    til 119 underliggende fonde, ni co-investeringer og omkring 1.975 selskaber,
+    hovedsageligt i Nordamerika (76 %) og Europa (23 %).
 
 PPPC:
-  status: udkast
+  status: ok
   beskrivelse: >-
     Petersen & Partners Private Credit investerer i Park Square Capital Partners IV, der yder
     juniorlån til kapitalfondes opkøb af mellemstore og store virksomheder. Fondens
-    investeringsperiode sluttede i juli 2025, og løbetiden udløber i juli 2030. Ultimo juni
+    investeringsperiode sluttede i juli 2025. Ultimo juni
     2026 bestod porteføljen af 29 investeringer, koncentreret om sundhed og life science,
     software og IT samt erhvervsservice, og de største lande er USA, Storbritannien og
     Frankrig.
 
 PPPE2:
-  status: ok
+  status: udkast
   beskrivelse: >-
-    Petersen & Partners Private Equity II investerer i Newbury Equity Partners VI,
-    en sekundærfond. Newbury køber eksisterende tilsagn af investorer, der ønsker at
-    sælge, så de underliggende fonde er langt i deres investeringsperiode, og kapitalen
-    ventes betalt tilbage hurtigere end i en primærfond. Ultimo juni 2026 havde fonden
-    eksponering til 26 underliggende fonde og 269 selskaber.
+    Petersen & Partners Private Equity II investerer i Newbury Equity Partners VI, en
+    sekundærfond. Newbury køber eksisterende tilsagn af investorer, der ønsker at sælge, så
+    de underliggende fonde er langt i deres investeringsperiode, og kapitalen ventes betalt
+    tilbage hurtigere end i en primærfond. I tredje kvartal 2026 købte fonden andele i fire
+    amerikanske buyout-fonde fra et amerikansk family office, og Newbury venter at kalde
+    yderligere kapital til nye transaktioner. Ultimo september 2026 havde fonden eksponering
+    til 30 underliggende fonde, én co-investering og omkring 311 selskaber, hovedsageligt i
+    Nordamerika (78 %) og Europa (22 %).
 
 PPPC2:
   status: ok
@@ -207,18 +261,19 @@ PPPC2:
     DACH og Frankrig.
 
 # PPMAR er Petersen & Partners' feeder-selskab i Maritime Investment Fund III (MIF3).
-# Beskrivelsen bygger på MIF III's kvartalsrapport for Q3 2026 (dokument 91268, s. 5-7 og 32-33).
+# Beskrivelsen bygger på MIF III's kvartalsrapport for Q3 2026 (dokument 91268, s. 5, 7, 32-34
+# og 38-43): Norwind Passat var under opførelse pr. 30.09 og blev leveret i oktober.
 
 PPMAR:
   status: udkast
   beskrivelse: >-
     Petersen & Partners Maritime investerer i Maritime Investment Fund III, der forvaltes af
-    Navigare Capital Partners. Fonden køber moderne skibe med faste lejeaftaler med en
-    række modparter og finansierer dem konservativt med sigte på et stabilt tocifret
-    driftsafkast. Ultimo september 2026 bestod porteføljen af 12 skibe: syv offshore
-    wind-servicefartøjer (CSOV), et LPG-tankskib og fire containerskibe. Heraf er fem
-    nybygninger: de fire containerskibe og servicefartøjet Norwind Marin, der leveres i
-    februar 2027.
+    Navigare Capital Partners. Fonden køber moderne skibe med faste lejeaftaler med en række
+    modparter og finansierer dem konservativt med sigte på et stabilt tocifret driftsafkast.
+    Ultimo september 2026 bestod porteføljen af 12 skibe: syv offshore wind-servicefartøjer
+    (CSOV), et LPG-tankskib og fire containerskibe. Seks var nybygninger: de fire
+    containerskibe, der leveres i 2027-2028, servicefartøjet Norwind Marin, der leveres i
+    februar 2027, og Norwind Passat, der blev leveret i oktober 2026.
 
 # PD3LGT er en fund of funds fra Alternative Equity Partners, der investerer i LGT's to
 # europæiske private debt-fonde. Beskrivelsen bygger på fondsinformationen i Q2 2026-rapporten
@@ -234,27 +289,30 @@ PD3LGT:
  
 
 # HOME er en dansk ejendomsfond med løbende tilsagn. Beskrivelsen bygger på Home.Earths
-# investorrapport for Q2 2026.
+# investorrapport for Q3 2026 (dokument 91272, s. 3, 5 og 7).
 
 HOME:
   evergreen: true
-  status: ok
+  status: udkast
   beskrivelse: >-
-    Home.Earth er en dansk evergreen-ejendomsfond (K/S), der køber, udvikler og driver bæredygtige
-    boliger i hovedstadsområdet. Porteføljen tæller udlejningsejendommene C.F. Møllers Have,
-    Nærheden og Filmlageret, byggeriet HTC samt projekterne NEFA, Smedeland og
-    Københavnsvej; ejendomsværdien (GAV) er 218 mio. EUR, delvist finansieret med
-    realkredit- og byggelån. En del af afkastet går til lejere og lokalsamfund.
+    Home.Earth er en dansk evergreen-ejendomsfond (K/S), der køber, udvikler og driver
+    bæredygtige boliger i hovedstadsområdet. Ultimo september 2026 bestod porteføljen af
+    udlejningsejendommene C.F. Møllers Have, Nærheden, Filmlageret og de nyerhvervede
+    ejendomme i Tingbjerg (fire ejendomme med 232 boliger), byggeriet HTC samt projekterne
+    NEFA, Smedeland og Københavnsvej. Ejendomsværdien (GAV) var 319 mio. EUR, delvist
+    finansieret med realkredit- og byggelån samt brofinansiering. Fonden har indledt salget
+    af Filmlageret. En del af afkastet går til lejere og lokalsamfund.
 
 # CRED er en open-ended dansk ejendomsfond. Beskrivelsen bygger på Rubik Managements
-# investeringsrapport for K2 2026.
+# investeringsrapport for K3 2026 (dokument 91187, s. 4, 11-12 og 20).
 
 CRED:
   evergreen: true
-  status: ok
+  status: udkast
   beskrivelse: >-
     Commercial Real Estate Denmark er en dansk evergreen-ejendomsfond (P/S) forvaltet af
-    Rubik Management. Fonden ejer 27 erhvervsejendomme, primært kontorer i
-    Københavnsområdet samt logistik i Trekantområdet og Billund. Ejendommene er bogført
-    til 6,1 mia. kr. og belånt med 41 % på fondsniveau. Forvalteren arbejder med at
-    nedbringe tomgangen på 16,9 % og sælge ikke-strategiske ejendomme.
+    Rubik Management. Ultimo september 2026 ejede fonden 27 erhvervsejendomme, primært
+    kontorer i Københavnsområdet samt logistik i Trekantområdet og Billund. Ejendommene er
+    bogført til 6,1 mia. kr. og belånt med 38,6 % på fondsniveau. Forvalteren arbejder med
+    at nedbringe tomgangen på 16,9 % og sælge ikke-strategiske ejendomme; der er indgået en
+    betinget aftale om salg af én ejendom og foreløbige aftaler om salg af to til.
