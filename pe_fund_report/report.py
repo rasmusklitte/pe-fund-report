@@ -173,6 +173,7 @@ def _byg_supplerende(r, master=None):
                 f"Slides uden for porteføljerapporten pr. {r['as_of']:%d.%m.%Y}")
     slides.regnskabstal(prs, r, "kvartal")      # bevægelsesnoten til investors regnskab
     slides.regnskabstal(prs, r, "aar")
+    slides.transaktioner(prs, r)        # kald og udlodninger i kvartalet og året
     slides.likviditet(prs, r)           # samlede investeringer uden ejendomsfondene
     slides.pme_portefoelje(prs, r)      # porteføljen mod indekskontoen i ACWI
     slides.pme_fonde(prs, r)            # hver fonds IRR mod samme cash flows i ACWI

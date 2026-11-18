@@ -741,9 +741,13 @@ def byg():
 
 
 def _cash_flow(tb, iid, fid, f, d, beloeb, klasse, kurser, recallable=0, konto=None):
-    konti = {"CONTRIBUTION": ("CF110", "Capital call"), "DISTRIBUTION": ("CF210", "Distribution"),
-             "EQUALISATION": ("CF150", "Equalisation interest"),
-             "WITHHOLDING_TAX": ("CF280", "Withholding tax")}
+    # databasens konti: kald og udlodninger uden opdeling, equalization efter fortegnet
+    konti = {"CONTRIBUTION": ("CF199", "Capital call - not split"),
+             "DISTRIBUTION": (("CF230", "Distribution - recallable") if recallable
+                              else ("CF295", "Distribution - not split")),
+             "EQUALISATION": (("CF130", "Capital call - equalisation / late-closing interest")
+                              if beloeb < 0 else ("CF240", "Distribution - equalisation received")),
+             "WITHHOLDING_TAX": ("CF280", "Withholding tax deducted")}
     kode, navn = konto or konti[klasse]
     dok = tb.dokument(fid, "CAPITAL_CALL" if beloeb < 0 else "DISTRIBUTION", value_date=d)
     k = kurs_paa(kurser, f.valuta, d)

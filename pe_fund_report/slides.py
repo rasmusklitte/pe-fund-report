@@ -8,7 +8,7 @@ import io
 import uuid
 from contextlib import contextmanager
 from copy import deepcopy
-from datetime import timedelta
+from datetime import date, timedelta
 from itertools import pairwise
 from math import ceil, floor
 
@@ -3624,6 +3624,124 @@ def regnskabstal(prs, r, periode):
                pt=1.25)
     fod.tegn(s)
     return s
+
+
+# Kolonnerne i Transaktioner; netto i fondens valuta, indbetalt, udloddet og netto i DKK
+TR_KOL = [("Dato", 0.80, V), ("Fond", 2.25, V), ("Specifikation", 2.95, V), ("Valuta", 0.50, C),
+          ("Netto", 0.90, H), ("Indbetalt", 0.90, H), ("Udloddet", 0.90, H), ("Netto", 0.90, H)]
+TR_MINDST = 0.20          # mindste rækkehøjde, før tabellen fortsætter på en ny slide
+TR_TITEL = "Transaktioner – kvartalet og år til dato"
+
+
+def _tr_poster(r, tr):
+    """Tabellens rækker som (art, indhold) i rækkefølge: gruppe, linje, ingen, sum, total."""
+    linjer = tr["linjer"]
+    kvartal_ = [x for x in linjer if x["kvartal"]]
+    poster = [("gruppe", _periodetitel(r, "kvartal"))]
+    poster += [("linje", x) for x in kvartal_] or [("ingen", None)]
+    if _viste_perioder(r) == ["kvartal"]:
+        return poster + [("total", ("I alt", tr["i_alt"]["kvartal"]))]
+    tidligere = [x for x in linjer if not x["kvartal"]]
+    k_fra = tr["kvartal_fra"]
+    poster += [("sum", (f"I alt, {PERIODER_TEKST['kvartal']}", tr["i_alt"]["kvartal"])),
+               ("gruppe", f"Tidligere i år ({kvartal(date(k_fra.year, 1, 1))}"
+                          f"{'' if k_fra.month == 3 else '–' + kvartal(k_fra)})")]
+    poster += [("linje", x) for x in tidligere] or [("ingen", None)]
+    return poster + [("total", (f"I alt, {PERIODER_TEKST['aar']} ({tr['til'].year})",
+                                tr["i_alt"]["aar"]))]
+
+
+def _tr_raekke(r, art, x, fod):
+    """Én tabelrække; mærkerne sættes i fod."""
+    tom = lambda v: "–" if not v else tusinde(v)
+    if art == "gruppe":
+        return [x] + [""] * (len(TR_KOL) - 1)
+    if art == "ingen":
+        return ["", "", "Ingen kapitalkald eller udlodninger."] + [""] * (len(TR_KOL) - 3)
+    if art in ("sum", "total"):
+        tekst, t = x
+        t = t or dict(indbetalt=None, udloddet=None, netto=None, kildeskat=None)
+        skat_m = (fod.maerke(f"Heraf tilbageholdt kildeskat: {tusinde(t['kildeskat'])} t.DKK.")
+                  if t["kildeskat"] else "")
+        return [tekst, "", "", "", "", tusinde(t["indbetalt"]),
+                tusinde(t["udloddet"]) + skat_m, aendring(t["netto"], tusinde)]
+    spec_m = fod.maerke("Skønnet dato: meddelelsen om kaldet er ikke modtaget.") \
+        if x["skoennet"] else ""
+    fond_m = (fod.maerke("Efter fondens seneste NAV-dato og derfor ikke med i dens NAV.")
+              if x["efter_nav"] else "")
+    skat_m = (fod.maerke(f"Heraf tilbageholdt kildeskat: {tusinde(x['kildeskat_dkk'])} t.DKK.")
+              if x["kildeskat"] else "")
+    return [f"{x['dato']:%d.%m.%Y}",
+            _uden_selskabsform(x["fund_name"]) + _datomarkering(r, x["fund_name"]) + fond_m,
+            _forbogstav(", ".join(x["dele"])) + spec_m, x["valuta"],
+            aendring(x["netto"], tusinde), tom(x["indbetalt_dkk"]),
+            tom(x["udloddet_dkk"]) + skat_m, aendring(x["netto_dkk"], tusinde)]
+
+
+def transaktioner(prs, r):
+    """Kapitalkald og udlodninger i kvartalet og tidligere på året, én række pr. fond og
+    dato, med kontiene og beløbene i fondens valuta og i t.DKK. En lang liste fortsætter
+    på flere slides. Giver slidene (tom liste uden data)."""
+    tr = r.get("transaktioner")
+    if not tr:
+        return []
+    kilde = ("Kilde: Forvalternes meddelelser om kapitalkald og udlodninger, Danmarks "
+             "Nationalbank og egne beregninger.")
+    generelle = ["Én række pr. fond og dag. DKK er omregnet med kursen på dagen.",
+                 _datonoter(r)]
+    poster = _tr_poster(r, tr)
+
+    # pladsen sættes efter de længste noter, så hver del kan tegnes med sine egne
+    alle = Fodnoter(kilde)
+    alle.generel(*generelle)
+    for art, x in poster:
+        _tr_raekke(r, art, x, alle)
+    tab_y = Y_TOP + 0.32
+    pr_side = max(5, int((_noter_y(alle.tekst()) - tab_y - 0.1) / TR_MINDST) - 1)
+    # jævnt fordelt på så få slides som muligt, så den sidste ikke kun har totalen
+    pr_side = ceil(len(poster) / ceil(len(poster) / pr_side))
+    starter = range(0, len(poster), pr_side)
+
+    bredder = [b for _, b, _ in TR_KOL]
+    w = X1 - X0
+    x_kol = lambda j: X0 + w * sum(bredder[:j]) / sum(bredder)
+    grupper_over = [("Fondens valuta", 3, 5), ("DKK", 5, len(bredder))]
+    sider = []
+    for nr, start in enumerate(starter):
+        del_ = poster[start:start + pr_side]
+        if del_[0][0] != "gruppe":
+            # en fortsat gruppe gentager sin overskrift
+            gruppe = next(x for art, x in reversed(poster[:start]) if art == "gruppe")
+            del_ = [("gruppe", f"{gruppe} (fortsat)")] + del_
+        s = _oversigtsslide(prs, r, TR_TITEL + (" (fortsat)" if nr else ""),
+                            enhed="beløb i tusinder")
+        fod = Fodnoter(kilde)
+        fod.generel(*generelle)
+        raekker = [[navn for navn, _, _ in TR_KOL]]
+        grupper, totaler = [], []
+        for art, x in del_:
+            if art == "gruppe":
+                grupper.append(len(raekker))
+            elif art in ("sum", "total"):
+                totaler.append(len(raekker))
+            raekker.append(_tr_raekke(r, art, x, fod))
+        for tekst, fra, til in grupper_over:
+            _tekst(s, x_kol(fra), Y_TOP, x_kol(til) - x_kol(fra), 0.2, tekst, 9, fed=True,
+                   farve=SAGE, just=C)
+            _streg(s, x_kol(fra) + 0.06, Y_TOP + 0.24, x_kol(til) - 0.06, Y_TOP + 0.24)
+        raekke_h = max(TR_MINDST, min(0.30, (_noter_y(fod.tekst()) - tab_y - 0.1)
+                                      / len(raekker)))
+        tbl = _tabel(s, X0, tab_y, w, raekker, bredder=bredder,
+                     just=[j for _, _, j in TR_KOL], raekke_h=raekke_h, pt=8.5, hoved=True,
+                     grupper=grupper, totaler=totaler)
+        # overskrifterne og summernes tekst løber over de tomme celler til venstre
+        for i in grupper:
+            tbl.cell(i, 0).merge(tbl.cell(i, len(bredder) - 1))
+        for i in totaler:
+            tbl.cell(i, 0).merge(tbl.cell(i, 4))
+        fod.tegn(s)
+        sider.append(s)
+    return sider
 
 
 def vaerdibevaegelser(prs, r):

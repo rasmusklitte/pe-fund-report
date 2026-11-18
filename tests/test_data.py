@@ -773,6 +773,51 @@ def _rt_fond(navn, valuta, ka, skat=(), rettet=None):
     return f
 
 
+def _tr_fond(navn, valuta, raekker, nav_dato=date(2026, 6, 30), **kilder):
+    cf = pd.DataFrame(raekker, columns=["value_date", "account_code", "account_name",
+                                        "flow_class", "amount"])
+    return dict(fund_name=navn, valuta=valuta, nav_dato=nav_dato,
+                kilder=dict(cash_flows=cf, **kilder))
+
+
+def test_transaktioner_en_linje_pr_fond_og_dag_i_kvartalet_og_tidligere():
+    kurs = lambda v, d: None if d == date(2026, 2, 1) else 1.0 if v == "DKK" else 7.0
+    a = _tr_fond("A", "DKK", [
+        (date(2025, 12, 15), "CF199", "x", "CONTRIBUTION", -99.0),        # sidste år
+        (date(2026, 5, 8), "CF110", "fee", "CONTRIBUTION", -5.0),
+        (date(2026, 5, 8), "CF100", "inv", "CONTRIBUTION", -50.0),
+        (date(2026, 5, 8), "CF130", "eq", "EQUALISATION", -2.0),
+        (date(2026, 5, 8), "CF999", "Ukendt konto", "DISTRIBUTION", 1.0),
+        (date(2026, 7, 2), "CF100", "inv", "CONTRIBUTION", -9.0)],        # efter rapportdatoen
+        estimerede=[dict(dato="2026-02-10", beloeb=-4.0)], rabat=(date(2026, 4, 2), 3.0))
+    b = _tr_fond("B", "EUR", [
+        (date(2026, 4, 20), "CF295", "d", "DISTRIBUTION", 10.0),
+        (date(2026, 4, 20), "CF280", "skat", "WITHHOLDING_TAX", -1.0)],
+        nav_dato=date(2026, 3, 31))
+    tr = data.transaktioner([a, b], kurs, data.perioder(date(2026, 6, 30)))
+    datoer = [(x["dato"], x["fund_name"]) for x in tr["linjer"]]
+    assert datoer == [(date(2026, 2, 10), "A"), (date(2026, 4, 2), "A"),
+                      (date(2026, 4, 20), "B"), (date(2026, 5, 8), "A")]
+    skoen, rabat_, udl, kald = tr["linjer"]
+    assert skoen["skoennet"] and not skoen["kvartal"] and skoen["indbetalt"] == 4.0
+    assert (rabat_["indbetalt"], rabat_["udloddet"], rabat_["netto"]) == (3.0, 3.0, 0.0)
+    # største beløb først; equalization betalt er indbetalt, kildeskatten står for sig
+    assert kald["dele"] == ["investeringer", "forvaltningshonorar", "equalization",
+                            "Ukendt konto"]
+    assert (kald["indbetalt"], kald["udloddet"], kald["netto"]) == (57.0, 1.0, -56.0)
+    assert udl["dele"] == ["udlodning (ikke opdelt)"] and udl["kildeskat"] == 1.0
+    assert udl["udloddet_dkk"] == 70.0 and udl["efter_nav"] and not kald["efter_nav"]
+    assert tr["i_alt"]["kvartal"] == dict(indbetalt=60.0, udloddet=74.0, netto=14.0,
+                                          kildeskat=7.0)
+    assert tr["i_alt"]["aar"]["indbetalt"] == 64.0
+    # en manglende kurs: linjen får None i DKK, og summen for perioden bliver None
+    a["kilder"]["cash_flows"].loc[len(a["kilder"]["cash_flows"])] = [
+        date(2026, 2, 1), "CF100", "inv", "CONTRIBUTION", -1.0]
+    tr = data.transaktioner([a, b], kurs, data.perioder(date(2026, 6, 30)))
+    assert tr["linjer"][0]["netto_dkk"] is None and tr["i_alt"]["aar"] is None
+    assert tr["i_alt"]["kvartal"] is not None
+
+
 def test_regnskabstal_bevaegelsesnote_pr_fond_og_i_alt():
     q1, ultimo = date(2026, 3, 31), date(2026, 6, 30)
     kurser = {q1: 7.0, date(2026, 5, 16): 7.2, date(2026, 5, 20): 7.3, ultimo: 7.5}

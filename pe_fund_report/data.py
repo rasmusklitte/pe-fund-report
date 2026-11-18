@@ -2638,6 +2638,80 @@ def omkostninger(ka, fra, til):
 REGNSKABSFELTER = ("primo", "tilgang", "afgang", "vaerdi", "kurs", "ultimo", "resttilsagn",
                    "kildeskat")
 
+# kapitalstrømmenes konti (rpt.v_cash_flow.account_code) på dansk til Transaktioner; en
+# ukendt konto står med forvalterens kontonavn
+KONTONAVNE = {"CF100": "investeringer", "CF110": "forvaltningshonorar",
+              "CF120": "fonds- og etableringsomkostninger", "CF130": "equalization",
+              "CF150": "tilbageført equalization", "CF190": "øvrige kald",
+              "CF199": "kapitalkald (ikke opdelt)", "CF200": "tilbagebetalt kapital",
+              "CF210": "realiseret gevinst", "CF220": "renter og udbytte",
+              "CF230": "genkaldelig udlodning", "CF240": "modtaget equalization",
+              "CF280": "kildeskat", "CF295": "udlodning (ikke opdelt)"}
+
+
+def transaktioner(fonde, kurs, perioder_):
+    """Kapitalkald og udlodninger i året til rapportdatoen, én linje pr. fond og dato.
+
+    perioder_ er perioder(rapportdatoen). {fra, kvartal_fra, til, linjer, i_alt} eller None
+    uden fonde. Hver linje: dato, fund_name, valuta, dele (kontiene på dansk, største beløb
+    først), indbetalt og udloddet (positive, i fondens valuta og i DKK med kursen på datoen),
+    netto (udloddet - indbetalt), kildeskat (positiv, ikke i udloddet: udlodningen står
+    brutto), kvartal (i kvartalet eller tidligere på året), skoennet (et kald fra
+    fund_info.yaml uden meddelelse) og efter_nav (efter fondens egen NAV-dato, så ikke i dens
+    NAV). Indbetalt og udloddet afgrænses som i nøgletallene (_er_indbetaling /
+    _er_udlodning; rabat på kald i begge). i_alt[kvartal / aar] summerer DKK-beløbene; None,
+    hvis en kurs mangler. Strømme efter rapportdatoen er ikke med.
+    """
+    if not fonde:
+        return None
+    (k_fra, til), (aar_fra, _) = perioder_["kvartal"], perioder_["aar"]
+    linjer = []
+    for f in fonde:
+        k = f["kilder"]
+        cf = k["cash_flows"]
+        cf = cf[(cf.value_date > aar_fra) & (cf.value_date <= til)]
+        poster = [(r.value_date, r.account_code, r.account_name, r.flow_class, float(r.amount))
+                  for r in cf.itertuples()]
+        poster += [(_dato(e["dato"]), "SKOEN", "kapitalkald (skønnet)", "CONTRIBUTION",
+                    float(e["beloeb"])) for e in k.get("estimerede") or []
+                   if aar_fra < _dato(e["dato"]) <= til]
+        if k.get("rabat") and aar_fra < k["rabat"][0] <= til:
+            d, rabat_ = k["rabat"]
+            poster += [(d, "RABAT", "rabat på kapitalkald", "CONTRIBUTION", -rabat_),
+                       (d, "RABAT", "rabat på kapitalkald", "DISTRIBUTION", rabat_)]
+        for d in sorted({p[0] for p in poster}):
+            paa_dagen = [p for p in poster if p[0] == d]
+            ind = -sum(a for _, _, _, kl, a in paa_dagen
+                       if kl == "CONTRIBUTION" or (kl == "EQUALISATION" and a < 0))
+            ud = sum(a for _, _, _, kl, a in paa_dagen
+                     if kl == "DISTRIBUTION" or (kl == "EQUALISATION" and a > 0))
+            skat = -sum(a for _, _, _, kl, a in paa_dagen if kl == "WITHHOLDING_TAX")
+            dele = {}
+            for _, konto, navn, kl, _ in sorted(paa_dagen, key=lambda p: -abs(p[4])):
+                if kl != "WITHHOLDING_TAX":     # står som note ved udlodningen
+                    dele.setdefault(KONTONAVNE.get(konto, navn), None)
+            k_d = kurs(f["valuta"], d)
+            dkk = lambda v, k_d=k_d: None if k_d is None else v * k_d
+            linjer.append(dict(
+                dato=d, fund_name=f["fund_name"], valuta=f["valuta"], dele=list(dele),
+                indbetalt=ind, udloddet=ud, netto=ud - ind, kildeskat=skat,
+                indbetalt_dkk=dkk(ind), udloddet_dkk=dkk(ud), netto_dkk=dkk(ud - ind),
+                kildeskat_dkk=dkk(skat), kvartal=d > k_fra,
+                skoennet=any(p[1] == "SKOEN" for p in paa_dagen),
+                efter_nav=d > f["nav_dato"]))
+    orden = {f["fund_name"]: i for i, f in enumerate(fonde)}
+    linjer.sort(key=lambda x: (x["dato"], orden[x["fund_name"]]))
+
+    def summer(med):
+        if any(x["netto_dkk"] is None for x in med):
+            return None
+        return {n: sum(x[f"{n}_dkk"] for x in med)
+                for n in ("indbetalt", "udloddet", "netto", "kildeskat")}
+    return dict(fra=aar_fra, kvartal_fra=k_fra, til=til, linjer=linjer,
+                i_alt=dict(kvartal=summer([x for x in linjer if x["kvartal"]]),
+                           tidligere=summer([x for x in linjer if not x["kvartal"]]),
+                           aar=summer(linjer)))
+
 
 def regnskabstal(fonde, kurs):
     """Bevægelsesnoten til investors regnskab pr. periode, i DKK.
@@ -3190,6 +3264,7 @@ def investor_rapport(investor_code, as_of=None, med_aleta=False):
                                                           fra_aar=_likviditet_start(lq)),
                 perioder=rapport_perioder, udvikling=udv,
                 regnskabstal=regnskabstal(fonde, kurs),
+                transaktioner=transaktioner(fonde, kurs, rapport_perioder),
                 fortegnsafvigelser=fortegnsafvigelser(fonde),
                 vaerdibevaegelser=vb,
                 bevaegelser_i_dybden=bevaegelser_i_dybden(fonde, vb, udv, rapporter, kurser,

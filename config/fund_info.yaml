@@ -207,16 +207,18 @@ PPPC2:
     DACH og Frankrig.
 
 # PPMAR er Petersen & Partners' feeder-selskab i Maritime Investment Fund III (MIF3).
-# Beskrivelsen bygger på MIF III's kvartalsrapport for Q2 2026 (dokument 13690, s. 5-7).
+# Beskrivelsen bygger på MIF III's kvartalsrapport for Q3 2026 (dokument 91268, s. 5-7 og 32-33).
 
 PPMAR:
   status: udkast
   beskrivelse: >-
     Petersen & Partners Maritime investerer i Maritime Investment Fund III, der forvaltes af
-    Navigare Capital Partners. Fonden køber moderne skibe med faste lange lejeaftaler med
-    en række modparter og finansierer dem konservativt med sigte på et stabilt tocifret
-    driftsafkast. Ultimo juni 2026 bestod porteføljen af 12 skibe, heraf fem nybygninger:
-    offshore wind-servicefartøjer, et LPG-tankskib og fire containerskibe.
+    Navigare Capital Partners. Fonden køber moderne skibe med faste lejeaftaler med en
+    række modparter og finansierer dem konservativt med sigte på et stabilt tocifret
+    driftsafkast. Ultimo september 2026 bestod porteføljen af 12 skibe: syv offshore
+    wind-servicefartøjer (CSOV), et LPG-tankskib og fire containerskibe. Heraf er fem
+    nybygninger: de fire containerskibe og servicefartøjet Norwind Marin, der leveres i
+    februar 2027.
 
 # PD3LGT er en fund of funds fra Alternative Equity Partners, der investerer i LGT's to
 # europæiske private debt-fonde. Beskrivelsen bygger på fondsinformationen i Q2 2026-rapporten

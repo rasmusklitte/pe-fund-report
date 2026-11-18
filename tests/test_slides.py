@@ -765,6 +765,51 @@ def test_regnskabstal_i_foerste_kvartal_er_en_slide():
     assert slides.regnskabstal(_prs(), r, "kvartal") is None
 
 
+def _tr_linje(dato, navn, ind, ud, skat=0.0, **ekstra):
+    return dict(dict(dato=dato, fund_name=navn, valuta="DKK", dele=["investeringer"],
+                     indbetalt=ind, udloddet=ud, netto=ud - ind, kildeskat=skat,
+                     indbetalt_dkk=ind, udloddet_dkk=ud, netto_dkk=ud - ind, kildeskat_dkk=skat,
+                     kvartal=dato > date(2026, 3, 31), skoennet=False, efter_nav=False),
+                **ekstra)
+
+
+def test_transaktioner_viser_kvartalet_og_tidligere_i_aaret():
+    r = _udv_rapport()
+    linjer = [_tr_linje(date(2026, 2, 3), "Alfa Fund I K/S", 1e6, 0.0, skoennet=True),
+              _tr_linje(date(2026, 5, 4), "Beta Fund II A/S", 0.0, 2e5, skat=1e4)]
+    i_alt = lambda med: {n: sum(x[f"{n}_dkk"] for x in med)
+                         for n in ("indbetalt", "udloddet", "netto", "kildeskat")}
+    r["transaktioner"] = dict(fra=date(2025, 12, 31), kvartal_fra=date(2026, 3, 31),
+                              til=date(2026, 6, 30), linjer=linjer,
+                              i_alt=dict(kvartal=i_alt(linjer[1:]), aar=i_alt(linjer)))
+    s, = slides.transaktioner(_prs(), r)
+    tabel = next(sh.table for sh in s.shapes if sh.has_table)
+    raekker = [[c.text for c in rk.cells] for rk in tabel.rows]
+    assert [x[0] for x in raekker] == ["Dato", "Kvartalet (Q2 26)", "04.05.2026",
+                                       "I alt, kvartalet", "Tidligere i år (Q1 26)",
+                                       "03.02.2026", "I alt, år til dato (2026)"]
+    assert raekker[2][1:] == ["Beta Fund II", "Investeringer", "DKK", "+200", "–", "200¹",
+                              "+200"]
+    assert raekker[3][5:] == ["0", "200¹", "+200"]
+    assert raekker[5][2] == "Investeringer²" and raekker[6][5:] == ["1.000", "200¹", "-800"]
+    t = _tekster(s)
+    noter = next(x for x in t if x.startswith("Kilde"))
+    assert "¹ Heraf tilbageholdt kildeskat: 10 t.DKK." in noter
+    assert "² Skønnet dato" in noter
+    _indenfor_fladen(s, "Transaktioner – kvartalet og år til dato")
+    # mange linjer fortsætter jævnt på flere slides med gruppens overskrift gentaget
+    r["transaktioner"]["linjer"] = [_tr_linje(date(2026, 5, 4), f"Fond {i}", 1.0, 0.0)
+                                    for i in range(60)]
+    sider = slides.transaktioner(_prs(), r)
+    assert len(sider) > 1
+    foerste = [len(next(sh.table for sh in x.shapes if sh.has_table).rows) for x in sider]
+    assert min(foerste) > 10        # den sidste har ikke kun totalen
+    anden = next(sh.table for sh in sider[1].shapes if sh.has_table)
+    assert anden.cell(1, 0).text.endswith("(fortsat)")
+    r["transaktioner"] = None
+    assert slides.transaktioner(_prs(), r) == []
+
+
 def test_aendringer_pr_fond_maerker_afkast_med_modsat_fortegn_og_skiller_perioderne():
     r = _udv_rapport()
     beta = r["fonde"][1]

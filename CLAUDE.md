@@ -122,7 +122,7 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   `report._byg_supplerende()`, written on every build next to the report as
   `<deck>_supplerende_slides.pptx` (named from the intended path, not a `_v2`; skip with
   `--uden-supplerende`; anonymized too, and leak-checked with the report before either is
-  saved; no Excel of its own). It holds a cover, *Regnskabstal* (below), *Samlede investeringer* without the property
+  saved; no Excel of its own). It holds a cover, *Regnskabstal* (below), *Transaktioner* (below), *Samlede investeringer* without the property
   funds (`slides.likviditet`, below), *Porteføljen mod markedet*, *Fondene mod markedet* and *Fondene mod relevante indeks* (PME, below), the three transaction slides (below), the cash flow forecast (below), *Lange tilsagn*, the geography-by-commitment
   slide (`fordeling(..., "geografi", ...)`; its data also feeds the executive summary's
   fallback), the pies *Branchefordeling* / *Geografisk eksponering* (`slides.brancher` /
@@ -143,6 +143,21 @@ A one-way pipeline, no intermediate files: **database → one nested dict → Po
   report-date rate like the value change. Notes only when they occur: a primo NAV the GP has
   restated (`nav_rapporteret` ≠ `nav`), withholding tax (CF280) in the period on the
   distribution cell. In Q1 there is one slide. Excel sheet *Regnskabstal* with a check column.
+- *Transaktioner – kvartalet og år til dato* (`slides.transaktioner`, right after
+  *Regnskabstal*, the user's request): every capital call and distribution from 1 January to
+  the report date, one row per fund and value date (the accounts that day summed), grouped
+  »Kvartalet« / »Tidligere i år« with a subtotal for the quarter and a total for the year (in
+  Q1 one group). Columns: the accounts in Danish (`data.KONTONAVNE` from `account_code`,
+  largest first; an unknown code shows the GP's `account_name`), net in the fund's currency,
+  and indbetalt / udloddet / net in **t.DKK** at each date's Nationalbanken rate. Indbetalt and
+  udloddet are split as in the key figures (`_er_indbetaling` / `_er_udlodning`; equalisation
+  by sign, a call discount in both, estimated calls from `fund_info.yaml` marked »skønnet«);
+  withholding tax stays out of udloddet (distributions are gross) and is a footnote with its
+  amount. Flows after a † fund's own NAV date but by the report date are listed and marked
+  (not in its NAV). Data from `data.transaktioner()` (pure, over `f["kilder"]["cash_flows"]`)
+  in `r["transaktioner"]`; a long list continues evenly over »(fortsat)« slides. No Excel sheet
+  of its own (*Kapitalstrømme* has the rows). The demo generator writes the database's
+  account codes (CF199/CF295/CF230/CF130/CF240/CF280) so the slide reads as for real data.
 - *Samlede investeringer* (`slides.likviditet`, modelled on a Hewema page the user supplied): the
   portfolio **without the property funds** (`segment == "Ejendomme"`, `data.LIKVIDITET_UDEN`:
   they are evergreen and drag the liquidity picture; the user's choice, also for the five figures
